@@ -1,6 +1,6 @@
 """ResMill: Rule-based 3D geological reservoir modeling."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 from .layers import (Layer, LobeLayer, GaussianLayer,
                      ChannelLayer,
