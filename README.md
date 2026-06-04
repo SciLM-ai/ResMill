@@ -36,7 +36,7 @@ pip install resmill
 For development (tests, notebooks):
 
 ```bash
-git clone https://github.com/IlgarBaghishov/ResMill.git
+git clone https://github.com/SciLM-ai/ResMill.git
 cd ResMill
 pip install -e ".[dev]"
 ```
@@ -134,7 +134,7 @@ Channel and delta models are coloured by the **Alluvsim facies classes**:
 The facies are ordered by reservoir quality (`FF < FFCH < CS < LV < LA < CH`).
 
 All gallery figures are reproducible from a clean checkout with
-[`docs/make_readme_figures.py`](https://github.com/IlgarBaghishov/ResMill/blob/main/docs/make_readme_figures.py).
+[`docs/make_readme_figures.py`](https://github.com/SciLM-ai/ResMill/blob/main/docs/make_readme_figures.py).
 
 ### Shared setup for the gallery snippets
 
@@ -359,4 +359,4 @@ If you use ResMill in published work, please cite the methods it is built on:
 
 ## License
 
-MIT — see [LICENSE](https://github.com/IlgarBaghishov/ResMill/blob/main/LICENSE).
+MIT — see [LICENSE](https://github.com/SciLM-ai/ResMill/blob/main/LICENSE).
