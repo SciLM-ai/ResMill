@@ -2,7 +2,15 @@ import numpy as np
 
 
 class Reservoir:
-    """Stacks multiple Layer objects into a single reservoir model."""
+    """Stacks multiple Layer objects into a single reservoir model.
+
+    ``layers`` are listed top to bottom (each layer's base depth must meet
+    the next layer's ``top_depth``); ``self.layers`` and ``self.zz`` keep
+    that listed order. The concatenated property arrays follow the
+    package-wide vertical convention instead: the k index increases
+    upward, so global k=0 is the base of the deepest layer and k=nz-1
+    the top of the shallowest.
+    """
 
     def __init__(self, layers):
         if not isinstance(layers, list):
@@ -34,10 +42,12 @@ class Reservoir:
                     f"Bottom of layer {i} does not match top of layer {i+1}"
                 )
 
-        # Concatenate property arrays along z
-        self.poro_mat = np.concatenate([l.poro_mat for l in layers], axis=2)
-        self.perm_mat = np.concatenate([l.perm_mat for l in layers], axis=2)
-        self.active = np.concatenate([l.active for l in layers], axis=2)
+        # Concatenate property arrays along z, deepest layer first: within
+        # a layer k=0 is the layer base, so this keeps k increasing upward
+        # through the whole stack (and cross-sections render right side up).
+        self.poro_mat = np.concatenate([l.poro_mat for l in reversed(layers)], axis=2)
+        self.perm_mat = np.concatenate([l.perm_mat for l in reversed(layers)], axis=2)
+        self.active = np.concatenate([l.active for l in reversed(layers)], axis=2)
 
     def to_grdecl(self, path, **kwargs):
         """Export the stacked model as a corner-point GRDECL file (see resmill.export.to_grdecl)."""
