@@ -16,4 +16,4 @@ venv/
 .playwright-mcp/
 _compare/
 .DS_Store
-logs/
+logs/*.grdecl

@@ -35,3 +35,8 @@ class Layer:
 
     def create_geology(self):
         raise NotImplementedError("Subclasses must implement create_geology()")
+
+    def to_grdecl(self, path, **kwargs):
+        """Export this layer as a corner-point GRDECL file (see resmill.export.to_grdecl)."""
+        from ..export import to_grdecl
+        return to_grdecl(self, path, **kwargs)

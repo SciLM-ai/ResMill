@@ -323,6 +323,54 @@ rm.plot_cube_slices(reservoir.poro_mat, title="Stacked reservoir — porosity")
 
 ---
 
+## Structural shapes & export to Petrel / Eclipse
+
+Geology is modeled in flat stratigraphic space; structural shape is applied
+when you export, the same paradigm commercial geomodeling tools use. A
+`Structure` is a vertical-shift field `f(x, y)` in meters (**positive down**,
+so `anticline(amplitude=25)` lifts the crest 25 m). Presets compose with `+`,
+`-` and scalar `*`, and a plain `f(x, y)` callable, a 2-D array, or a scalar
+works anywhere a `Structure` does.
+
+```python
+from resmill import structure as st
+
+shape = (st.anticline(amplitude=25, wavelength=900, azimuth=90)
+         + st.fault(throw=8, x0=400))
+
+# Corner-point GRDECL — imports directly into Petrel ("ECLIPSE keywords
+# (grid geometry and properties)"), ResInsight, tNavigator, OPM Flow,
+# or an Eclipse deck INCLUDE. Writes COORD/ZCORN/ACTNUM/PORO/PERMX/
+# PERMY/PERMZ; PERMZ = each layer's kzkx × PERMX.
+reservoir.to_grdecl("model.grdecl", structure=shape, erode_above=4992)
+
+# Same deformed geometry as a true-depth cross-section, no external software:
+rm.plot_section(reservoir, structure=shape, erode_above=4992,
+                title="Faulted anticline, eroded at 4992 m")
+```
+
+![Structural export](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/structure_export.png)
+
+- **Presets** (`resmill.structure`): `anticline`, `syncline`, `dome`, `ramp`
+  (tilt at any azimuth), `fault` (vertical fault plane; put the trace on a
+  grid line for a clean face), `surface` (resample any gridded surface array
+  or text file).
+- **Shaping keywords** on `to_grdecl` / `plot_section` / `to_pyvista`:
+  `top=` / `base=` conform the stack to absolute surfaces (one: drape with
+  thickness preserved; both: proportional squeeze, giving wedges and
+  pinch-outs); `erode_above=` / `erode_below=` truncate, collapsing removed
+  cells and writing them inactive.
+- **Unconformities**: pass `structure=` as a list with one entry per layer
+  (`None` allowed). Layers deform independently and younger layers truncate
+  older ones where they collide, producing angular unconformities, incision,
+  and buried eroded folds.
+- **3-D QC without Petrel**: `rm.to_pyvista(reservoir, structure=shape)`
+  returns a `pyvista.ExplicitStructuredGrid` (`pip install resmill[viz]`);
+  the free [ResInsight](https://resinsight.org) opens the written `.grdecl`
+  directly.
+
+---
+
 ## Layer & preset reference
 
 | Layer | Preset(s) | Geology |

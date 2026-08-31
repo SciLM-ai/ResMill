@@ -137,4 +137,28 @@ delta = rm.DeltaLayer(**GRID)
 delta.create_geology(seed=3)
 facies_fig(delta, "delta_fan.png", "DeltaLayer — DELTA_FAN (distributary delta)")
 
+# ---- Structural export (README "Structural shapes & export" section) ------
+from resmill import structure as st
+from resmill.layers.channel import MEANDER_OXBOW as _OXBOW
+
+_stk = dict(nx=64, ny=64, x_len=640, y_len=640)
+_top = rm.DeltaLayer(nz=10, z_len=10, top_depth=5000, **_stk)
+_top.create_geology(seed=3)
+_mid = rm.LobeLayer(nz=10, z_len=10, top_depth=5010, **_stk)
+_mid.create_geology(poro_ave=0.20, perm_ave=1.5, poro_std=0.03, perm_std=0.5, ntg=0.7)
+_bot = rm.ChannelLayer(nz=12, z_len=12, top_depth=5020, **_stk)
+_bot.create_geology(seed=1, **_OXBOW)
+_res = rm.Reservoir([_top, _mid, _bot])
+
+_shape = (st.anticline(amplitude=25, wavelength=900, azimuth=90)
+          + st.fault(throw=8, x0=400))
+fig, axes = plt.subplots(2, 1, figsize=(9, 6.4))
+rm.plot_section(_res, ax=axes[0], title="Stratigraphic frame (as modeled)")
+rm.plot_section(_res, structure=_shape, erode_above=4992, ax=axes[1],
+                title="Exported shape — anticline + fault, eroded at 4992 m")
+fig.tight_layout()
+fig.savefig(os.path.join(OUT, "structure_export.png"), dpi=110, bbox_inches="tight")
+plt.close(fig)
+print("wrote", os.path.join(OUT, "structure_export.png"))
+
 print("done")

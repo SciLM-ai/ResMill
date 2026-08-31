@@ -35,6 +35,7 @@ Repository = "https://github.com/SciLM-ai/ResMill"
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "jupyter"]
 dataset = ["pyarrow>=14"]
+viz = ["pyvista>=0.43"]
 
 [tool.setuptools.packages.find]
 include = ["resmill*"]

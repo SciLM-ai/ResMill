@@ -38,3 +38,8 @@ class Reservoir:
         self.poro_mat = np.concatenate([l.poro_mat for l in layers], axis=2)
         self.perm_mat = np.concatenate([l.perm_mat for l in layers], axis=2)
         self.active = np.concatenate([l.active for l in layers], axis=2)
+
+    def to_grdecl(self, path, **kwargs):
+        """Export the stacked model as a corner-point GRDECL file (see resmill.export.to_grdecl)."""
+        from .export import to_grdecl
+        return to_grdecl(self, path, **kwargs)

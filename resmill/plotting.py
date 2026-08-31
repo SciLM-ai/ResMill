@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.collections import PolyCollection
 from matplotlib.colors import Normalize, LinearSegmentedColormap, ListedColormap, BoundaryNorm
 
 # ---------------------------------------------------------------------------
@@ -532,3 +533,81 @@ def plot_reservoir(reservoir, prop='poro_mat', **kwargs):
     """Convenience: plot_cube_slices on a Reservoir's property."""
     data = getattr(reservoir, prop)
     return plot_cube_slices(data, **kwargs)
+
+
+def plot_section(model, prop='poro_mat', axis='y', index=None,
+                 structure=None, top=None, base=None,
+                 erode_above=None, erode_below=None,
+                 cmap=None, vmin=None, vmax=None, ax=None, title=None):
+    """True-depth vertical cross-section of a (possibly deformed) model.
+
+    Draws every cell of one section as its own quadrilateral using the
+    same corner geometry the GRDECL exporter writes, so folds, faults,
+    variable thickness and erosion appear exactly as they will in
+    Petrel/ResInsight. Depth is on the vertical axis, increasing down.
+
+    Parameters
+    ----------
+    model : Layer or Reservoir
+    prop : str
+        Cell property to color by (``'poro_mat'``, ``'perm_mat'``, ...).
+    axis : 'y' | 'x'
+        ``'y'``: an XZ section at cell row ``index`` (default the middle
+        row); ``'x'``: a YZ section at cell column ``index``.
+    structure, top, base, erode_above, erode_below :
+        Same shaping arguments as :func:`resmill.export.to_grdecl`.
+    """
+    from .export import _build_geometry, _stack_prop
+
+    layers = list(getattr(model, 'layers', [model]))
+    Xc, Yc, Zc, actnum = _build_geometry(
+        layers, structure, top, base, erode_above, erode_below)
+    vals = _stack_prop(layers, prop).astype(float)
+    nz = vals.shape[2]
+
+    if axis == 'y':
+        j = vals.shape[1] // 2 if index is None else index
+        H, Zs = Xc[:, 2 * j], Zc[:, 2 * j, :]
+        C, A = vals[:, j, :], actnum[:, j, :]
+        xlabel = 'X (m)'
+    elif axis == 'x':
+        i = vals.shape[0] // 2 if index is None else index
+        H, Zs = Yc[2 * i, :], Zc[2 * i, :, :]
+        C, A = vals[i, :, :], actnum[i, :, :]
+        xlabel = 'Y (m)'
+    else:
+        raise ValueError("axis must be 'x' or 'y'")
+
+    # One quad per cell from its own four section corners, so fault
+    # throws and pinch-outs render without interpolation across cells.
+    n_lat = C.shape[0]
+    hl, hr = H[0::2], H[1::2]
+    quads = np.empty((n_lat, nz, 4, 2))
+    quads[..., 0, 0] = hl[:, None]; quads[..., 0, 1] = Zs[0::2, :-1]
+    quads[..., 1, 0] = hr[:, None]; quads[..., 1, 1] = Zs[1::2, :-1]
+    quads[..., 2, 0] = hr[:, None]; quads[..., 2, 1] = Zs[1::2, 1:]
+    quads[..., 3, 0] = hl[:, None]; quads[..., 3, 1] = Zs[0::2, 1:]
+    keep = A.ravel() > 0
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(9, 3.2))
+    shown = C.ravel()[keep]
+    # Edges painted in the face color close the antialiasing seams that
+    # would otherwise show as white hairlines between cells.
+    pc = PolyCollection(quads.reshape(-1, 4, 2)[keep],
+                        array=shown,
+                        cmap=plt.get_cmap(cmap or DEFAULT_CMAP),
+                        edgecolors='face', linewidths=0.3)
+    pc.set_clim(vmin if vmin is not None else shown.min(),
+                vmax if vmax is not None else shown.max())
+    ax.add_collection(pc)
+    ax.autoscale()
+    ax.invert_yaxis()
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel('Depth (m)')
+    if title:
+        ax.set_title(title)
+    plt.colorbar(pc, ax=ax, label=_continuous_label(model, shown,
+                                                    float(shown.min()),
+                                                    float(shown.max())))
+    return None
