@@ -49,6 +49,20 @@ def test_dome_analytic_points():
     assert f(0, -300) == pytest.approx(-50 / np.e)
 
 
+def test_dome_elliptical_four_way_closure():
+    # aspect stretches the closure along the azimuth axis (here +x).
+    f = st.dome(amplitude=50, radius=100, aspect=2.0, azimuth=0, center=(0, 0))
+    assert f(0, 0) == pytest.approx(-50)
+    assert f(200, 0) == pytest.approx(-50 / np.e)    # along-axis: aspect * radius
+    assert f(0, 100) == pytest.approx(-50 / np.e)    # cross-axis: radius
+    # It closes in every direction: uplift decays along the long axis too.
+    assert abs(f(400, 0)) < abs(f(200, 0)) < abs(f(0, 0))
+    # azimuth rotates the long axis (90 -> along y).
+    g = st.dome(amplitude=50, radius=100, aspect=2.0, azimuth=90, center=(0, 0))
+    assert g(0, 200) == pytest.approx(-50 / np.e)
+    assert g(100, 0) == pytest.approx(-50 / np.e)
+
+
 def test_ramp_matches_layer_dip_plane():
     layer = Layer(4, 3, 2, 40, 30, 4, top_depth=1000, dip=7.5)
     f = st.ramp(7.5)

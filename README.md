@@ -367,7 +367,9 @@ rm.plot_section(reservoir, structure=shape, erode_above=4992,
 
 ![Structural export](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/structure_export.png)
 
-- **Presets** (`resmill.structure`): `anticline`, `syncline`, `dome`, `ramp`
+- **Presets** (`resmill.structure`): `anticline` / `syncline` (cylindrical
+  fold train), `dome` (four-way dip closure; `aspect` + `azimuth` elongate it
+  into a doubly plunging anticline, the classic structural trap), `ramp`
   (tilt at any azimuth), `fault` (vertical fault plane; put the trace on a
   grid line for a clean face), `surface` (resample any gridded surface array
   or text file).

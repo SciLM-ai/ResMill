@@ -87,6 +87,10 @@ def anticline(amplitude, wavelength, azimuth=0.0, center=None):
     the flanks return to the datum half a wavelength away; crests repeat
     every ``wavelength`` (m), so a single fold needs ``wavelength`` at
     least the footprint size. Negative amplitude gives a syncline.
+
+    The fold is cylindrical (uniform along the hinge, open at both ends).
+    For a trap that closes in every direction, a four-way dip closure,
+    use :func:`dome` with ``aspect``.
     """
     nx_, ny_ = _axes(azimuth)
 
@@ -103,13 +107,27 @@ def syncline(amplitude, wavelength, azimuth=0.0, center=None):
     return -anticline(amplitude, wavelength, azimuth=azimuth, center=center)
 
 
-def dome(amplitude, radius, center=None):
-    """Circular Gaussian dome: uplift ``amplitude * exp(-(r / radius)**2)`` (m)."""
+def dome(amplitude, radius, center=None, aspect=1.0, azimuth=0.0):
+    """Elliptical Gaussian dome: a four-way dip closure.
+
+    Uplift is ``amplitude * exp(-(a / (aspect * radius))**2 - (c / radius)**2)``
+    with ``a`` the distance along the ``azimuth`` axis and ``c`` across it,
+    so dip falls away from the crest in every direction. ``aspect=1``
+    (default) is a circular dome; ``aspect > 1`` elongates it into a
+    doubly plunging (periclinal) anticline, the classic structural trap.
+    ``radius`` is the cross-axis e-folding distance in meters.
+    """
+    nx_, ny_ = _axes(azimuth)
+    az = np.radians(azimuth)
+    sx_, sy_ = np.cos(az), -np.sin(az)
 
     def fn(x, y):
         cx, cy = center if center is not None else (_mid(x), _mid(y))
-        r2 = (np.asarray(x, dtype=float) - cx) ** 2 + (np.asarray(y, dtype=float) - cy) ** 2
-        return -amplitude * np.exp(-r2 / radius**2)
+        dx = np.asarray(x, dtype=float) - cx
+        dy = np.asarray(y, dtype=float) - cy
+        a = dx * sx_ + dy * sy_
+        c = dx * nx_ + dy * ny_
+        return -amplitude * np.exp(-(a / (aspect * radius)) ** 2 - (c / radius) ** 2)
 
     return Structure(fn)
 
