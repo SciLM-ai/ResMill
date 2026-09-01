@@ -32,6 +32,7 @@ Building realistic 3D geological models typically requires expensive commercial 
 - Install: `pip install -e ".[dev]"` (add `viz` extra for pyvista)
 - Test: `pytest tests/` (~3 min; the Numba fluvial engine JIT-compiles on first run; `test_alluvsim_parity.py` self-skips without the external Alluvsim checkout, and the xtgeo round-trip in `test_export.py` self-skips without xtgeo)
 - Tutorial: `jupyter notebook notebooks/tutorial.ipynb` (section 6 covers structure & export)
+- Worked structural examples (run from the repo root; `--show` opens an interactive 3-D corner-point view, needs pyvista): `python examples/anticline_meander.py` (four-way-closure trap with a meandering river), `python examples/angular_unconformity.py` (folded layers beveled flat under an undeformed cover)
 - README figures: `python docs/make_readme_figures.py`
 
 ## Conventions
@@ -52,4 +53,6 @@ Building realistic 3D geological models typically requires expensive commercial 
   - `perm_std`: `[0.1, 1.5]` → log10-std (factor-of-1.3 to factor-of-30 spread)
   - Passing linear-mD values (e.g. `perm_ave=500`) makes the internal `10**perm_mat` overflow float64 and the output cells saturate to the on-disk clip ceiling (60000 mD). `poro_ave` and `poro_std` stay in linear [0, 1] units.
 - **Structure fields are vertical shifts in meters, positive down**: `anticline(amplitude=25)` lifts the crest 25 m (the field is -25 there). `azimuth` is degrees clockwise from +x (the lobe/channel convention). Put `fault` traces on grid lines (multiples of dx/dy) for clean vertical fault faces.
+- **Trap vs fold**: `anticline()` is a cylindrical fold, open at both ends; a closed structural trap (four-way dip closure) is `dome(amplitude, radius, aspect, azimuth)` — `aspect > 1` elongates it into a doubly plunging anticline. See `examples/anticline_meander.py`.
+- **Unconformities need no erosion surface**: pass `structure=` as a list with one entry per layer (top to bottom, `None` = undeformed). Layers deform independently and the exporter clamps older interfaces to any younger layer base that cuts them ("younger truncates older"), so folded layers under undeformed layers come out beveled flat at the contact, with eroded cells collapsed and written ACTNUM 0. `erode_above=`/`erode_below=` are only for present-day surfaces at the very top/base. See `examples/angular_unconformity.py`.
 - `GaussianLayer` and `LobeLayer` zero out poro/perm in shale cells (`* active`); channel/delta give shale realistic low values from `FACIES_PROPS`. For simulation-ready exports of gaussian/lobe models use `to_grdecl(..., poro_floor=, perm_floor=)`.
