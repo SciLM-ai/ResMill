@@ -46,7 +46,9 @@ if str(ALLUVSIM_NOTEBOOKS) not in sys.path:
 if str(ALLUVSIM_RUNS) not in sys.path:
     sys.path.insert(0, str(ALLUVSIM_RUNS))
 
-import alluvsim_io  # noqa: E402  (after path wiring)
+# Skip the whole module (instead of failing collection) on machines
+# without the Alluvsim checkout.
+alluvsim_io = pytest.importorskip("alluvsim_io", reason="Alluvsim harness not present")
 from alluvsim_io import FACIES_NAMES, FACIES_COLORS  # noqa: E402
 from run_presets import PRESETS as ALLUVSIM_PRESETS  # noqa: E402
 

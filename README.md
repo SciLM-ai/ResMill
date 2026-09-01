@@ -12,7 +12,10 @@ ResMill generates geologically plausible synthetic 3D reservoir models — turbi
 lobes, fluvial channel systems, deltas, and Gaussian heterogeneity fields — from a
 handful of physical parameters, with no commercial software required. It is a
 Python-native, pip-installable tool for subsurface modeling in oil & gas,
-groundwater, and carbon-storage workflows.
+groundwater, and carbon-storage workflows. Finished models can be bent into
+structural shapes (folds, faults, erosional unconformities) and exported as
+corner-point grids (GRDECL) that load directly into Petrel, Eclipse, tNavigator,
+OPM Flow, and ResInsight.
 
 The modeling engines are derived from two established bodies of work:
 
@@ -42,6 +45,9 @@ pip install -e ".[dev]"
 ```
 
 Requires Python ≥ 3.10. Dependencies: NumPy, SciPy, Numba, Matplotlib.
+Optional extras: `pip install resmill[viz]` adds pyvista for interactive 3-D
+grid QC. Release notes live in
+[CHANGELOG.md](https://github.com/SciLM-ai/ResMill/blob/main/CHANGELOG.md).
 
 ---
 
@@ -70,7 +76,7 @@ rm.plot_cube_slices(lobe, title="Turbidite lobes")
 
 ## How it works
 
-ResMill has three core pieces:
+ResMill has four core pieces:
 
 1. **`Layer`** — the base class. A layer is constructed with **grid geometry only**:
    `nx, ny, nz` (cell counts), `x_len, y_len, z_len` (extent in metres), `top_depth`
@@ -83,7 +89,16 @@ ResMill has three core pieces:
 3. **`Reservoir([layer_top, …, layer_bottom])`** — stacks layers vertically into one
    model. Layers are listed **top → bottom**; every layer must share the same
    `nx, ny, x_len, y_len`, and each layer's base depth must equal the next layer's
-   `top_depth` (the constructor validates this).
+   `top_depth` (the constructor validates this). The stacked arrays keep the
+   package's vertical convention (k index increasing upward): the deepest layer
+   occupies k=0 and the shallowest ends at k=nz-1, while `Reservoir.layers` stays
+   in the listed top-to-bottom order.
+
+4. **Structure & export** — geology is modeled in flat stratigraphic space;
+   `to_grdecl(structure=...)` bends the finished model into a structural shape and
+   writes a Petrel/Eclipse corner-point file, `plot_section` shows the deformed
+   grid in true depth, and `to_pyvista` builds an interactive 3-D view. See
+   [Structural shapes & export](#structural-shapes--export-to-petrel--eclipse).
 
 All arrays are shaped `(nx, ny, nz)` using `meshgrid(..., indexing='ij')`.
 
@@ -96,9 +111,10 @@ All arrays are shaped `(nx, ny, nz)` using `meshgrid(..., indexing='ij')`.
 | `active`   | reservoir (sand) mask | `0` / `1` |
 | `facies`   | facies class | see table below |
 
-`facies` semantics vary by layer: channel/delta use the full multi-class Alluvsim
-codes; `LobeLayer.facies` is a lobe index; `GaussianLayer` has no multi-class facies
-— use `active` for its sand mask.
+Every layer type exposes `facies` with the same Alluvsim codes (table below).
+Channel and delta models use all six classes; lobe and Gaussian models mark sand
+as LA (`3`) and background as FF (`-1`). `LobeLayer.lobe_id` additionally holds
+the per-lobe stacking index (1..N) for colouring by lobe generation.
 
 > **⚠️ Permeability units gotcha.** For `LobeLayer` and `GaussianLayer`, the
 > `perm_ave` / `perm_std` *inputs* are in **log10(mD)** space (e.g. `perm_ave=1.5`
@@ -165,7 +181,7 @@ lobe.create_geology(poro_ave=0.20, perm_ave=1.5, poro_std=0.03, perm_std=0.5,
 rm.plot_slices(lobe)
 ```
 
-![LobeLayer](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/lobe.png)
+![LobeLayer](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/lobe.png)
 
 ### `GaussianLayer` — SGS heterogeneity field
 
@@ -179,7 +195,7 @@ gauss.create_geology(poro_ave=0.18, perm_ave=1.5, poro_std=0.04, perm_std=0.5, n
 rm.plot_slices(gauss.poro_mat, axis=2)   # Z slices of the porosity field
 ```
 
-![GaussianLayer](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/gaussian.png)
+![GaussianLayer](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/gaussian.png)
 
 ### `ChannelLayer` — fluvial systems
 
@@ -207,7 +223,7 @@ ch.create_geology(seed=42, **PV_SHOESTRING)
 rm.plot_slices(ch)
 ```
 
-![PV_SHOESTRING](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/channel_pv_shoestring.png)
+![PV_SHOESTRING](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/channel_pv_shoestring.png)
 
 #### `CB_JIGSAW` — channel-and-bar jigsaw
 
@@ -220,7 +236,7 @@ ch.create_geology(seed=42, **CB_JIGSAW)
 rm.plot_slices(ch)
 ```
 
-![CB_JIGSAW](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/channel_cb_jigsaw.png)
+![CB_JIGSAW](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/channel_cb_jigsaw.png)
 
 #### `CB_LABYRINTH` — labyrinthine channel bodies
 
@@ -233,7 +249,7 @@ ch.create_geology(seed=42, **CB_LABYRINTH)
 rm.plot_slices(ch)
 ```
 
-![CB_LABYRINTH](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/channel_cb_labyrinth.png)
+![CB_LABYRINTH](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/channel_cb_labyrinth.png)
 
 #### `SH_DISTAL` — distal sand sheet
 
@@ -246,7 +262,7 @@ ch.create_geology(seed=42, **SH_DISTAL)
 rm.plot_slices(ch)
 ```
 
-![SH_DISTAL](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/channel_sh_distal.png)
+![SH_DISTAL](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/channel_sh_distal.png)
 
 #### `SH_PROXIMAL` — proximal sand sheet
 
@@ -259,7 +275,7 @@ ch.create_geology(seed=42, **SH_PROXIMAL)
 rm.plot_slices(ch)
 ```
 
-![SH_PROXIMAL](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/channel_sh_proximal.png)
+![SH_PROXIMAL](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/channel_sh_proximal.png)
 
 #### `MEANDER_OXBOW` — meander belt with oxbow mud plugs
 
@@ -274,7 +290,7 @@ ch.create_geology(seed=42, **MEANDER_OXBOW)
 rm.plot_slices(ch)
 ```
 
-![MEANDER_OXBOW](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/channel_meander_oxbow.png)
+![MEANDER_OXBOW](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/channel_meander_oxbow.png)
 
 ### `DeltaLayer` — distributary delta
 
@@ -289,7 +305,7 @@ delta.create_geology(seed=3)            # DELTA_FAN defaults are applied automat
 rm.plot_slices(delta)
 ```
 
-![DeltaLayer](https://raw.githubusercontent.com/IlgarBaghishov/ResMill/main/docs/images/delta_fan.png)
+![DeltaLayer](https://raw.githubusercontent.com/SciLM-ai/ResMill/main/docs/images/delta_fan.png)
 
 ---
 
