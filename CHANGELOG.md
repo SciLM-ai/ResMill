@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `dome()` gains `aspect` and `azimuth` (elongated four-way closures);
+  `examples/anticline_meander.py` and `examples/angular_unconformity.py`.
+
+### Fixed
+
+- `to_grdecl`: cells thinner than the ZCORN write precision are written
+  inactive (`_MIN_THICKNESS` 5 mm), and `facies=True` is validated before
+  the file is created.
+- `plot_section` raises a clear error on a fully eroded model.
+- `Reservoir` docstring: stacked arrays are copies; edit the layers for export.
+
 ## 0.2.0 (2026-08-31)
 
 ### Added
@@ -29,8 +44,8 @@
   a stacked section drew the reservoir upside down. Code that indexed
   `Reservoir` arrays along k must be updated; `Reservoir.layers` and
   `Reservoir.zz` keep the listed top-to-bottom order.
-- `__version__` now matches the packaged version (was 0.1.2 while
-  pyproject said 0.1.3).
+- `__version__` and `pyproject.toml` are bumped together (0.1.3 -> 0.2.0);
+  the 0.1.2/0.1.3 resync had already happened in 0.1.3.
 
 ## 0.1.3 (2026-08-30)
 
