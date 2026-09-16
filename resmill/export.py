@@ -239,6 +239,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     Xc, Yc, Zc, actnum = _build_geometry(
         layers, structure, top, base, erode_above, erode_below)
 
+    fac = _stack_prop(layers, "facies").astype(int) if facies else None
     poro = _stack_prop(layers, "poro_mat").astype(float)
     permx = _stack_prop(layers, "perm_mat").astype(float)
     permz = np.concatenate(
@@ -277,8 +278,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         _write_array(f, "PERMX", permx.ravel(order="F"), fmt_prop, per_line=10)
         _write_array(f, "PERMY", permx.ravel(order="F"), fmt_prop, per_line=10)
         _write_array(f, "PERMZ", permz.ravel(order="F"), fmt_prop, per_line=10)
-        if facies:
-            fac = _stack_prop(layers, "facies").astype(int)
+        if fac is not None:
             _write_rle(f, "FACIES", fac.ravel(order="F"))
     return path
 

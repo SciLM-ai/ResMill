@@ -251,6 +251,7 @@ def test_errors(tmp_path):
         Layer(NX, NY, NZ, 60, 50, 8, top_depth=TOP).to_grdecl(tmp_path / "x.grdecl")
     with pytest.raises(ValueError, match="facies"):
         make_layer().to_grdecl(tmp_path / "x.grdecl", facies=True)
+    assert not (tmp_path / "x.grdecl").exists()
     with pytest.raises(ValueError, match="one entry per layer"):
         make_layer().to_grdecl(tmp_path / "x.grdecl", structure=[None, None])
 
