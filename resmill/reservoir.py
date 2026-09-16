@@ -10,6 +10,10 @@ class Reservoir:
     package-wide vertical convention instead: the k index increases
     upward, so global k=0 is the base of the deepest layer and k=nz-1
     the top of the shallowest.
+
+    The stacked arrays are copies. ``to_grdecl``, ``to_pyvista`` and
+    ``plot_section`` rebuild from ``self.layers``, so edit ``layers[i].poro_mat``
+    (not ``Reservoir.poro_mat``) for a change to reach them.
     """
 
     def __init__(self, layers):
