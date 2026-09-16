@@ -592,6 +592,8 @@ def plot_section(model, prop='poro_mat', axis='y', index=None,
     if ax is None:
         _, ax = plt.subplots(figsize=(9, 3.2))
     shown = C.ravel()[keep]
+    if shown.size == 0:
+        raise ValueError("no active cells in this section: the erosion/top/base surfaces collapsed every cell")
     # Edges painted in the face color close the antialiasing seams that
     # would otherwise show as white hairlines between cells.
     pc = PolyCollection(quads.reshape(-1, 4, 2)[keep],

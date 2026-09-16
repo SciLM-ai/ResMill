@@ -283,3 +283,8 @@ def test_sliver_cell_is_written_inactive(tmp_path):
     path = make_layer().to_grdecl(tmp_path / "s.grdecl", erode_above=TOP + DZ - 0.001)
     top = np.asarray(read_grdecl(path)["ACTNUM"]).reshape(NZ, NY, NX)[0]
     assert top.max() == 0
+
+
+def test_plot_section_refuses_a_fully_eroded_model():
+    with pytest.raises(ValueError, match="no active cells"):
+        plot_section(make_layer(), erode_above=TOP + NZ * DZ + 1.0)
