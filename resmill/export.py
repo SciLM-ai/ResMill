@@ -18,8 +18,9 @@ import numpy as np
 from .structure import Structure, surface as _surface_field
 
 # A cell whose corner-pair thickness never exceeds this is fully collapsed
-# (eroded or pinched out) and is written with ACTNUM = 0.
-_MIN_THICKNESS = 1e-6
+# (eroded or pinched out) and is written with ACTNUM = 0. Kept at half the
+# ZCORN write precision (fmt_z="%.2f") so no active cell has zero thickness on disk.
+_MIN_THICKNESS = 5e-3
 # Corners are nudged toward cell centers by this fraction of a cell so a
 # discontinuous structure (a fault) assigns each cell to its own side of
 # the trace; continuous fields are snapped back to exact node values.

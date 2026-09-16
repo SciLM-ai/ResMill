@@ -276,3 +276,10 @@ def test_xtgeo_roundtrip(tmp_path):
     dz = grid.get_dz().values
     assert np.allclose(dz[~dz.mask] if np.ma.isMaskedArray(dz) else dz,
                        DZ, atol=0.02)
+
+
+def test_sliver_cell_is_written_inactive(tmp_path):
+    # 1 mm of rock left in the top cell is below the 1 cm ZCORN write precision
+    path = make_layer().to_grdecl(tmp_path / "s.grdecl", erode_above=TOP + DZ - 0.001)
+    top = np.asarray(read_grdecl(path)["ACTNUM"]).reshape(NZ, NY, NX)[0]
+    assert top.max() == 0
