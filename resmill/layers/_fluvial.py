@@ -35,6 +35,10 @@ from ._calc_levee import paint_levee
 from ._calc_lobe_splay import paint_lobe, paint_splay
 from ._make_cutoff import make_cutoff
 
+# Upper clip applied to every drawn sinuosity in ``_sample_streamline``;
+# used to size the ``ndis0`` safety net from the grid diagonal.
+_MAX_SINUOSITY = 1.9
+
 
 # ---------------------------------------------------------------------------
 # Alluvsim facies codes
@@ -283,7 +287,22 @@ class fluvial:
         # ``step = (xsiz + ysiz) / 2``. ndis0 multiplier matches AL's *2.
         self.step = (self.xsiz + self.ysiz) / 2
         self.step0 = self.step
-        self.ndis0 = int((((self.xmax - self.xmin) + (self.ymax - self.ymin)) / 2.0) / self.step) * 2
+        # ``ndis0`` is a SAFETY NET, not a stopping criterion: a channel is
+        # meant to stop when it reaches the grid boundary. Alluvsim sized it
+        # from the mean of the two horizontal spans, which is fine for a
+        # square grid but far too short for an elongated one -- channels then
+        # run out of nodes mid-domain and the far end never fills. Size it
+        # from the diagonal instead, times the maximum sinuosity the walk can
+        # draw, times 2. Overshooting is nearly free because the walk exits as
+        # soon as it leaves the grid; undershooting silently truncates.
+        diag = float(np.hypot(self.xmax - self.xmin, self.ymax - self.ymin))
+        self.ndis0 = int(diag / self.step * _MAX_SINUOSITY) * 2
+        # The "walk died immediately, redraw it" threshold must stay tied to
+        # the domain, not to the safety net, or a generous net would reject
+        # perfectly good short walks in a narrow grid.
+        self.ndis_min = max(
+            2, int((((self.xmax - self.xmin) + (self.ymax - self.ymin)) / 2.0)
+                   / self.step) * 2 // 10)
 
         # Counters mutable from numba kernels
         self.ntg_counter = np.zeros(1, dtype=np.int64)
@@ -417,8 +436,16 @@ class fluvial:
                 ang = b1 * ang1 + b2 * ang2 + noise[i]
                 x = cx[i] + self.step * np.cos(np.radians(ang))
                 y = cy[i] + self.step * np.sin(np.radians(ang))
-                if x > self.xmax or x < self.xmin or y > self.ymax or y < self.ymin:
-                    if i < ndis_max // 10:
+                # Test where the channel actually lands, not where it is
+                # walked: with azimuth != 0 the two differ by a rotation, and
+                # testing the unrotated point bounds the walk by a ROTATED
+                # copy of the grid. That leaves the grid's own corners
+                # permanently empty and makes net-to-gross depend on azimuth
+                # (0.564 at 0 and 90 deg, 0.534 at 45 -- a square overlaps
+                # its own rotation least at 45).
+                xr, yr = self._rot_xy(x, y)
+                if xr > self.xmax or xr < self.xmin or yr > self.ymax or yr < self.ymin:
+                    if i < self.ndis_min:
                         short = True
                         break
                     n_ok = i  # nodes 0..i-1 are in-grid; AL: ``ndis = i-1`` then exit
@@ -930,6 +957,20 @@ class fluvial:
         self.maxCHhalfwidth = float(half_arr.max())
 
     # ----------------------------------------------------------------- coordinate rotation (back-compat)
+
+    def _rot_xy(self, x, y):
+        """Map one walk coordinate into the frame the channel is stamped in.
+
+        Streamlines are walked axis-aligned and rotated by ``azimuth`` about
+        the grid centre at stamping time (see ``_rotated_stream``), so a point
+        is inside the model only if its ROTATED image is inside the grid.
+        """
+        if self.azimuth_rad == 0.0:
+            return x, y
+        dx = x - self._pivot_x
+        dy = y - self._pivot_y
+        return (self._pivot_x + dx * self._cos_az + dy * self._sin_az,
+                self._pivot_y - dx * self._sin_az + dy * self._cos_az)
 
     def _rotated_stream(self):
         if self.azimuth_rad == 0.0:
