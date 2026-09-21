@@ -36,7 +36,7 @@ from ._calc_lobe_splay import paint_lobe, paint_splay
 from ._make_cutoff import make_cutoff
 
 # Upper clip applied to every drawn sinuosity in ``_sample_streamline``;
-# used to size the ``ndis0`` safety net from the grid diagonal.
+# used to size the ``ndis_cap`` walk safety net from the grid diagonal.
 _MAX_SINUOSITY = 1.9
 
 
@@ -287,22 +287,26 @@ class fluvial:
         # ``step = (xsiz + ysiz) / 2``. ndis0 multiplier matches AL's *2.
         self.step = (self.xsiz + self.ysiz) / 2
         self.step0 = self.step
-        # ``ndis0`` is a SAFETY NET, not a stopping criterion: a channel is
-        # meant to stop when it reaches the grid boundary. Alluvsim sized it
-        # from the mean of the two horizontal spans, which is fine for a
-        # square grid but far too short for an elongated one -- channels then
-        # run out of nodes mid-domain and the far end never fills. Size it
-        # from the diagonal instead, times the maximum sinuosity the walk can
-        # draw, times 2. Overshooting is nearly free because the walk exits as
-        # soon as it leaves the grid; undershooting silently truncates.
+        # Every streamline is resampled to ``ndis0`` nodes, so ``ndis0`` sets
+        # the node density and with it every per-node rule (cutoff necks,
+        # width and depth draws along the channel; MEANDER_OXBOW net-to-gross
+        # falls from 0.45 to 0.26 when the density is nearly tripled).
+        # Alluvsim sizes it from the mean horizontal span, which on a square
+        # grid is the span the walk crosses. Keep that density on any grid by
+        # using the walk-frame x span, the span every streamline traverses.
+        self.ndis0 = int((self.xmax - self.xmin) / self.step) * 2
+        # The AR(2) walk itself is capped separately. The cap is a SAFETY
+        # NET, not a stopping criterion: a channel stops when it leaves the
+        # grid. Size it from the diagonal times the maximum sinuosity, times
+        # 2, so even the most sinuous walk across the longest line of the
+        # grid never runs out of nodes mid-domain. Overshooting is nearly
+        # free because the walk exits as soon as it leaves the grid;
+        # undershooting silently truncates (it did on elongated grids when
+        # the cap was ``ndis0``: the far end never filled).
         diag = float(np.hypot(self.xmax - self.xmin, self.ymax - self.ymin))
-        self.ndis0 = int(diag / self.step * _MAX_SINUOSITY) * 2
-        # The "walk died immediately, redraw it" threshold must stay tied to
-        # the domain, not to the safety net, or a generous net would reject
-        # perfectly good short walks in a narrow grid.
-        self.ndis_min = max(
-            2, int((((self.xmax - self.xmin) + (self.ymax - self.ymin)) / 2.0)
-                   / self.step) * 2 // 10)
+        self.ndis_cap = int(diag / self.step * _MAX_SINUOSITY) * 2
+        # "Walk died immediately, redraw it" threshold (Alluvsim: ndis0/10).
+        self.ndis_min = max(2, self.ndis0 // 10)
 
         # Counters mutable from numba kernels
         self.ntg_counter = np.zeros(1, dtype=np.int64)
@@ -407,10 +411,10 @@ class fluvial:
           ``ang = b1*ang1 + b2*ang2 + (xp*s + m)``
           ``x += step*cosd(ang); y += step*sind(ang)``
 
-        Restarts noise if the walk leaves the grid in the first ``ndis0/10``
+        Restarts noise if the walk leaves the grid in the first ``ndis_min``
         nodes (matches AL's ``goto 512`` regen-on-short-failure).
 
-        Returns ``(cx, cy)`` arrays of length ``>= ndis0/10`` on success, or
+        Returns ``(cx, cy)`` arrays of length ``>= ndis_min`` on success, or
         (None, None) after ``max_attempts`` failed regenerations.
         """
         k = 0.3
@@ -460,23 +464,66 @@ class fluvial:
             return cx[:n_ok].copy(), cy[:n_ok].copy()
         return None, None
 
-    def _sample_streamline(self):
-        """Sample (chazi, chsinu, y0) per Alluvsim ``buildCHtable.for:73-88``.
+    def _snap_entry(self, x0, y0):
+        """Move a streamline entry onto the grid boundary along the mean flow.
 
-        The streamline entry is ``(xmin + entry_x_offset, y0)`` — the
-        offset is 0 by default (Alluvsim semantics) and advances per
-        level when delta-style progradation is configured.
+        Entries are drawn on the upstream edge of the UNROTATED walk frame,
+        and stamping rotates the streamline by ``azimuth`` about the grid
+        centre. For any azimuth that is not a multiple of 90 degrees that
+        edge lands partly inside the grid and partly outside it: a channel,
+        or a whole delta fan, starts in the open floodplain with nothing
+        feeding it, and entries outside the grid are wasted. Slide the entry
+        along the mean flow direction to where its flow line crosses the grid
+        boundary: backwards if the entry is inside, forwards if it is outside.
+        Returns the walk-frame entry, or None when the flow line misses the
+        grid.
+        """
+        ang = np.radians(450.0 - self.mCHazi)
+        dx, dy = float(np.cos(ang)), float(np.sin(ang))
+        qx, qy = self._rot_xy(x0, y0)
+        ex = dx * self._cos_az + dy * self._sin_az
+        ey = -dx * self._sin_az + dy * self._cos_az
+        s_in, s_out = -np.inf, np.inf
+        for q, e, lo, hi in ((qx, ex, self.xmin, self.xmax), (qy, ey, self.ymin, self.ymax)):
+            if abs(e) < 1e-12:
+                if q < lo or q > hi:
+                    return None
+                continue
+            t1, t2 = (lo - q) / e, (hi - q) / e
+            s_in, s_out = max(s_in, min(t1, t2)), min(s_out, max(t1, t2))
+        if s_in > s_out:
+            return None
+        return x0 + s_in * dx, y0 + s_in * dy
+
+    def _sample_streamline(self):
+        """Sample (x0, y0, chazi, chsinu) per Alluvsim ``buildCHtable.for:73-88``.
+
+        The entry is drawn on the upstream edge of the walk frame, moved onto
+        the grid boundary along the mean flow (``_snap_entry``), then advanced
+        along the flow by ``entry_x_offset`` when delta-style progradation is
+        configured (0 by default, Alluvsim semantics).
         """
         chazi = float(np.random.normal(self.mCHazi, max(self.stdevCHazi, 1e-9)))
         chsinu = float(np.random.normal(self.mCHsinu, max(self.stdevCHsinu, 1e-9)))
         chsinu = float(np.clip(chsinu, 1.1, 1.9))
-        if self.stdevCHsource > 0.0:
-            y0 = float(np.random.normal(self.mCHsource, self.stdevCHsource))
-            y0 = float(np.clip(y0, self.ymin, self.ymax))
-        else:
-            y0 = float(np.random.uniform(self.ymin, self.ymax))
-        x0 = self.xmin + self._entry_x_offset
-        return x0, y0, chazi, chsinu
+        ang = np.radians(450.0 - self.mCHazi)
+        dx, dy = float(np.cos(ang)), float(np.sin(ang))
+        for _ in range(1000):
+            if self.stdevCHsource > 0.0:
+                y0 = float(np.random.normal(self.mCHsource, self.stdevCHsource))
+                y0 = float(np.clip(y0, self.ymin, self.ymax))
+            else:
+                # Uniform over everything the grid spans perpendicular to the
+                # flow, so a rotated grid is entered along its whole width and
+                # not only along the rotated image of one edge.
+                half = 0.5 * ((self.xmax - self.xmin) * abs(self._sin_az)
+                              + (self.ymax - self.ymin) * abs(self._cos_az))
+                y0 = float(np.random.uniform(self._pivot_y - half, self._pivot_y + half))
+            snapped = self._snap_entry(self.xmin, y0)
+            if snapped is not None:
+                return (snapped[0] + self._entry_x_offset * dx,
+                        snapped[1] + self._entry_x_offset * dy, chazi, chsinu)
+        raise RuntimeError('no streamline entry reaches the grid')
 
     def generate_streamline(self, x0=None, y0=None, chazi=None, chsinu=None) -> int:
         """Build a fresh streamline by AR(2) walk → spline-resample to ndis0.
@@ -489,7 +536,7 @@ class fluvial:
             if y0 is None: y0 = y0_
             if chazi is None: chazi = chazi_
             if chsinu is None: chsinu = chsinu_
-        cx0, cy0 = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis0)
+        cx0, cy0 = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis_cap)
         if cx0 is None or cx0.size < 20:
             return 0
 
@@ -533,7 +580,7 @@ class fluvial:
         pool = []
         for _ in range(self.CHndraw):
             x0, y0, chazi, chsinu = self._sample_streamline()
-            cx, cy = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis0)
+            cx, cy = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis_cap)
             if cx is None or cx.size < 20:
                 continue
             length = np.zeros(cx.size)
@@ -886,7 +933,7 @@ class fluvial:
         cx_tail, cy_tail = self._ar2_walk(
             float(self.cx[ianode]), float(self.cy[ianode]),
             chazi=local_azi, chsinu=chsinu,
-            ndis_max=self.ndis0,
+            ndis_max=self.ndis_cap,
         )
         if cx_tail is None or cx_tail.size < 5:
             return False

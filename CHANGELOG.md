@@ -9,6 +9,23 @@
 
 ### Fixed
 
+- Fluvial streamlines (channel, delta) now enter the grid on its boundary.
+  The entry was drawn on the upstream edge of the unrotated walk frame and
+  the streamline rotated by `azimuth` about the grid centre at stamping, so
+  for any azimuth off a multiple of 90 degrees channels, and the whole delta
+  fan, started inside the grid with nothing feeding them, and entries that
+  rotated out of the grid were wasted. Entries are slid along the mean flow
+  onto the boundary and drawn across everything the grid spans perpendicular
+  to the flow.
+- The AR(2) walk is clipped where the channel lands, not where it is walked,
+  so the grid's corners fill at every azimuth and net-to-gross no longer
+  depends on azimuth.
+- The walk's step cap (`ndis_cap`) is separate from the streamline node count
+  (`ndis0`). The cap is a safety net sized from the grid diagonal, so
+  channels on elongated grids no longer stop mid-domain; the node count keeps
+  Alluvsim's density (two nodes per cell of the flow-direction span), since
+  it sets every per-node rule (MEANDER_OXBOW net-to-gross fell from 0.45 to
+  0.26 when it was tripled).
 - `to_grdecl`: cells thinner than the ZCORN write precision are written
   inactive (`_MIN_THICKNESS` 5 mm), and `facies=True` is validated before
   the file is created.
