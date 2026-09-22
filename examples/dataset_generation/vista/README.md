@@ -1,7 +1,7 @@
 # Regenerating the dataset on TACC Vista (gg partition)
 
 Same configs, same Sobol seed 42, same job list as the published dataset
-(REPRODUCIBILITY.md); only the engine changes, to ResMill `9c0bd15`, which fixes
+(REPRODUCIBILITY.md); only the engine changes, to ResMill `6d1a956`, which fixes
 the three fluvial-walker defects listed in CHANGELOG.md. Every row keeps its
 parameters and seed, so downstream selections by (shard, index) stay valid once
 the shards are combined the same way.
@@ -34,7 +34,7 @@ limit; TACC charges actual run time). The delta row is the tree delta
 ## Steps
 
 ```bash
-cd /work/08405/ilgar/vista/codes/ResMill_ls6 && git checkout 9c0bd15
+cd /work/08405/ilgar/vista/codes/ResMill_ls6 && git checkout 6d1a956
 cd examples/dataset_generation
 for j in vista/run_*.sh; do sbatch "$j"; done        # 8 independent jobs
 # when all eight have finished (logs/ show every rank's summary line):
