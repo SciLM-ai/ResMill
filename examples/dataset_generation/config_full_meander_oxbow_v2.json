@@ -82,8 +82,11 @@
           "_comment_": "FIXED at preset baseline. Must stay 0 to keep single-channel-per-level. Varying breaks the OXBOW signature."
         },
         "probAvulOutside": {
-          "value": 0.0,
-          "_comment_": "FIXED at preset baseline. Must stay 0 (no out-of-belt avulsion either)."
+          "range": [
+            0.0,
+            0.015
+          ],
+          "_comment_": "VARIED (v1 fixed it at 0.0). Probability per event that a fresh river enters from the boundary; times ntime this is the number of fresh entries per level, spread over the n_sources valleys."
         },
         "mFFCHprop": {
           "value": 0.0,

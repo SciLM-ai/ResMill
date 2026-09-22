@@ -105,8 +105,11 @@
           "_comment_": "TRUE so every level gets its own event budget (independent of how many lower levels consumed). Without this, deep levels starve when NTGtarget=0.99 stops never firing."
         },
         "probAvulOutside": {
-          "value": 0.02,
-          "_comment_": "skip \u2014 preset default. SH_DISTAL overrides class 0.10 -> 0.02 (very rare out-of-belt jumps; sheets stay coherent)."
+          "range": [
+            0.01,
+            0.06
+          ],
+          "_comment_": "VARIED (v1 fixed it at 0.02). Probability per event that a fresh river enters from the boundary; times ntime this is the number of fresh entries per level, spread over the n_sources valleys."
         },
         "stdevCHsinu": {
           "value": 0.1,
