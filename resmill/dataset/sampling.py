@@ -22,6 +22,17 @@ Per-parameter specs supported:
 - ``{"inverse_of": "X", "scale": s, "min": m, "max": M, "type": "int"}``
   derived: clip(s / params["X"], m, M). Use this to auto-tune e.g.
   ``nlevel`` so deeper channels stack fewer levels.
+- ``{"levels_from_ratio": "mCHdepth", "ratio": [lo, hi], "column": H,
+  "base": b, "min": m, "max": M}``   number of channel levels from a
+  sampled aggradation ratio: the ratio r (level spacing over channel
+  depth) is drawn uniformly in [lo, hi] on this param's own unit-cube
+  column, then ``round((H - b) / (r * depth)) + 1`` clipped to [m, M].
+  ``H`` is the layer's ``z_len`` (the engine spreads the levels over
+  the whole column) and ``b`` the height of the lowest level top, which
+  defaults to the depth (``ChannelLayer``: bottom channel base on the
+  floor); ``DeltaLayer`` puts its lowest generation at ``dz``, so pass
+  ``"base": dz``. r below 1 makes successive levels cut into each other,
+  above 1 leaves floodplain between them, at most (r - 1) x depth.
 - ``{"range": [...], "shared": "tag"}``         couple params by tying them
   to the same Sobol/LHS coordinate — every param with the same tag uses
   the same unit-cube draw, so they are 100%-rank-correlated. Use this
@@ -109,6 +120,7 @@ class JobList:
             params.update(dict(zip(state.variable_names, combo)))
         else:
             unit_row = state.unit[within]
+            deferred = []
             for name, pcol, jcol, jamt in zip(
                 state.variable_names, state.unit_col_map,
                 state.jitter_col, state.jitter_amt,
@@ -118,7 +130,14 @@ class JobList:
                     u = u_primary
                 else:
                     u = (1.0 - jamt) * u_primary + jamt * float(unit_row[jcol])
+                if "levels_from_ratio" in params_cfg[name]:
+                    deferred.append((name, u))
+                    continue
                 params[name] = _map_unit_value(u, params_cfg[name])
+            # Level counts need the channel depth, so resolve them once
+            # every plain variable is in place.
+            for name, u in deferred:
+                params[name] = _levels_from_ratio(u, params_cfg[name], params)
 
         # Derived params (fraction_of / linear_of) reference already-
         # resolved variable / fixed params, so resolve them last.
@@ -165,6 +184,20 @@ def build_jobs(layers_cfg: dict, master_seed: int) -> JobList:
         # Validate derived references — must point at a fixed or
         # variable param, otherwise we'd hit KeyError per-sample.
         _known = set(fixed) | set(variable_names)
+        for vn in variable_names:
+            vspec = params_cfg[vn]
+            if "levels_from_ratio" in vspec:
+                ref = vspec["levels_from_ratio"]
+                if ref not in _known or ref == vn or "levels_from_ratio" in params_cfg.get(ref, {}):
+                    raise ValueError(
+                        f"param {vn!r}: levels_from_ratio must reference a "
+                        f"fixed or plain variable param, got {ref!r}"
+                    )
+                if cfg.get("sampling", "sobol") == "grid":
+                    raise ValueError(
+                        f"param {vn!r}: levels_from_ratio is not supported "
+                        "with grid sampling"
+                    )
         for dname, dspec in derived:
             ref = (dspec.get("fraction_of") or dspec.get("linear_of")
                    or dspec.get("inverse_of"))
@@ -305,6 +338,25 @@ def _resolve_derived(spec: dict, params: dict):
             return int(round(v))
         return float(v)
     raise ValueError(f"unknown derived spec: {spec}")
+
+
+def _levels_from_ratio(u: float, spec: dict, params: dict) -> int:
+    """Number of levels for a sampled aggradation ratio (see module doc)."""
+    lo, hi = spec["ratio"]
+    ratio = float(lo) + u * (float(hi) - float(lo))
+    depth = float(params[spec["levels_from_ratio"]])
+    if depth <= 0 or ratio <= 0:
+        raise ValueError(
+            f"levels_from_ratio needs positive depth and ratio, got "
+            f"depth={depth}, ratio={ratio}"
+        )
+    column = float(spec["column"])
+    base = float(spec.get("base", depth))
+    n = int(round((column - base) / (ratio * depth))) + 1
+    n = max(int(spec.get("min", 1)), n)
+    if "max" in spec:
+        n = min(int(spec["max"]), n)
+    return n
 
 
 def _is_derived(spec: dict) -> bool:

@@ -24,6 +24,20 @@ from .io import ShardWriter
 from .sampling import build_jobs
 
 
+def _check_level_columns(cfg: dict) -> None:
+    """A ``levels_from_ratio`` spec must quote the grid's ``z_len``."""
+    z_len = float(cfg["grid"]["z_len"])
+    for lname, lcfg in cfg["layers"].items():
+        for pname, spec in lcfg["params"].items():
+            if isinstance(spec, dict) and "levels_from_ratio" in spec:
+                col = float(spec["column"])
+                if abs(col - z_len) > 1e-6:
+                    raise ValueError(
+                        f"{lname}.{pname}: levels_from_ratio column {col} "
+                        f"differs from grid z_len {z_len}"
+                    )
+
+
 def main(config_path: str) -> None:
     with open(config_path) as f:
         cfg = json.load(f)
@@ -35,6 +49,7 @@ def main(config_path: str) -> None:
 
     # build_jobs returns an already-shuffled JobList (compact numpy storage;
     # ~100 MB even for 10M samples). jobs[i] materialises one dict on demand.
+    _check_level_columns(cfg)
     jobs = build_jobs(cfg["layers"], cfg["seed"])
     my_indices = list(range(rank, len(jobs), world))
 
@@ -99,3 +114,4 @@ if __name__ == "__main__":
               file=sys.stderr)
         sys.exit(2)
     main(sys.argv[1])
+

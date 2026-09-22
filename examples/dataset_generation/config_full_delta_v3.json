@@ -1,0 +1,441 @@
+{
+  "_comment_": "v3 (2026-09-22): v3: 128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored uncropped; training takes random 64 x 64 x 32 windows (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). Channel depth 3-16 m log-uniform, levels from a sampled aggradation ratio. Previous: v2: DeltaLayer in distributary-tree mode (bifurcate=true, ResMill >= the commit that adds _fluvial._simulate_tree). A generation is n_trees branching networks: discharge is split at every bifurcation, width ~ Q^0.5 and depth ~ Q^0.4, branches end on the plain in mouth bars or rejoin. Everything else (grid, crop, seed 42, counts, the other ranges) is the published v1 config.",
+  "output_dir": "$SCRATCH/resmill_dataset_v3/delta",
+  "seed": 42,
+  "shard_size": 1000,
+  "grid": {
+    "nx": 128,
+    "ny": 128,
+    "nz": 64,
+    "x_len": 1280.0,
+    "y_len": 1280.0,
+    "z_len": 64.0,
+    "_comment_dx_": "v3: 128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored uncropped; training takes random 64 x 64 x 32 windows (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). dx=dy=10m, dz=1m. Distributaries are ~56m wide -> 5-6 cells (W:D=14, depth=4m). Migration step ~3m -> 0.3 cells/event. 8 generations x 4m channel depth fills 32m vertically; widen z_len if you bump n_generations or mCHdepth.",
+    "top_depth": 5000.0,
+    "dip": 0.0,
+    "kzkx": 0.1
+  },
+  "layers": {
+    "delta": {
+      "count": 150000,
+      "sampling": "sobol",
+      "params": {
+        "trunk_length_fraction": {
+          "range": [
+            0.1,
+            0.5
+          ],
+          "_comment_": "VARIED. Fraction of proximal streamline nodes protected from avulsion (i.e. trunk length before fan branches). DELTA_FAN baseline 0.4. 0.2 = early bifurcation (broad fan), 0.6 = long trunk."
+        },
+        "progradation_fraction": {
+          "range": [
+            0.0,
+            0.3
+          ],
+          "_comment_": "VARIED. Per-generation trunk-length advance (apex moves toward +flow as levels stack). DELTA_FAN baseline 0.0 (no progradation). >0 gives clinoform signature."
+        },
+        "branch_spread_deg": {
+          "range": [
+            0.0,
+            30.0
+          ]
+        },
+        "n_generations": {
+          "levels_from_ratio": "mCHdepth",
+          "ratio": [
+            0.7,
+            1.4
+          ],
+          "column": 64.0,
+          "min": 1,
+          "max": 40,
+          "_comment_": "AUTO. Same aggradation-ratio rule as the channels; DeltaLayer anchors its lowest generation top at dz = 1 m (base), so n = round((64 - 1) / (r * depth)) + 1.",
+          "base": 1.0
+        },
+        "ntime_per_gen": {
+          "value": 200,
+          "_comment_": "unused in tree mode (kept so the row schema matches v1). "
+        },
+        "mCHsinu": {
+          "range": [
+            1.05,
+            1.1
+          ]
+        },
+        "mFFCHprop": {
+          "range": [
+            0.0,
+            0.4
+          ],
+          "_comment_": "VARIED. Fraction of abandoned distributary filled with mud. DELTA_FAN baseline 0.0 (sand-rich tails \u2014 visible distributary ribbons). >0 begins to mute the distributaries."
+        },
+        "paint_mouth_bars": {
+          "value": true
+        },
+        "azimuth": {
+          "range": [
+            0,
+            360
+          ],
+          "_comment_": "VARIED. Flow direction (deg)."
+        },
+        "mouth_bar_length_factor": {
+          "range": [
+            0.8,
+            1.4
+          ],
+          "_comment_": "VARIED. Bar length relative to the channel width at the tip (bars sit at every channel end and every split)."
+        },
+        "mouth_bar_width_factor": {
+          "range": [
+            0.5,
+            0.9
+          ]
+        },
+        "mouth_bar_hw_ratio": {
+          "value": 0.06,
+          "_comment_": "skip \u2014 class default. Bar thickness above channel / width."
+        },
+        "mouth_bar_dw_ratio": {
+          "value": 0.08,
+          "_comment_": "skip \u2014 class default. Bar scour-depth below channel / width."
+        },
+        "NTGtarget": {
+          "range": [
+            0.2,
+            0.5
+          ]
+        },
+        "probAvulOutside": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 preset default. Override of class 0.10 -> 0.0 (no out-of-belt avulsions in delta \u2014 trunks always start at boundary)."
+        },
+        "probAvulInside": {
+          "range": [
+            0.5,
+            0.8
+          ],
+          "_comment_": "unused in tree mode (kept so the row schema matches v1). "
+        },
+        "stdevCHsinu": {
+          "value": 0.02,
+          "_comment_": "skip \u2014 preset default. Override of class 0.15 -> 0.02 (tight sinuosity distribution)."
+        },
+        "stdevCHdepth": {
+          "value": 0.5,
+          "_comment_": "skip \u2014 preset default. Override of class 0.4 -> 0.5."
+        },
+        "stdevCHdepth2": {
+          "value": 0.3,
+          "_comment_": "skip \u2014 class default."
+        },
+        "mCHwdratio": {
+          "range": [
+            10.0,
+            20.0
+          ],
+          "_comment_": "VARIED. Distributary W:D ratio."
+        },
+        "stdevCHwdratio": {
+          "value": 2.0,
+          "_comment_": "skip \u2014 preset default. Override of class 1.0 -> 2.0."
+        },
+        "mCHdepth": {
+          "range": [
+            3.0,
+            16.0
+          ],
+          "scale": "log",
+          "_comment_": "VARIED. Channel depth (m), log-uniform so 3-8 m stays as common as 8-16 m; 16 m = half the column, two levels at least."
+        },
+        "stdevCHsource": {
+          "value": 0.2,
+          "_comment_": "skip \u2014 preset default. Override of class 80 -> 0.2 (tight, dead-centre feeder source \u2014 single trunk entry)."
+        },
+        "mCHazi": {
+          "value": 90.0,
+          "_comment_": "skip \u2014 class default."
+        },
+        "stdevCHazi": {
+          "value": 0.2,
+          "_comment_": "skip \u2014 preset default. Override of class 1.0 -> 0.2."
+        },
+        "mCHsource": {
+          "value": null,
+          "_comment_": "skip \u2014 class default."
+        },
+        "mdistMigrate": {
+          "value": 3,
+          "_comment_": "unused in tree mode (kept so the row schema matches v1). "
+        },
+        "stdevdistMigrate": {
+          "value": 1.0,
+          "_comment_": "skip \u2014 preset default. Override of class 10 -> 1."
+        },
+        "stdevFFCHprop": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "mNeckFFCHprop": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 class default. Neck-cutoff plug only used by MEANDER_OXBOW."
+        },
+        "mLVdepth": {
+          "value": 0.5,
+          "_comment_": "skip \u2014 preset default. Override of class 1.0 -> 0.5 (small natural levees on distributaries)."
+        },
+        "stdevLVdepth": {
+          "value": 0.1,
+          "_comment_": "skip \u2014 preset default. Override of class 0.2 -> 0.1."
+        },
+        "mLVwidth": {
+          "value": 20.0,
+          "_comment_": "skip \u2014 preset default. Override of class 40 -> 20."
+        },
+        "stdevLVwidth": {
+          "value": 5.0,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "mLVheight": {
+          "value": 0.3,
+          "_comment_": "skip \u2014 preset default. Override of class 0.5 -> 0.3."
+        },
+        "stdevLVheight": {
+          "value": 0.1,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "mLVasym": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 preset default. Override of class 0.3 -> 0.0 (symmetric levees)."
+        },
+        "stdevLVasym": {
+          "value": 0.1,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "mLVthin": {
+          "value": 0.3,
+          "_comment_": "skip \u2014 class default."
+        },
+        "stdevLVthin": {
+          "value": 0.1,
+          "_comment_": "skip \u2014 class default."
+        },
+        "mCSnum": {
+          "value": 0.0,
+          "_comment_": "splays disabled."
+        },
+        "stdevCSnum": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 preset default. Override of class 0.5 -> 0."
+        },
+        "mCSnumlobe": {
+          "value": 3.0,
+          "_comment_": "skip \u2014 class default. Unused (mCSnum=0)."
+        },
+        "stdevCSnumlobe": {
+          "value": 1.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSsource": {
+          "value": 50.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSsource": {
+          "value": 20.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOLL": {
+          "value": 200.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOLL": {
+          "value": 50.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOWW": {
+          "value": 30.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOWW": {
+          "value": 10.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOl": {
+          "value": 100.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOl": {
+          "value": 20.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOw": {
+          "value": 20.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOw": {
+          "value": 10.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLO_hwratio": {
+          "value": 0.03,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLO_hwratio": {
+          "value": 0.01,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLO_dwratio": {
+          "value": 0.02,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLO_dwratio": {
+          "value": 0.005,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "Cf": {
+          "value": 0.0036,
+          "_comment_": "skip \u2014 preset default. Override of class 0.0078 -> 0.0036."
+        },
+        "scour_factor": {
+          "value": 10.0,
+          "_comment_": "skip \u2014 preset default. Override of class 2.0 -> 10.0."
+        },
+        "gradient": {
+          "value": 0.001,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "Q": {
+          "value": 5.0,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "poro_realization_mult": {
+          "range": [
+            0.7,
+            1.3
+          ]
+        },
+        "perm_realization_mult": {
+          "range": [
+            0.1,
+            10.0
+          ],
+          "scale": "log"
+        },
+        "bifurcate": {
+          "value": true,
+          "_comment_": "tree mode; the published v1 dataset was made with the avulsion-history delta (false)."
+        },
+        "n_trees": {
+          "range": [
+            1,
+            4
+          ],
+          "type": "int",
+          "_comment_": "VARIED. Networks per generation (the level's avulsion history)."
+        },
+        "n_bifurcations": {
+          "range": [
+            8,
+            32
+          ],
+          "type": "int",
+          "_comment_": "VARIED. Splits per network; v2 used 5-20 in an 800 m box, scaled by the 1.6x longer box edge."
+        },
+        "split_frac_lo": {
+          "value": 0.25
+        },
+        "split_frac_hi": {
+          "value": 0.5,
+          "_comment_": "child's share of the parent discharge is U(split_frac_lo, split_frac_hi): splits are unequal, 25/75 to 50/50."
+        },
+        "branch_angle_mean": {
+          "range": [
+            35.0,
+            65.0
+          ],
+          "_comment_": "VARIED. Launch angle of a branch from its parent, degrees."
+        },
+        "branch_angle_sd": {
+          "value": 15.0
+        },
+        "branch_length_scale": {
+          "range": [
+            0.2,
+            0.5
+          ],
+          "_comment_": "VARIED. Only terminal channels (share below q_min) stop by length: this x diagonal x sqrt(Q)."
+        },
+        "max_splits_per_branch": {
+          "range": [
+            2,
+            4
+          ],
+          "type": "int",
+          "_comment_": "VARIED. Branches one segment can give off: 2 = binary tree, 4 = several primaries off the trunk (Wax Lake)."
+        },
+        "q_min": {
+          "range": [
+            0.01,
+            0.03
+          ],
+          "_comment_": "VARIED. Branches below this discharge share never split (sets how many orders the tree has)."
+        },
+        "merge_branches": {
+          "choices": [
+            true,
+            false
+          ],
+          "_comment_": "VARIED. Branches that run into another join it (tidal-lattice look) or stop."
+        },
+        "width_exp": {
+          "value": 0.5,
+          "_comment_": "Leopold-Maddock: width ~ Q^0.5"
+        },
+        "depth_exp": {
+          "value": 0.4,
+          "_comment_": "Leopold-Maddock: depth ~ Q^0.4"
+        },
+        "split_pos_exp": {
+          "range": [
+            1.0,
+            2.5
+          ],
+          "_comment_": "VARIED. 1 = splits anywhere along a segment, 2.5 = near its upstream end."
+        },
+        "branch_relax": {
+          "range": [
+            0.2,
+            0.5
+          ],
+          "_comment_": "VARIED. How far a branch eases back from its launch angle toward the regional slope (0 keeps diverging)."
+        },
+        "branch_taper": {
+          "range": [
+            0.6,
+            0.9
+          ]
+        },
+        "y_split": {
+          "value": true
+        },
+        "front_radius": {
+          "range": [
+            0.7,
+            1.6
+          ],
+          "_comment_": "VARIED. Base front distance from the apex in box lengths: below 1 the front is inside the cube (lobes, bars, prodelta beyond), above 1 the cube is plain and channels run to its edges. It progrades with progradation_fraction."
+        },
+        "front_jitter": {
+          "value": 0.1
+        },
+        "front_bulge": {
+          "range": [
+            0.1,
+            0.6
+          ],
+          "_comment_": "VARIED. How much further a big channel progrades than a small one: 0.1 smooth arcuate front, 0.6 bird's foot."
+        }
+      }
+    }
+  }
+}
