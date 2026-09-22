@@ -323,6 +323,8 @@ class fluvial:
         self.n_sources = int(max(n_sources, 1))
         self.source_spacing_min = float(np.clip(source_spacing_min, 0.0, 0.5))
         self._sources: list[float] | None = None
+        self._last_src: int | None = None      # source of the streamline just sampled
+        self._draw_counter = 0                 # rotates the pool draws through the sources
         self.bifurcate = bool(bifurcate)
         self.n_trees = int(max(n_trees, 1))
         self.n_bifurcations = int(max(n_bifurcations, 0))
@@ -620,8 +622,10 @@ class fluvial:
         for _ in range(1000):
             if self.stdevCHsource > 0.0:
                 centre = self.mCHsource
+                self._last_src = None
                 if self._sources:
-                    centre = self._sources[int(np.random.randint(len(self._sources)))]
+                    self._last_src = int(np.random.randint(len(self._sources)))
+                    centre = self._sources[self._last_src]
                 y0 = float(np.random.normal(centre, self.stdevCHsource))
                 y0 = float(np.clip(y0, self.ymin, self.ymax))
             else:
@@ -716,6 +720,7 @@ class fluvial:
                 'chazi': chazi, 'chsinu': chsinu,
                 'chdepth': chdepth, 'chwdratio': chwdratio,
                 'chwidth_arr': half_arr,
+                'src': self._last_src,
             })
         self._pool = pool
 
@@ -723,13 +728,20 @@ class fluvial:
         """Sample one streamline from the pre-built pool (uniform weights).
 
         Mirrors ``probdraw + lookupstream`` in ``streamsim.for:727-728``.
-        Returns 1 on success.
+        With several sources the draws rotate through them (the k-th channel
+        drawn enters at source k mod N), so every source is represented as
+        soon as a level has drawn N channels. Returns 1 on success.
         """
         if not self._pool:
             self._build_streamline_pool()
             if not self._pool:
                 return 0
-        idx = int(np.random.randint(0, len(self._pool)))
+        cands = []
+        if self._sources:
+            src = self._draw_counter % len(self._sources)
+            self._draw_counter += 1
+            cands = [i for i, c in enumerate(self._pool) if c.get('src') == src]
+        idx = int(cands[int(np.random.randint(0, len(cands)))]) if cands else int(np.random.randint(0, len(self._pool)))
         c = self._pool[idx]
         self.cx = c['cx'].copy()
         self.cy = c['cy'].copy()
