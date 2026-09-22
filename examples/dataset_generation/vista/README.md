@@ -9,12 +9,12 @@ cd examples/dataset_generation
 for j in vista/run_*.sh; do sbatch "$j"; done
 ```
 
-Every script refuses to run unless the checkout contains ResMill `a8bfbfd`
+Every script refuses to run unless the checkout contains ResMill `5bf93ad`
 (the v3 configs and the aggradation-ratio sampler).
 
 ## What v3 is
 
-Eight `config_full_<env>_v3.json` files (ResMill `a8bfbfd` or later):
+Eight `config_full_<env>_v3.json` files (ResMill `5bf93ad` or later):
 
 - **128 x 128 x 64 cells, stored whole.** dx = dy = 10 m, dz = 1 m (lobes keep
   dx = 100 m), so 1280 x 1280 x 64 m, no crop. Training takes random
@@ -31,11 +31,23 @@ Eight `config_full_<env>_v3.json` files (ResMill `a8bfbfd` or later):
 - **Event budgets x 2.56** (the plan-area ratio to the 800 m box): `ntime`
   per level 30 -> 77 (PV), 75 -> 192 (CB_LAB), 50 -> 128 (CB_JIG, SH), 150 ->
   384 (MEANDER). `ntime` is a cap; a level stops once it has its NTG share.
-  Delivered / target NTG on the 144-volume preview: PV 1.01, CB_LAB 0.94,
-  CB_JIG 0.89, SH_DIST 0.88, SH_PROX 0.91, MEANDER 0.72, lobes 1.00. The tree
+  Delivered / target NTG on the 144-volume preview: PV 1.03, CB_LABYRINTH 0.93, CB_JIGSAW 0.87, SH_DISTAL 0.90, SH_PROXIMAL 0.89, MEANDER 0.73, lobes 1.00. The tree
   delta ignores `NTGtarget` (0.15 realised on average, 0.20 in the 640 m
   cube). A ratio above 1 caps the reachable NTG at 1 / r, because the
   per-level target is split evenly across levels.
+- **Entry scatter sampled.** `stdevCHsource`, the across-flow scatter of every
+  channel's entry point, is log-uniform 5 to 300 m per reservoir (v2: fixed
+  80 m, 1 m for MEANDER): 5 m is a nodal entry, 300 m spreads entries over
+  the whole edge. With several sources each channel scatters around its own
+  source.
+- **Porosity texture.** `poro_noise_std` (0.05 to 0.15, relative) and
+  `poro_noise_range` (2 to 8 cells laterally, a third of that vertically)
+  multiply a correlated Gaussian field into every sand cell's porosity, with
+  permeability following through the Kozeny-Carman slope. v1 and v2 channel
+  bodies were a smooth upward-fining ramp with one multiplier per event.
+- **Delta floor.** The lowest generation's channel base now sits on the
+  floor like the channels; before, its top sat at 1 m and only a one-cell
+  sand sliver showed in slice 0 (hidden in v1 by the z-crop).
 - Delta `n_bifurcations` 8 to 32 (v2: 5 to 20, scaled by the 1.6 x longer edge).
   Everything else is the approved v2 setting (n_sources {1,1,2,3}, sampled
   `probAvulOutside`, tree delta, lobes v1 ranges).
@@ -54,16 +66,16 @@ lobe script runs 96 ranks per node; the fluvial environments stay under 0.5 GB.
 | job | volumes | s per volume | core-hours | node-hours | nodes x walltime |
 |---|---|---|---|---|---|
 | run_lobes.sh | 200,000 | 7 | 378 | 3.9 | 1 x 05:30 |
-| run_pv_shoestring.sh | 100,000 | 13 | 353 | 2.4 | 1 x 03:30 |
-| run_cb_labyrinth.sh | 100,000 | 62 | 1,728 | 12.0 | 3 x 05:30 |
-| run_cb_jigsaw.sh | 150,000 | 85 | 3,546 | 24.6 | 7 x 05:00 |
-| run_sh_distal.sh | 100,000 | 122 | 3,378 | 23.5 | 6 x 05:30 |
-| run_sh_proximal.sh | 100,000 | 101 | 2,794 | 19.4 | 5 x 05:30 |
-| run_meander_oxbow.sh | 100,000 | 422 | 11,708 | 81.3 | 21 x 05:30 |
-| run_delta.sh | 150,000 | 18 | 750 | 5.2 | 2 x 03:30 |
-| **total** | 1,000,000 | | **24,635** | **172** | |
+| run_pv_shoestring.sh | 100,000 | 14 | 389 | 2.7 | 1 x 04:00 |
+| run_cb_labyrinth.sh | 100,000 | 71 | 1,972 | 13.7 | 4 x 04:30 |
+| run_cb_jigsaw.sh | 150,000 | 86 | 3,596 | 25.0 | 7 x 05:00 |
+| run_sh_distal.sh | 100,000 | 126 | 3,489 | 24.2 | 7 x 04:30 |
+| run_sh_proximal.sh | 100,000 | 107 | 2,972 | 20.6 | 6 x 04:30 |
+| run_meander_oxbow.sh | 100,000 | 427 | 11,856 | 82.3 | 21 x 05:30 |
+| run_delta.sh | 150,000 | 19 | 779 | 5.4 | 2 x 04:00 |
+| **total** | 1,000,000 | | **25,431** | **178** | |
 
-About 172 gg node-hours, about 57 SU at the 1/3 charge factor. Node counts
+About 178 gg node-hours, about 59 SU at the 1/3 charge factor. Node counts
 target roughly 4 h of wall time; trade nodes for time freely (halve `-N`,
 double `-t`). MEANDER is the long pole; on 21 nodes it takes about 4 h.
 

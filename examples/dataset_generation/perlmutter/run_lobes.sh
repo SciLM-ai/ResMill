@@ -10,7 +10,7 @@
 #SBATCH -A REPLACE_WITH_YOUR_ALLOCATION
 #SBATCH -o logs/%x-%j.out
 
-# 200,000 lobes volumes of 128 x 128 x 64 from ../config_full_lobes_v3.json (v3), ResMill a8bfbfd or later,
+# 200,000 lobes volumes of 128 x 128 x 64 from ../config_full_lobes_v3.json (v3), ResMill 5bf93ad or later,
 # on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
 # Cost from the Vista measurement of 2026-09-22 (7 s a volume on one Grace core,
 # assumed 1.3x slower per core here): 491 core-hours = 3.8 node-hours,
@@ -28,6 +28,6 @@ conda activate $WORK/conda_envs/resmill     # the env that has ResMill installed
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
-git merge-base --is-ancestor a8bfbfd HEAD 2>/dev/null || { echo "this checkout does not contain ResMill a8bfbfd (v3 configs and the aggradation-ratio sampler); git pull"; exit 1; }
+git merge-base --is-ancestor 5bf93ad HEAD 2>/dev/null || { echo "this checkout does not contain ResMill 5bf93ad (v3 configs and the aggradation-ratio sampler); git pull"; exit 1; }
 
 srun --cpu-bind=cores python -m resmill.dataset.cli examples/dataset_generation/config_full_lobes_v3.json

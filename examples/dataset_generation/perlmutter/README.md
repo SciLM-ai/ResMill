@@ -5,7 +5,7 @@ Same eight jobs as `../vista/`, with Perlmutter headers: `-C cpu`, `-q regular`
 the v1 run used, `--licenses=cfs,SCRATCH`, and `-A REPLACE_WITH_YOUR_ALLOCATION`
 to fill in. Each script activates `$WORK/conda_envs/resmill`, the env the v1
 scripts used; if yours lives elsewhere, edit that line. Every script refuses
-to run unless the checkout contains ResMill `a8bfbfd`, so `git pull` first.
+to run unless the checkout contains ResMill `5bf93ad`, so `git pull` first.
 
 ```bash
 cd $WORK/codes/ResMill && git pull                     # or wherever the repo is
@@ -16,7 +16,7 @@ for j in perlmutter/run_*.sh; do sbatch "$j"; done     # 8 independent jobs
 
 ## What v3 is
 
-Eight `config_full_<env>_v3.json` files (ResMill `a8bfbfd` or later):
+Eight `config_full_<env>_v3.json` files (ResMill `5bf93ad` or later):
 
 - **128 x 128 x 64 cells, stored whole.** dx = dy = 10 m, dz = 1 m (lobes keep
   dx = 100 m), so 1280 x 1280 x 64 m, no crop. Training takes random
@@ -33,11 +33,23 @@ Eight `config_full_<env>_v3.json` files (ResMill `a8bfbfd` or later):
 - **Event budgets x 2.56** (the plan-area ratio to the 800 m box): `ntime`
   per level 30 -> 77 (PV), 75 -> 192 (CB_LAB), 50 -> 128 (CB_JIG, SH), 150 ->
   384 (MEANDER). `ntime` is a cap; a level stops once it has its NTG share.
-  Delivered / target NTG on the 144-volume preview: PV 1.01, CB_LAB 0.94,
-  CB_JIG 0.89, SH_DIST 0.88, SH_PROX 0.91, MEANDER 0.72, lobes 1.00. The tree
+  Delivered / target NTG on the 144-volume preview: PV 1.03, CB_LABYRINTH 0.93, CB_JIGSAW 0.87, SH_DISTAL 0.90, SH_PROXIMAL 0.89, MEANDER 0.73, lobes 1.00. The tree
   delta ignores `NTGtarget` (0.15 realised on average, 0.20 in the 640 m
   cube). A ratio above 1 caps the reachable NTG at 1 / r, because the
   per-level target is split evenly across levels.
+- **Entry scatter sampled.** `stdevCHsource`, the across-flow scatter of every
+  channel's entry point, is log-uniform 5 to 300 m per reservoir (v2: fixed
+  80 m, 1 m for MEANDER): 5 m is a nodal entry, 300 m spreads entries over
+  the whole edge. With several sources each channel scatters around its own
+  source.
+- **Porosity texture.** `poro_noise_std` (0.05 to 0.15, relative) and
+  `poro_noise_range` (2 to 8 cells laterally, a third of that vertically)
+  multiply a correlated Gaussian field into every sand cell's porosity, with
+  permeability following through the Kozeny-Carman slope. v1 and v2 channel
+  bodies were a smooth upward-fining ramp with one multiplier per event.
+- **Delta floor.** The lowest generation's channel base now sits on the
+  floor like the channels; before, its top sat at 1 m and only a one-cell
+  sand sliver showed in slice 0 (hidden in v1 by the z-crop).
 - Delta `n_bifurcations` 8 to 32 (v2: 5 to 20, scaled by the 1.6 x longer edge).
   Everything else is the approved v2 setting (n_sources {1,1,2,3}, sampled
   `probAvulOutside`, tree delta, lobes v1 ranges).
@@ -55,16 +67,16 @@ cores and another 1.3 x in the walltime. Perlmutter nodes have 512 GB, so the
 | job | volumes | s per volume | core-hours | node-hours | nodes x walltime |
 |---|---|---|---|---|---|
 | run_lobes.sh | 200,000 | 7 | 491 | 3.8 | 1 x 05:00 |
-| run_pv_shoestring.sh | 100,000 | 13 | 459 | 3.6 | 1 x 05:00 |
-| run_cb_labyrinth.sh | 100,000 | 62 | 2,246 | 17.5 | 5 x 05:00 |
-| run_cb_jigsaw.sh | 150,000 | 85 | 4,610 | 36.0 | 10 x 05:00 |
-| run_sh_distal.sh | 100,000 | 122 | 4,391 | 34.3 | 9 x 05:00 |
-| run_sh_proximal.sh | 100,000 | 101 | 3,633 | 28.4 | 8 x 05:00 |
-| run_meander_oxbow.sh | 100,000 | 422 | 15,221 | 118.9 | 30 x 05:30 |
-| run_delta.sh | 150,000 | 18 | 975 | 7.6 | 2 x 05:00 |
-| **total** | 1,000,000 | | **32,025** | **250** | |
+| run_pv_shoestring.sh | 100,000 | 14 | 506 | 3.9 | 1 x 05:30 |
+| run_cb_labyrinth.sh | 100,000 | 71 | 2,564 | 20.0 | 6 x 04:30 |
+| run_cb_jigsaw.sh | 150,000 | 86 | 4,675 | 36.5 | 10 x 05:00 |
+| run_sh_distal.sh | 100,000 | 126 | 4,536 | 35.4 | 9 x 05:30 |
+| run_sh_proximal.sh | 100,000 | 107 | 3,864 | 30.2 | 8 x 05:00 |
+| run_meander_oxbow.sh | 100,000 | 427 | 15,412 | 120.4 | 31 x 05:30 |
+| run_delta.sh | 150,000 | 19 | 1,013 | 7.9 | 2 x 05:30 |
+| **total** | 1,000,000 | | **33,060** | **258** | |
 
-About 250 Perlmutter node-hours at the regular QOS.
+About 258 Perlmutter node-hours at the regular QOS.
 
 ## After the eight jobs
 
