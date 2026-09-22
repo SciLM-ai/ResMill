@@ -93,6 +93,10 @@ DELTA_FAN = dict(
     q_min=0.05,
     branch_length_scale=0.6,
     max_splits_per_branch=2,
+    split_pos_exp=1.0,
+    y_split=True,
+    branch_relax=0.5,
+    branch_taper=0.7,
     merge_branches=True,
     width_exp=0.5, depth_exp=0.4,
 )
@@ -363,9 +367,12 @@ class DeltaLayer(ChannelLayer):
             shim.x = last_engine.x; shim.y = last_engine.y
             shim.xsiz = self.dx; shim.ysiz = self.dy; shim.zsiz = self.dz
             for tip in accum_distal_tips:
-                tx, ty, tz, head = tip
+                tx, ty, tz, head = tip[:4]
+                # a tree tip carries its own channel width; size its bar by it
+                L_i, W_i = (MB_L, MB_W) if len(tip) < 5 else (
+                    mouth_bar_length_factor * float(tip[4]) * 2.0, mouth_bar_width_factor * float(tip[4]))
                 _paint_mouth_bar_into_engine(
-                    shim, tx, ty, tz, head, MB_L, MB_W,
+                    shim, tx, ty, tz, head, L_i, W_i,
                     mouth_bar_hw_ratio, mouth_bar_dw_ratio,
                     facies_code=3,   # LA = lateral-accretion / bar
                 )

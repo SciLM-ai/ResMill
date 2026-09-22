@@ -185,6 +185,21 @@ class fluvial:
         q_min: float = 0.05,
         branch_length_scale: float = 0.6,
         max_splits_per_branch: int = 2,
+        # where along a segment a split lands: 1 = uniform beyond the
+        # protected reach, >1 biased toward the segment's upstream end
+        # (Wax Lake style: the primaries leave within a short reach)
+        split_pos_exp: float = 1.0,
+        # a split is a Y: the parent's downstream reach is re-walked,
+        # deflected away from the new branch in proportion to the share the
+        # branch takes (only when nothing else hangs off that reach yet)
+        y_split: bool = True,
+        # how far a branch's mean heading eases back from its launch angle
+        # toward the regional slope: 0 keeps the launch angle, 1 runs with
+        # the regional flow after the first bend
+        branch_relax: float = 0.5,
+        # width at a branch's end relative to its start (discharge lost to
+        # the plain and to unresolved splits along the way)
+        branch_taper: float = 0.7,
         merge_branches: bool = True,
         width_exp: float = 0.5,
         depth_exp: float = 0.4,
@@ -296,6 +311,10 @@ class fluvial:
         self.q_min = float(max(q_min, 1e-3))
         self.branch_length_scale = float(max(branch_length_scale, 0.05))
         self.max_splits_per_branch = int(max(max_splits_per_branch, 1))
+        self.split_pos_exp = float(max(split_pos_exp, 0.2))
+        self.y_split = bool(y_split)
+        self.branch_relax = float(np.clip(branch_relax, 0.0, 1.0))
+        self.branch_taper = float(np.clip(branch_taper, 0.1, 1.0))
         self.merge_branches = bool(merge_branches)
         self.width_exp = float(width_exp)
         self.depth_exp = float(depth_exp)
@@ -1626,7 +1645,9 @@ class fluvial:
             wq = np.array([b['q'] for b in cand])
             parent = cand[int(np.random.choice(len(cand), p=wq / wq.sum()))]
             pcx, pcy = parent['cx'], parent['cy']
-            k = int(np.random.randint(parent['protect'], pcx.size - 6))
+            span = pcx.size - 6 - parent['protect']
+            k = parent['protect'] + int(span * np.random.uniform() ** self.split_pos_exp)
+            k = int(np.clip(k, parent['protect'], pcx.size - 7))
             f = float(np.random.uniform(self.split_frac_lo, self.split_frac_hi))
             q_child, q_down = f * parent['q'], (1.0 - f) * parent['q']
             head = float(np.arctan2(pcy[k + 1] - pcy[k - 1], pcx[k + 1] - pcx[k - 1]))
@@ -1637,9 +1658,9 @@ class fluvial:
             off = (child_math - reg + np.pi) % (2.0 * np.pi) - np.pi
             child_math = reg + float(np.clip(off, -lim, lim))
             launch = (450.0 - np.degrees(child_math)) % 360.0
-            # mean heading halfway between the launch angle and the regional
-            # flow: the branch leaves at the full angle and eases back
-            mean_math = reg + 0.5 * ((child_math - reg + np.pi) % (2.0 * np.pi) - np.pi)
+            # mean heading between the launch angle and the regional flow:
+            # the branch leaves at the full angle and eases back
+            mean_math = reg + (1.0 - self.branch_relax) * ((child_math - reg + np.pi) % (2.0 * np.pi) - np.pi)
             chazi_child = (450.0 - np.degrees(mean_math)) % 360.0
             cap = int(max(12, min(self.ndis_cap,
                                   self.branch_length_scale * diag / self.step * np.sqrt(q_child))))
@@ -1661,6 +1682,23 @@ class fluvial:
                       splits=parent['splits'] + 1)
             down = dict(cx=pcx[k:].copy(), cy=pcy[k:].copy(), q=q_down, order=parent['order'],
                         protect=6, tip=parent['tip'], merged=parent['merged'], splits=0)
+            if self.y_split and hit is None and not self._reach_has_branches(branches, parent, pcx, pcy, k):
+                # a Y: the surviving reach bends away from the new branch by
+                # the share the branch took, so neither side runs straight on
+                d_math = head - side * theta * f
+                d_off = (d_math - reg + np.pi) % (2.0 * np.pi) - np.pi
+                d_math = reg + float(np.clip(d_off, -lim, lim))
+                d_launch = (450.0 - np.degrees(d_math)) % 360.0
+                d_mean = reg + (1.0 - self.branch_relax) * ((d_math - reg + np.pi) % (2.0 * np.pi) - np.pi)
+                d_cap = int(max(12, min(self.ndis_cap,
+                                        self.branch_length_scale * diag / self.step * np.sqrt(q_down))))
+                if parent['order'] == 0:
+                    d_cap = self.ndis_cap        # the trunk's own reach still runs to the edge
+                dcx, dcy = self._ar2_walk(float(pcx[k]), float(pcy[k]), (450.0 - np.degrees(d_mean)) % 360.0,
+                                          chsinu, d_cap, azi0=d_launch)
+                if dcx is not None and dcx.size >= 8:
+                    down = dict(cx=dcx, cy=dcy, q=q_down, order=parent['order'], protect=6,
+                                tip=bool(dcx.size >= d_cap and parent['order'] > 0), merged=False, splits=0)
             branches[self._index_of(branches, parent)] = up
             branches.append(down)
             branches.append(dict(cx=cx_t, cy=cy_t, q=q_child, order=parent['order'] + 1, splits=0,
@@ -1696,11 +1734,23 @@ class fluvial:
                 tx, ty = self._rot_xy(float(self.cx[-1]), float(self.cy[-1]))
                 hx = dx * self._cos_az + dy * self._sin_az
                 hy = -dx * self._sin_az + dy * self._cos_az
-                self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx))))
+                tip_half = float(self._chwidth_arr[-1]) if self._chwidth_arr is not None else self.CHhalfwidth
+                self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)),
+                                         2.0 * tip_half))
 
     @staticmethod
     def _index_of(branches, b):
         return next(i for i, x in enumerate(branches) if x is b)
+
+    @staticmethod
+    def _reach_has_branches(branches, parent, pcx, pcy, k):
+        """True when another branch starts on the parent's nodes beyond k."""
+        starts = np.array([(b['cx'][0], b['cy'][0]) for b in branches if b is not parent])
+        if starts.size == 0 or pcx.size - k - 1 <= 0:
+            return False
+        reach = np.column_stack([pcx[k + 1:], pcy[k + 1:]])
+        d = np.sqrt(((starts[:, None, :] - reach[None, :, :]) ** 2).sum(-1))
+        return bool((d < 1e-6).any())
 
     def _first_contact(self, branches, parent, cx_t, cy_t, half_child, half_of):
         """First node of a new walk that touches another branch.
@@ -1742,6 +1792,11 @@ class fluvial:
         self.chelev_arr = np.full(self.ndis, self.chelev, dtype=np.float64)
         self.vx = self.vy = self.curv = self.thalweg = None
         self.cal_curv()
+        if b['order'] > 0 and self.branch_taper < 1.0 and self._chwidth_arr is not None:
+            # linear taper from the split to the end of the branch
+            ramp = np.linspace(1.0, self.branch_taper, self._chwidth_arr.size)
+            self._chwidth_arr = np.clip(self._chwidth_arr * ramp, 0.01, None)
+            self.maxCHhalfwidth = float(self._chwidth_arr.max())
 
     # ----------------------------------------------------------------- helpers
 

@@ -12,8 +12,11 @@
   branches launch at `branch_angle_mean` +- `branch_angle_sd` degrees and
   ease back toward the regional slope, run at most
   `branch_length_scale * diagonal * sqrt(Q)` before ending in a mouth bar,
-  and join another branch they run into (`merge_branches`). `n_trees`
-  networks per generation. Off by default; the published dataset is
+  and join another branch they run into (`merge_branches`); splits are Ys
+  (`y_split`), land near a segment's upstream end when `split_pos_exp` > 1,
+  branches ease back toward the regional slope by `branch_relax`, taper to
+  `branch_taper` of their start width, and their mouth bars are sized by
+  the tip's own width. `n_trees` networks per generation. Off by default; the published dataset is
   unchanged. `examples/dataset_generation/config_full_delta_v2.json` is the
   dataset config for it. `layer.tree_branches` lists every segment.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);

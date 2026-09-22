@@ -81,12 +81,17 @@
           "_comment_": "VARIED. Flow direction (deg)."
         },
         "mouth_bar_length_factor": {
-          "value": 2.5,
-          "_comment_": "skip \u2014 class default. Bar along-axis length / channel-width."
+          "range": [
+            1.2,
+            2.0
+          ],
+          "_comment_": "VARIED. Bar length relative to the tip's channel width."
         },
         "mouth_bar_width_factor": {
-          "value": 1.6,
-          "_comment_": "skip \u2014 class default. Bar peak half-width / channel-width."
+          "range": [
+            1.2,
+            1.8
+          ]
         },
         "mouth_bar_hw_ratio": {
           "value": 0.06,
@@ -322,19 +327,19 @@
         },
         "n_trees": {
           "range": [
-            2,
+            1,
             4
           ],
           "type": "int",
-          "_comment_": "VARIED. Networks per generation = the level's avulsion history; sets sand fraction with n_bifurcations."
+          "_comment_": "VARIED. Networks per generation (the level's avulsion history)."
         },
         "n_bifurcations": {
           "range": [
             5,
-            12
+            20
           ],
           "type": "int",
-          "_comment_": "VARIED. Splits per network in the 64-cube (the ResBench field generator scales this with domain size)."
+          "_comment_": "VARIED. Splits per network in a 640 m cube; the field generator scales it with domain size."
         },
         "split_frac_lo": {
           "value": 0.25
@@ -345,29 +350,42 @@
         },
         "branch_angle_mean": {
           "range": [
-            40.0,
-            70.0
+            35.0,
+            65.0
           ],
-          "_comment_": "VARIED. Launch angle of a branch from its parent, degrees (Coffey & Shaw 2017 report ~70 at bifurcations)."
+          "_comment_": "VARIED. Launch angle of a branch from its parent, degrees."
         },
         "branch_angle_sd": {
           "value": 15.0
         },
         "branch_length_scale": {
           "range": [
-            0.4,
+            0.35,
             0.8
           ],
-          "_comment_": "VARIED. A branch runs at most this x grid diagonal x sqrt(Q) before ending in a mouth bar."
+          "_comment_": "VARIED. A branch runs at most this x diagonal x sqrt(Q) before ending in a mouth bar."
         },
         "max_splits_per_branch": {
-          "value": 2
+          "range": [
+            2,
+            4
+          ],
+          "type": "int",
+          "_comment_": "VARIED. Branches one segment can give off: 2 = binary tree, 4 = several primaries off the trunk (Wax Lake)."
         },
         "q_min": {
-          "value": 0.05
+          "range": [
+            0.01,
+            0.03
+          ],
+          "_comment_": "VARIED. Branches below this discharge share never split (sets how many orders the tree has)."
         },
         "merge_branches": {
-          "value": true
+          "choices": [
+            true,
+            false
+          ],
+          "_comment_": "VARIED. Branches that run into another join it (tidal-lattice look) or stop."
         },
         "width_exp": {
           "value": 0.5,
@@ -376,6 +394,30 @@
         "depth_exp": {
           "value": 0.4,
           "_comment_": "Leopold-Maddock: depth ~ Q^0.4"
+        },
+        "split_pos_exp": {
+          "range": [
+            1.0,
+            2.5
+          ],
+          "_comment_": "VARIED. 1 = splits anywhere along a segment, 2.5 = near its upstream end."
+        },
+        "branch_relax": {
+          "range": [
+            0.2,
+            0.5
+          ],
+          "_comment_": "VARIED. How far a branch eases back from its launch angle toward the regional slope (0 keeps diverging)."
+        },
+        "branch_taper": {
+          "range": [
+            0.5,
+            0.8
+          ],
+          "_comment_": "VARIED. Width at a branch's end relative to its start."
+        },
+        "y_split": {
+          "value": true
         }
       }
     }
