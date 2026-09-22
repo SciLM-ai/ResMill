@@ -305,10 +305,10 @@
           "choices": [
             1,
             1,
-            2,
-            3
+            1,
+            2
           ],
-          "_comment_": "VARIED. Entry points on the upstream edge; sources at least 15% of the edge apart."
+          "_comment_": "VARIED. Entry points; MEANDER builds one belt per source per level, and two coeval belts is the most a 640 m window holds."
         }
       }
     }

@@ -6,8 +6,10 @@
 
 - `ChannelLayer(n_sources=N)`: N entry points on the upstream edge, drawn
   per reservoir at least `source_spacing_min` of the edge apart; every
-  channel enters at one of them. Default 1 leaves the published channels
-  bit-identical. `examples/dataset_generation/config_full_<preset>_v2.json`
+  channel enters at one of them; a preset that builds one channel per level
+  (no avulsion, MEANDER_OXBOW) builds one belt per source per level, each
+  with the level's full event budget. Default 1 leaves the published
+  channels bit-identical. `examples/dataset_generation/config_full_<preset>_v2.json`
   sample `n_sources` from {1, 1, 2, 3}.
 - `DeltaLayer(bifurcate=True)`: a generation is a distributary tree, not an
   avulsion history. Discharge is split at every bifurcation (`split_frac_lo`
