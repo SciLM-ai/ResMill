@@ -38,6 +38,8 @@
 
 ### Fixed
 
+- Mouth bars (`paint_mouth_bars`) build downward from the channel top instead
+  of straddling it, so no bar sand floats above a generation's channels.
 - Fluvial streamlines (channel, delta) now enter the grid on its boundary.
   The entry was drawn on the upstream edge of the unrotated walk frame and
   the streamline rotated by `azimuth` about the grid centre at stamping, so

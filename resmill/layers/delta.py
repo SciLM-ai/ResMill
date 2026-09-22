@@ -150,8 +150,13 @@ def _paint_mouth_bar_into_engine(engine, tip_x, tip_y, tip_z, heading,
             if y_fn < 1e-3 or abs(d) > y_fn:
                 continue
             env = 1.0 - (d / y_fn) ** 2
-            top_z = tip_z + y_fn * hw_ratio * env
-            bot_z = tip_z - y_fn * dw_ratio * env
+            # The bar's crest is the channel top (the plain's surface at that
+            # generation); the body builds downward from it, like the channel
+            # it fronts. It used to straddle the channel top, half of it above
+            # every channel of the generation, which put a floating patch of
+            # sand in any plan view just above a level.
+            top_z = tip_z
+            bot_z = tip_z - y_fn * (hw_ratio + dw_ratio) * env
             iz_bot = max(0, int(bot_z / zsiz))
             iz_top = min(nz_ - 1, int(top_z / zsiz))
             if iz_top < iz_bot:
