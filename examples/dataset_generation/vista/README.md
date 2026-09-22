@@ -22,12 +22,14 @@ headers):
 | run_sh_distal.sh | 100,000 | 18.8 | 522 | 3.6 | 3 x 02:00 |
 | run_sh_proximal.sh | 100,000 | 19.7 | 547 | 3.8 | 3 x 02:00 |
 | run_meander_oxbow.sh | 100,000 | 68.5 | 1,903 | 13.2 | 6 x 03:30 |
-| run_delta.sh | 150,000 | 89.6 | 3,733 | 25.9 | 10 x 04:00 |
-| **total** | 1,000,000 | | 7,861 | 54.6 | 88 node-hours requested |
+| run_delta.sh (tree delta, config v2) | 150,000 | ~3 | ~125 | ~0.9 | 1 x 01:30 |
+| **total** | 1,000,000 | | ~4,250 | ~30 | 49 node-hours requested |
 
-gg node-hours are charged at 1/3 of an SU each: 55 node-hours of work
-is about 18 SU (88 node-hours = 29 SU if every job ran to
-its walltime limit; TACC charges actual run time).
+gg node-hours are charged at 1/3 of an SU each: about 30 node-hours of work
+is about 10 SU (49 node-hours = 16 SU if every job ran to its walltime
+limit; TACC charges actual run time). The delta row is the tree delta
+(`config_full_delta_v2.json`, 2 to 4 s a cube); the old avulsion delta cost
+89.6 s a cube, 3,733 core-hours.
 
 ## Steps
 

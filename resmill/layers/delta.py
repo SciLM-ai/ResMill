@@ -79,6 +79,22 @@ DELTA_FAN = dict(
     mCSnum=0.0, stdevCSnum=0.0,
     # ---- hydraulic — Alluvsim makepar central values --------------
     Cf=0.0036, scour_factor=10.0, gradient=0.001, Q=5.0,
+    # ---- distributary tree (off by default; the published dataset ---
+    # was made without it). With ``bifurcate=True`` a generation is one
+    # branching network instead of an avulsion history: discharge is
+    # split at every bifurcation, width goes as Q**width_exp and depth
+    # as Q**depth_exp, branches end on the plain or rejoin. See
+    # ``_fluvial._simulate_tree``.
+    bifurcate=False,
+    n_trees=1,
+    n_bifurcations=8,
+    split_frac_lo=0.25, split_frac_hi=0.5,
+    branch_angle_mean=55.0, branch_angle_sd=15.0,
+    q_min=0.05,
+    branch_length_scale=0.6,
+    max_splits_per_branch=2,
+    merge_branches=True,
+    width_exp=0.5, depth_exp=0.4,
 )
 
 
@@ -304,6 +320,10 @@ class DeltaLayer(ChannelLayer):
         accum_log_perm_offset = np.zeros((nx_, ny_, nz_), dtype=np.float32)
         accum_distal_tips: list[tuple[float, float, float, float]] = []
         last_engine = None
+        # Every branch of every generation's distributary tree
+        # (``bifurcate=True``): order, discharge share, node count, whether
+        # it ended on the plain or joined another branch.
+        self.tree_branches: list[dict] = []
         for igen in range(n_generations):
             chelev = float(chelev_per_gen[igen])
             gen_seed = None if seed is None else int(seed) + igen
@@ -327,6 +347,7 @@ class DeltaLayer(ChannelLayer):
             accum_log_perm_offset = np.where(takeover, engine.log_perm_offset_field,
                                              accum_log_perm_offset)
             accum_distal_tips.extend(engine.distal_tips)
+            self.tree_branches.extend(dict(gen=igen, **b) for b in getattr(engine, 'tree_branches', []))
             last_engine = engine
 
         # Optional mouth-bar painting at every recorded distal tip

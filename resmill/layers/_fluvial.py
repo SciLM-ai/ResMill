@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.interpolate import CubicSpline
+from scipy.spatial import cKDTree
 
 from ._genchannel import genchannel
 from ._genabandoned import paint_abandoned
@@ -162,6 +163,31 @@ class fluvial:
         # giving direct control over the angular fan-out between sibling
         # distributaries (used by DeltaLayer's ``branch_spread_deg``).
         stdev_branch_azi: float = 0.0,
+        # ---- distributary tree (DeltaLayer ``bifurcate`` mode) --------
+        # When ``True`` a level is not an event loop but one branching
+        # network grown from the level's trunk: ``n_bifurcations`` splits,
+        # each handing ``U(split_frac_lo, split_frac_hi)`` of the parent's
+        # discharge to a new branch launched at ``branch_angle_mean`` +-
+        # ``branch_angle_sd`` degrees from the local heading. Width scales
+        # as ``Q ** width_exp`` and depth as ``Q ** depth_exp``
+        # (Leopold-Maddock), a branch runs at most
+        # ``branch_length_scale * diagonal * sqrt(Q)`` and then ends on the
+        # plain (tip recorded for a mouth bar), branches below ``q_min``
+        # never split, and with ``merge_branches`` a walk that runs into
+        # another branch joins it. Channels never use this.
+        bifurcate: bool = False,
+        n_trees: int = 1,
+        n_bifurcations: int = 8,
+        split_frac_lo: float = 0.25,
+        split_frac_hi: float = 0.5,
+        branch_angle_mean: float = 55.0,
+        branch_angle_sd: float = 15.0,
+        q_min: float = 0.05,
+        branch_length_scale: float = 0.6,
+        max_splits_per_branch: int = 2,
+        merge_branches: bool = True,
+        width_exp: float = 0.5,
+        depth_exp: float = 0.4,
         # When ``True``, ``ntime`` is interpreted as the per-level event
         # cap and the global event counter is reset at the top of every
         # level — so each of the ``nlevel`` levels gets its own full
@@ -260,6 +286,20 @@ class fluvial:
         # Delta extensions (no-ops when at default values).
         self.min_avul_node_frac = float(np.clip(min_avul_node_frac, 0.0, 0.95))
         self.stdev_branch_azi = float(max(stdev_branch_azi, 0.0))
+        self.bifurcate = bool(bifurcate)
+        self.n_trees = int(max(n_trees, 1))
+        self.n_bifurcations = int(max(n_bifurcations, 0))
+        self.split_frac_lo = float(np.clip(split_frac_lo, 0.05, 0.5))
+        self.split_frac_hi = float(np.clip(split_frac_hi, self.split_frac_lo, 0.5))
+        self.branch_angle_mean = float(branch_angle_mean)
+        self.branch_angle_sd = float(max(branch_angle_sd, 0.0))
+        self.q_min = float(max(q_min, 1e-3))
+        self.branch_length_scale = float(max(branch_length_scale, 0.05))
+        self.max_splits_per_branch = int(max(max_splits_per_branch, 1))
+        self.merge_branches = bool(merge_branches)
+        self.width_exp = float(width_exp)
+        self.depth_exp = float(depth_exp)
+        self.tree_branches: list[dict] = []
         if mCHentry_x_offset_per_level is None:
             self.mCHentry_x_offset_per_level = None
         else:
@@ -398,7 +438,7 @@ class fluvial:
         return t1 + (t2 - t1) * (x - s1) / (s2 - s1)
 
     def _ar2_walk(self, x0: float, y0: float, chazi: float, chsinu: float,
-                  ndis_max: int, max_attempts: int = 1000):
+                  ndis_max: int, max_attempts: int = 1000, azi0: float | None = None):
         """Disturbed-periodic (Pyrcz/Sun) AR(2) walk in **compass degrees**.
 
         Faithful port of Alluvsim ``buildCHtable.for:70-128``:
@@ -424,7 +464,12 @@ class fluvial:
         b2 = -1.0 * np.exp(-2.0 * k * h)
         m = (450.0 - chazi) * (16.33 / 360.0)
         s = self._resc(1.0, 2.0, 1.0, 13.0, chsinu)
-        ang_init = 450.0 - chazi
+        # ``azi0``: launch heading (compass) when it differs from the mean
+        # heading ``chazi``; the restoring force then bends the walk from
+        # the launch direction toward its mean over the first few tens of
+        # steps (a distributary leaving its parent at an angle and easing
+        # back toward the regional slope).
+        ang_init = 450.0 - (chazi if azi0 is None else azi0)
 
         for _ in range(max_attempts):
             noise = np.random.normal(0.0, 1.0, ndis_max) * s + m
@@ -1442,6 +1487,18 @@ class fluvial:
                     return
                 self.cal_curv()
 
+            if self.bifurcate:
+                # Delta distributary trees: ``n_trees`` networks per level
+                # (the level's avulsion history), each from its own trunk;
+                # no event loop, no end-of-level abandonment.
+                for itree in range(self.n_trees):
+                    if itree > 0:
+                        if not self._draw_from_pool():
+                            break
+                        self.cal_curv()
+                    self._simulate_tree()
+                continue
+
             while ((self.ntg_counter[0] - ntg_at_level_start)
                    - (self.ffch_counter[0] - ffch_at_level_start)) < level_target[ilevel]:
                 if ev_counter >= self.ntime:
@@ -1518,6 +1575,173 @@ class fluvial:
             # fresh budget and we always continue to the next level.
             if not self.ntime_per_level and ev_counter >= self.ntime:
                 return
+
+    # ----------------------------------------------------------------- distributary tree
+
+    def _simulate_tree(self):
+        """Grow and stamp one distributary network for the current level.
+
+        Starts from the trunk just drawn from the pool, carrying discharge
+        ``Q = 1``. Each of ``n_bifurcations`` splits picks a branch with
+        probability proportional to its discharge (big channels split
+        more often), a node beyond the branch's protected reach, and a
+        share ``f ~ U(split_frac_lo, split_frac_hi)`` that leaves the
+        parent: the parent keeps ``(1 - f) Q`` downstream of the node and
+        a new walk carrying ``f Q`` departs at ``branch_angle`` from the
+        local heading (never more than 80 degrees off the regional flow).
+        Width follows ``Q ** width_exp`` and depth ``Q ** depth_exp``, so
+        every order of the tree is narrower and shallower than its parent;
+        a branch runs at most ``branch_length_scale * diagonal * sqrt(Q)``
+        steps and then ends on the plain, where its tip is recorded for a
+        mouth bar; a walk that runs into another branch (``merge_branches``)
+        joins it, and the receiving branch carries the sum downstream of the
+        junction. Branches are stamped once each, largest discharge first,
+        with the level's levees. Splits land anywhere on the network, so
+        the result is a tree rather than a fan of equal ribbons.
+        """
+        if self.cx is None or self.cx.size < 20:
+            return
+        base_depth, base_wd = float(self.CHdepth), float(self.CHwdratio)
+        chsinu = float(getattr(self, '_chsinu', self.mCHsinu))
+        diag = float(np.hypot(self.xmax - self.xmin, self.ymax - self.ymin))
+        w0 = base_depth * base_wd                         # trunk full width
+
+        def half_of(q):
+            return 0.5 * w0 * q ** self.width_exp
+
+        n = self.cx.size
+        branches = [dict(cx=self.cx.copy(), cy=self.cy.copy(), q=1.0, order=0, splits=0,
+                         protect=max(1, int(self.min_avul_node_frac * n)), tip=False, merged=False)]
+        reg = np.radians(450.0 - self.mCHazi)             # regional flow, walk frame, math radians
+        lim = np.radians(80.0)
+        for _ in range(self.n_bifurcations):
+            # a segment gives off at most ``max_splits_per_branch`` branches, so
+            # the tree cascades (trunk, then its children, then theirs) instead
+            # of every branch leaving the trunk
+            cand = [b for b in branches
+                    if b['q'] >= 2.0 * self.q_min and b['cx'].size - b['protect'] > 12
+                    and b['splits'] < self.max_splits_per_branch]
+            if not cand:
+                break
+            wq = np.array([b['q'] for b in cand])
+            parent = cand[int(np.random.choice(len(cand), p=wq / wq.sum()))]
+            pcx, pcy = parent['cx'], parent['cy']
+            k = int(np.random.randint(parent['protect'], pcx.size - 6))
+            f = float(np.random.uniform(self.split_frac_lo, self.split_frac_hi))
+            q_child, q_down = f * parent['q'], (1.0 - f) * parent['q']
+            head = float(np.arctan2(pcy[k + 1] - pcy[k - 1], pcx[k + 1] - pcx[k - 1]))
+            theta = np.radians(float(np.clip(np.random.normal(self.branch_angle_mean,
+                                                              max(self.branch_angle_sd, 1e-9)), 15.0, 90.0)))
+            side = 1.0 if np.random.uniform() < 0.5 else -1.0
+            child_math = head + side * theta
+            off = (child_math - reg + np.pi) % (2.0 * np.pi) - np.pi
+            child_math = reg + float(np.clip(off, -lim, lim))
+            launch = (450.0 - np.degrees(child_math)) % 360.0
+            # mean heading halfway between the launch angle and the regional
+            # flow: the branch leaves at the full angle and eases back
+            mean_math = reg + 0.5 * ((child_math - reg + np.pi) % (2.0 * np.pi) - np.pi)
+            chazi_child = (450.0 - np.degrees(mean_math)) % 360.0
+            cap = int(max(12, min(self.ndis_cap,
+                                  self.branch_length_scale * diag / self.step * np.sqrt(q_child))))
+            cx_t, cy_t = self._ar2_walk(float(pcx[k]), float(pcy[k]), chazi_child, chsinu, cap, azi0=launch)
+            if cx_t is None or cx_t.size < 8:
+                continue
+            ended_on_plain = cx_t.size >= cap
+            hit = None
+            if self.merge_branches:
+                hit = self._first_contact(branches, parent, cx_t, cy_t, half_of(q_child), half_of)
+                if hit is not None:
+                    j, recv, jn = hit
+                    if j < 8:
+                        continue
+                    cx_t, cy_t = cx_t[:j + 1], cy_t[:j + 1]
+                    ended_on_plain = False
+            # parent keeps Q upstream of the node, (1 - f) Q downstream of it
+            up = dict(parent, cx=pcx[:k + 1].copy(), cy=pcy[:k + 1].copy(), tip=False,
+                      splits=parent['splits'] + 1)
+            down = dict(cx=pcx[k:].copy(), cy=pcy[k:].copy(), q=q_down, order=parent['order'],
+                        protect=6, tip=parent['tip'], merged=parent['merged'], splits=0)
+            branches[self._index_of(branches, parent)] = up
+            branches.append(down)
+            branches.append(dict(cx=cx_t, cy=cy_t, q=q_child, order=parent['order'] + 1, splits=0,
+                                 protect=6, tip=bool(ended_on_plain), merged=hit is not None))
+            if hit is not None:
+                j, recv, jn = hit
+                if recv is parent:
+                    recv = down if jn >= k else up
+                    jn = jn - k if jn >= k else jn
+                if 1 <= jn < recv['cx'].size - 1:
+                    r_up = dict(recv, cx=recv['cx'][:jn + 1].copy(), cy=recv['cy'][:jn + 1].copy(), tip=False)
+                    r_down = dict(recv, cx=recv['cx'][jn:].copy(), cy=recv['cy'][jn:].copy(),
+                                  q=recv['q'] + q_child, protect=6, splits=0)
+                    branches[self._index_of(branches, recv)] = r_up
+                    branches.append(r_down)
+
+        self.tree_branches.extend(dict(order=b['order'], q=b['q'], n=int(b['cx'].size),
+                                       tip=b['tip'], merged=b['merged']) for b in branches)
+        for b in sorted(branches, key=lambda b: -b['q']):
+            if b['cx'].size < 4:
+                continue
+            self._set_branch(b, base_depth, base_wd)
+            self.totalid += 1
+            self._stamp_channel(facies_code=CH, erode_above=False)
+            lv_depth = _gauss_clip(self.mLVdepth, self.stdevLVdepth, lo=0.0)
+            lv_width = _gauss_clip(self.mLVwidth, self.stdevLVwidth, lo=0.0)
+            lv_height = _gauss_clip(self.mLVheight, self.stdevLVheight, lo=0.0)
+            lv_asym = _gauss_clip(self.mLVasym, self.stdevLVasym, lo=0.0)
+            lv_thin = _gauss_clip(self.mLVthin, self.stdevLVthin, lo=0.0)
+            self._stamp_levee(lv_depth, lv_width, lv_height, lv_asym, lv_thin)
+            if b['tip'] and self.cx.size > 1:
+                dx, dy = self.cx[-1] - self.cx[-2], self.cy[-1] - self.cy[-2]
+                tx, ty = self._rot_xy(float(self.cx[-1]), float(self.cy[-1]))
+                hx = dx * self._cos_az + dy * self._sin_az
+                hy = -dx * self._sin_az + dy * self._cos_az
+                self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx))))
+
+    @staticmethod
+    def _index_of(branches, b):
+        return next(i for i, x in enumerate(branches) if x is b)
+
+    def _first_contact(self, branches, parent, cx_t, cy_t, half_child, half_of):
+        """First node of a new walk that touches another branch.
+
+        Returns ``(j, branch, node)`` for the earliest walk node ``j >= 6``
+        closer to a node of a branch other than its parent than the two
+        half-widths, or None.
+        """
+        pts, owner = [], []
+        for b in branches:
+            if b is parent:
+                continue
+            pts.append(np.column_stack([b['cx'], b['cy']]))
+            owner.extend((b, i) for i in range(b['cx'].size))
+        if not pts:
+            return None
+        pts = np.vstack(pts)
+        tree = cKDTree(pts)
+        q = np.column_stack([cx_t[6:], cy_t[6:]])
+        d, idx = tree.query(q, k=1)
+        for jj in range(q.shape[0]):
+            b, i = owner[int(idx[jj])]
+            if d[jj] < half_child + half_of(b['q']):
+                return jj + 6, b, i
+        return None
+
+    def _set_branch(self, b, base_depth, base_wd):
+        """Make one tree branch the engine's current streamline."""
+        self.cx = np.asarray(b['cx'], dtype=np.float64).copy()
+        self.cy = np.asarray(b['cy'], dtype=np.float64).copy()
+        self.ndis = self.cx.size
+        q = float(b['q'])
+        self.CHdepth = base_depth * q ** self.depth_exp
+        self.CHwdratio = base_wd * q ** (self.width_exp - self.depth_exp)
+        self.CHhalfwidth = 0.5 * self.CHdepth * self.CHwdratio
+        self.gr_dwratio = 2.0 / max(self.CHwdratio, 1e-6)
+        self._chwidth_arr = None
+        self._chwidth_state_n = -1
+        self.chelev_arr = np.full(self.ndis, self.chelev, dtype=np.float64)
+        self.vx = self.vy = self.curv = self.thalweg = None
+        self.cal_curv()
 
     # ----------------------------------------------------------------- helpers
 

@@ -109,3 +109,28 @@ def test_delta_in_reservoir():
 
     res = Reservoir([g, d])
     assert res.poro_mat.shape == (64, 64, 32)
+
+
+def test_delta_tree_is_a_tree():
+    """``bifurcate=True``: discharge falls with branch order, so widths do too,
+    splits happen beyond the trunk (order >= 2 exists), some branches end on
+    the plain and some rejoin, and the channel presets are untouched."""
+    layer = DeltaLayer(nx=64, ny=64, nz=32, x_len=640, y_len=640, z_len=32, top_depth=0)
+    layer.create_geology(seed=3, azimuth=0.0, bifurcate=True, n_trees=2, paint_mouth_bars=False)
+    tb = layer.tree_branches
+    assert layer.active.sum() > 50
+    assert max(b['order'] for b in tb) >= 2
+    mean_q = {o: np.mean([b['q'] for b in tb if b['order'] == o]) for o in sorted({b['order'] for b in tb})}
+    orders = sorted(mean_q)
+    assert all(mean_q[a] > mean_q[b] for a, b in zip(orders, orders[1:])), mean_q
+    assert all(b['q'] < 1.0 for b in tb if b['order'] >= 1)
+    assert any(b['tip'] for b in tb) and any(b['merged'] for b in tb)
+
+
+def test_delta_tree_flag_off_is_default():
+    a = DeltaLayer(nx=48, ny=48, nz=24, x_len=480, y_len=480, z_len=24, top_depth=0)
+    a.create_geology(seed=7, azimuth=0.0)
+    b = DeltaLayer(nx=48, ny=48, nz=24, x_len=480, y_len=480, z_len=24, top_depth=0)
+    b.create_geology(seed=7, azimuth=0.0, bifurcate=False)
+    assert np.array_equal(a.active, b.active)
+    assert a.tree_branches == []

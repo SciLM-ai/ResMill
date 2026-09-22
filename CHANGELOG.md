@@ -4,6 +4,18 @@
 
 ### Added
 
+- `DeltaLayer(bifurcate=True)`: a generation is a distributary tree, not an
+  avulsion history. Discharge is split at every bifurcation (`split_frac_lo`
+  to `split_frac_hi` to the new branch), width follows `Q ** width_exp` and
+  depth `Q ** depth_exp` (Leopold-Maddock), a segment gives off at most
+  `max_splits_per_branch` branches so splits cascade down the network,
+  branches launch at `branch_angle_mean` +- `branch_angle_sd` degrees and
+  ease back toward the regional slope, run at most
+  `branch_length_scale * diagonal * sqrt(Q)` before ending in a mouth bar,
+  and join another branch they run into (`merge_branches`). `n_trees`
+  networks per generation. Off by default; the published dataset is
+  unchanged. `examples/dataset_generation/config_full_delta_v2.json` is the
+  dataset config for it. `layer.tree_branches` lists every segment.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);
   `examples/anticline_meander.py` and `examples/angular_unconformity.py`.
 

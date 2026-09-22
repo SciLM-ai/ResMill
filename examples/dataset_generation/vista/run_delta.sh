@@ -1,15 +1,17 @@
 #!/bin/bash
 #SBATCH -p gg
-#SBATCH -N 10
+#SBATCH -N 1
 #SBATCH --ntasks-per-node=144
 #SBATCH --cpus-per-task=1
-#SBATCH -t 04:00:00
+#SBATCH -t 01:30:00
 #SBATCH -J resmill_delta
 #SBATCH -A CHE23004
 #SBATCH -o logs/%x-%j.out
 
-# 150,000 delta samples from ../config_full_delta.json, ResMill 9c0bd15, on TACC Vista gg
+# 150,000 delta samples from ../config_full_delta_v2.json, ResMill 9c0bd15, on TACC Vista gg
 # nodes (2 x 72 Grace cores, no SMT: 144 single-thread ranks per node).
+# Tree delta (config v2): 2 to 4 s a cube instead of 90 to 110, measured 2026-09-22.
+# The line below is the old avulsion delta's cost, kept for the record.
 # Measured 2026-09-21 on warm processes with the node fully loaded, rows drawn
 # from the published dataset's own parameter table: 89.6 s per volume on one
 # core -> 3,733 core-hours = 25.9 node-hours; on 10 node(s) about
@@ -28,4 +30,4 @@ cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
 test "$(git rev-parse --short HEAD)" = 9c0bd15 || { echo "checkout ResMill 9c0bd15 first"; exit 1; }
 
-srun --cpu-bind=cores "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_delta.json
+srun --cpu-bind=cores "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_delta_v2.json
