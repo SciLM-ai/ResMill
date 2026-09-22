@@ -8,7 +8,7 @@
 #SBATCH -A CHE23004
 #SBATCH -o logs/%x-%j.out
 
-# 100,000 sh_distal samples from ../config_full_sh_distal.json, ResMill 6d1a956, on TACC Vista gg
+# 100,000 sh_distal samples from ../config_full_sh_distal.json, ResMill 885be98, on TACC Vista gg
 # nodes (2 x 72 Grace cores, no SMT: 144 single-thread ranks per node).
 # Measured 2026-09-21 on warm processes with the node fully loaded, rows drawn
 # from the published dataset's own parameter table: 18.8 s per volume on one
@@ -26,6 +26,6 @@ REPO=/work/08405/ilgar/vista/codes/ResMill_ls6
 PY=/work/08405/ilgar/vista/conda_libraries/resmill/bin/python
 cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
-test "$(git rev-parse --short HEAD)" = 6d1a956 || { echo "checkout ResMill 6d1a956 first"; exit 1; }
+test "$(git rev-parse --short HEAD)" = 885be98 || { echo "checkout ResMill 885be98 first"; exit 1; }
 
 srun --cpu-bind=cores "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_sh_distal.json
