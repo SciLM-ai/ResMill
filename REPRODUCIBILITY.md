@@ -283,3 +283,17 @@ The engine builds on the streamline-based fluvial architecture by Pyrcz & Deutsc
 ## Issues / Contact
 
 File issues at [`anonymous.4open.science/r/ResMill-7377`](https://anonymous.4open.science/r/ResMill-7377).
+
+
+---
+
+## 3. The v2 dataset (Vista, 2026-09)
+
+The v2 regeneration keeps the Sobol seed, grid, crop and counts and changes
+the engine and three sampled parameters; everything needed to run it on TACC
+Vista is in `examples/dataset_generation/vista/` (eight `run_*.sh` for
+`sbatch`, one per environment, and a README with the measured cost, about 30
+gg node-hours in total). The original `run_*.sh` in this directory are the
+NERSC Perlmutter scripts that produced v1 (`-C cpu`, 128 ranks per node,
+`--licenses=cfs`); they are kept for the record and are not the ones to
+submit on Vista.

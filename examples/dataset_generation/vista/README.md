@@ -1,9 +1,12 @@
 # Regenerating the dataset on TACC Vista (gg partition)
 
-Same Sobol seed 42 and ranges as the published dataset (REPRODUCIBILITY.md),
-with two additions in the v2 configs: channels sample `n_sources` (entry
-points, {1, 1, 2, 3}) and the delta is the distributary tree
-(`config_full_delta_v2.json`). The engine also changes, to ResMill `a0d7629`, which fixes
+Same Sobol seed 42, grid, crop and counts as the published dataset
+(REPRODUCIBILITY.md). The v2 configs (`config_full_<preset>_v2.json`) differ
+from v1 in three sampled parameters: channels sample `n_sources` (entry
+points on the upstream boundary, {1, 1, 2, 3}) and `probAvulOutside` (the
+rate at which fresh rivers enter, per preset range, MEANDER 0 to 0.015), and
+the delta is the distributary tree with its own parameters. Lobes are the v1
+config. The engine also changes, to ResMill `3e71977`, which fixes
 the three fluvial-walker defects listed in CHANGELOG.md. Every row keeps its
 parameters and seed, so downstream selections by (shard, index) stay valid once
 the shards are combined the same way.
@@ -36,7 +39,7 @@ limit; TACC charges actual run time). The delta row is the tree delta
 ## Steps
 
 ```bash
-cd /work/08405/ilgar/vista/codes/ResMill_ls6 && git checkout a0d7629
+cd /work/08405/ilgar/vista/codes/ResMill_ls6 && git checkout 3e71977
 cd examples/dataset_generation
 for j in vista/run_*.sh; do sbatch "$j"; done        # 8 independent jobs
 # when all eight have finished (logs/ show every rank's summary line):
@@ -91,3 +94,20 @@ so a node uses well under 60 GB of its 237 GB. One thing bit: TACC's XALT
 fails (`OPENSSL_3.3.0 not found`), losing that rank's samples. The scripts run
 python as `env -u LD_PRELOAD python -m resmill.dataset.cli`, which removes it;
 with that every rank reports and every sample is on disk.
+
+## What the v2 dataset contains that v1 did not
+
+- Engine fixes: walks clipped by the real grid, entries on the grid boundary,
+  walk cap separate from node density (CHANGELOG, `9c0bd15`).
+- Channels: `n_sources` entry points per reservoir and a per-reservoir
+  outside-avulsion rate, both sampled.
+- Delta: the distributary tree (`bifurcate=True`): discharge-partitioned
+  widths and depths, Y-splits cascading down the network, a scalloped,
+  prograding front with mouth-bar complexes, bars at every split, older
+  networks mud-filled. Mouth bars build down from the channel top.
+- Reviewed on 144-reservoir previews generated through this CLI
+  (`/scratch/08405/ilgar/resmill_preview144`, facies and permeability PDFs).
+
+Delta generation spacing is `n_generations = 50 / depth` (as previewed);
+`70 / depth` makes every trunk incise the level below (3D connectivity 1.00
+instead of 0.78) and is a one-line change in `config_full_delta_v2.json`.
