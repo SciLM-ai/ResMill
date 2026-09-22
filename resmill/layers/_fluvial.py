@@ -323,7 +323,6 @@ class fluvial:
         self.n_sources = int(max(n_sources, 1))
         self.source_spacing_min = float(np.clip(source_spacing_min, 0.0, 0.5))
         self._sources: list[float] | None = None
-        self._last_src: int | None = None
         self.bifurcate = bool(bifurcate)
         self.n_trees = int(max(n_trees, 1))
         self.n_bifurcations = int(max(n_bifurcations, 0))
@@ -621,10 +620,8 @@ class fluvial:
         for _ in range(1000):
             if self.stdevCHsource > 0.0:
                 centre = self.mCHsource
-                self._last_src = None
                 if self._sources:
-                    self._last_src = int(np.random.randint(len(self._sources)))
-                    centre = self._sources[self._last_src]
+                    centre = self._sources[int(np.random.randint(len(self._sources)))]
                 y0 = float(np.random.normal(centre, self.stdevCHsource))
                 y0 = float(np.clip(y0, self.ymin, self.ymax))
             else:
@@ -719,26 +716,20 @@ class fluvial:
                 'chazi': chazi, 'chsinu': chsinu,
                 'chdepth': chdepth, 'chwdratio': chwdratio,
                 'chwidth_arr': half_arr,
-                'src': self._last_src,
             })
         self._pool = pool
 
-    def _draw_from_pool(self, src: int | None = None) -> int:
+    def _draw_from_pool(self) -> int:
         """Sample one streamline from the pre-built pool (uniform weights).
 
         Mirrors ``probdraw + lookupstream`` in ``streamsim.for:727-728``.
-        ``src`` restricts the draw to candidates entering at that source.
         Returns 1 on success.
         """
         if not self._pool:
             self._build_streamline_pool()
             if not self._pool:
                 return 0
-        cands = [i for i, c in enumerate(self._pool) if c.get('src') == src] if src is not None else []
-        if cands:
-            idx = int(cands[int(np.random.randint(0, len(cands)))])
-        else:
-            idx = int(np.random.randint(0, len(self._pool)))
+        idx = int(np.random.randint(0, len(self._pool)))
         c = self._pool[idx]
         self.cx = c['cx'].copy()
         self.cy = c['cy'].copy()
@@ -1559,14 +1550,8 @@ class fluvial:
                 if new_offset != self._entry_x_offset:
                     self._entry_x_offset = new_offset
                     self._build_streamline_pool()
-            # A preset that builds one channel per level (no avulsion at
-            # all, MEANDER_OXBOW) gets one belt per source when several
-            # sources are drawn, each with the level's full event budget;
-            # presets with avulsion already mix sources within a level.
-            n_belts = (self.n_sources if (self._sources and not self.bifurcate
-                       and self.probAvulOutside <= 0.0 and self.probAvulInside <= 0.0) else 1)
             # Always reseed at level top (item 2.20 — matches AL:727-731)
-            if ilevel > 0 and n_belts == 1:
+            if ilevel > 0:
                 if not self._draw_from_pool():
                     return
                 self.cal_curv()
@@ -1583,90 +1568,82 @@ class fluvial:
                     self._simulate_tree(old=itree < self.n_trees - 1)
                 continue
 
-            for ibelt in range(n_belts):
-                if n_belts > 1:
-                    if not self._draw_from_pool(src=ibelt):
-                        continue
-                    self.cal_curv()
-                    if self.ntime_per_level:
-                        ev_counter = 0
+            while ((self.ntg_counter[0] - ntg_at_level_start)
+                   - (self.ffch_counter[0] - ffch_at_level_start)) < level_target[ilevel]:
+                if ev_counter >= self.ntime:
+                    # ntime cap exit (AL:988-991 — no extra abandon; the
+                    # end-of-level path below handles abandonment).
+                    break
+                ev_counter += 1
+                self.totalid = ev_counter
 
-                while ((self.ntg_counter[0] - ntg_at_level_start)
-                       - (self.ffch_counter[0] - ffch_at_level_start)) < level_target[ilevel]:
-                    if ev_counter >= self.ntime:
-                        # ntime cap exit (AL:988-991 — no extra abandon; the
-                        # end-of-level path below handles abandonment).
-                        break
-                    ev_counter += 1
-                    self.totalid = ev_counter
+                ffchprop = _gauss_clip(self.mFFCHprop, self.stdevFFCHprop, lo=0.0, hi=1.0)
+                last_ffchprop = ffchprop
+                p = float(np.random.uniform())
 
-                    ffchprop = _gauss_clip(self.mFFCHprop, self.stdevFFCHprop, lo=0.0, hi=1.0)
-                    last_ffchprop = ffchprop
-                    p = float(np.random.uniform())
-
-                    if p < self.probAvulOutside:
-                        # Avulsion outside (AL:757-774)
-                        if not self._is_first_streamline:
-                            self._stamp_abandoned(ffchprop)
-                        if not self._draw_from_pool():
-                            continue
-                        self._redraw_event_geometry()
-                        self.cal_curv()
-                        self._is_first_streamline = False
-                    elif p < (self.probAvulOutside + self.probAvulInside):
-                        # Avulsion inside (AL:782-796)
+                if p < self.probAvulOutside:
+                    # Avulsion outside (AL:757-774)
+                    if not self._is_first_streamline:
                         self._stamp_abandoned(ffchprop)
-                        if not self._avulse_inside():
-                            continue
-                        self._redraw_event_geometry()
+                    if not self._draw_from_pool():
+                        continue
+                    self._redraw_event_geometry()
+                    self.cal_curv()
+                    self._is_first_streamline = False
+                elif p < (self.probAvulOutside + self.probAvulInside):
+                    # Avulsion inside (AL:782-796)
+                    self._stamp_abandoned(ffchprop)
+                    if not self._avulse_inside():
+                        continue
+                    self._redraw_event_geometry()
+                    self.cal_curv()
+                    self._is_first_streamline = False
+                else:
+                    # Migration (AL:804-820): LA on OLD path, then redraw,
+                    # migrate, neckcutoff, then CH on NEW path.
+                    self._stamp_channel(facies_code=LA, erode_above=False)
+                    self._redraw_event_geometry()
+                    distMigrate = _gauss_clip(self.mdistMigrate, self.stdevdistMigrate, lo=0.0)
+                    if self._migrate_one_step(distMigrate) == 0:
+                        if not self._draw_from_pool():
+                            return
                         self.cal_curv()
-                        self._is_first_streamline = False
-                    else:
-                        # Migration (AL:804-820): LA on OLD path, then redraw,
-                        # migrate, neckcutoff, then CH on NEW path.
-                        self._stamp_channel(facies_code=LA, erode_above=False)
-                        self._redraw_event_geometry()
-                        distMigrate = _gauss_clip(self.mdistMigrate, self.stdevdistMigrate, lo=0.0)
-                        if self._migrate_one_step(distMigrate) == 0:
-                            if not self._draw_from_pool():
-                                return
-                            self.cal_curv()
-                        self._is_first_streamline = False
+                    self._is_first_streamline = False
 
-                    # Per-event CS draws + placement (AL:889-945)
-                    cs_num = int(round(_gauss_clip(self.mCSnum, self.stdevCSnum, lo=0.0)))
-                    cs_numlobe = int(round(_gauss_clip(self.mCSnumlobe, self.stdevCSnumlobe, lo=0.0)))
-                    if cs_num > 0 and cs_numlobe > 0:
-                        self._stamp_splays(cs_num, cs_numlobe)
+                # Per-event CS draws + placement (AL:889-945)
+                cs_num = int(round(_gauss_clip(self.mCSnum, self.stdevCSnum, lo=0.0)))
+                cs_numlobe = int(round(_gauss_clip(self.mCSnumlobe, self.stdevCSnumlobe, lo=0.0)))
+                if cs_num > 0 and cs_numlobe > 0:
+                    self._stamp_splays(cs_num, cs_numlobe)
 
-                    # Per-event LV draws (AL:842-865) and placement
-                    lv_depth = _gauss_clip(self.mLVdepth, self.stdevLVdepth, lo=0.0)
-                    lv_width = _gauss_clip(self.mLVwidth, self.stdevLVwidth, lo=0.0)
-                    lv_height = _gauss_clip(self.mLVheight, self.stdevLVheight, lo=0.0)
-                    lv_asym = _gauss_clip(self.mLVasym, self.stdevLVasym, lo=0.0)
-                    lv_thin = _gauss_clip(self.mLVthin, self.stdevLVthin, lo=0.0)
-                    self._stamp_levee(lv_depth, lv_width, lv_height, lv_asym, lv_thin)
+                # Per-event LV draws (AL:842-865) and placement
+                lv_depth = _gauss_clip(self.mLVdepth, self.stdevLVdepth, lo=0.0)
+                lv_width = _gauss_clip(self.mLVwidth, self.stdevLVwidth, lo=0.0)
+                lv_height = _gauss_clip(self.mLVheight, self.stdevLVheight, lo=0.0)
+                lv_asym = _gauss_clip(self.mLVasym, self.stdevLVasym, lo=0.0)
+                lv_thin = _gauss_clip(self.mLVthin, self.stdevLVthin, lo=0.0)
+                self._stamp_levee(lv_depth, lv_width, lv_height, lv_asym, lv_thin)
 
-                    # Active-channel stamp (AL:966-967)
-                    self._stamp_channel(facies_code=CH, erode_above=True)
+                # Active-channel stamp (AL:966-967)
+                self._stamp_channel(facies_code=CH, erode_above=True)
 
-                # End-of-level abandonment (AL:1002-1004)
-                self._stamp_abandoned(last_ffchprop)
-                # Record the distal tip of the active streamline at level
-                # close (x, y, chelev, heading). DeltaLayer optionally
-                # paints a calc_lobe mouth bar at every recorded tip.
-                if self.cx is not None and self.cx.size > 1:
-                    head = float(np.arctan2(self.cy[-1] - self.cy[-2],
-                                             self.cx[-1] - self.cx[-2]))
-                    self.distal_tips.append((
-                        float(self.cx[-1]), float(self.cy[-1]),
-                        float(self.chelev), head,
-                    ))
-                # Stop the whole simulation only when ntime is global (Alluvsim
-                # default). With ``ntime_per_level=True`` each level gets a
-                # fresh budget and we always continue to the next level.
-                if not self.ntime_per_level and ev_counter >= self.ntime:
-                    return
+            # End-of-level abandonment (AL:1002-1004)
+            self._stamp_abandoned(last_ffchprop)
+            # Record the distal tip of the active streamline at level
+            # close (x, y, chelev, heading). DeltaLayer optionally
+            # paints a calc_lobe mouth bar at every recorded tip.
+            if self.cx is not None and self.cx.size > 1:
+                head = float(np.arctan2(self.cy[-1] - self.cy[-2],
+                                         self.cx[-1] - self.cx[-2]))
+                self.distal_tips.append((
+                    float(self.cx[-1]), float(self.cy[-1]),
+                    float(self.chelev), head,
+                ))
+            # Stop the whole simulation only when ntime is global (Alluvsim
+            # default). With ``ntime_per_level=True`` each level gets a
+            # fresh budget and we always continue to the next level.
+            if not self.ntime_per_level and ev_counter >= self.ntime:
+                return
 
     # ----------------------------------------------------------------- distributary tree
 
