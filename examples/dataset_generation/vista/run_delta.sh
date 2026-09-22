@@ -8,7 +8,7 @@
 #SBATCH -A CHE23004
 #SBATCH -o logs/%x-%j.out
 
-# 150,000 delta samples from ../config_full_delta_v2.json, ResMill 8a9fc50, on TACC Vista gg
+# 150,000 delta samples from ../config_full_delta_v2.json, ResMill a0d7629, on TACC Vista gg
 # nodes (2 x 72 Grace cores, no SMT: 144 single-thread ranks per node).
 # Tree delta (config v2): 2 to 4 s a cube instead of 90 to 110, measured 2026-09-22.
 # The line below is the old avulsion delta's cost, kept for the record.
@@ -28,7 +28,7 @@ REPO=/work/08405/ilgar/vista/codes/ResMill_ls6
 PY=/work/08405/ilgar/vista/conda_libraries/resmill/bin/python
 cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
-test "$(git rev-parse --short HEAD)" = 8a9fc50 || { echo "checkout ResMill 8a9fc50 first"; exit 1; }
+test "$(git rev-parse --short HEAD)" = a0d7629 || { echo "checkout ResMill a0d7629 first"; exit 1; }
 
 # env -u LD_PRELOAD: TACC's XALT preload brings its own libcrypto into rank 0 and pyarrow
 # then fails to import (OPENSSL_3.3.0 not found); measured on Vista 2026-09-22, rank 0 lost.

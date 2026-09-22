@@ -3,7 +3,7 @@
 Same Sobol seed 42 and ranges as the published dataset (REPRODUCIBILITY.md),
 with two additions in the v2 configs: channels sample `n_sources` (entry
 points, {1, 1, 2, 3}) and the delta is the distributary tree
-(`config_full_delta_v2.json`). The engine also changes, to ResMill `8a9fc50`, which fixes
+(`config_full_delta_v2.json`). The engine also changes, to ResMill `a0d7629`, which fixes
 the three fluvial-walker defects listed in CHANGELOG.md. Every row keeps its
 parameters and seed, so downstream selections by (shard, index) stay valid once
 the shards are combined the same way.
@@ -36,7 +36,7 @@ limit; TACC charges actual run time). The delta row is the tree delta
 ## Steps
 
 ```bash
-cd /work/08405/ilgar/vista/codes/ResMill_ls6 && git checkout 8a9fc50
+cd /work/08405/ilgar/vista/codes/ResMill_ls6 && git checkout a0d7629
 cd examples/dataset_generation
 for j in vista/run_*.sh; do sbatch "$j"; done        # 8 independent jobs
 # when all eight have finished (logs/ show every rank's summary line):
