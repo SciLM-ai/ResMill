@@ -144,8 +144,12 @@
           "_comment_": "skip \u2014 class default. null = sample randomly along inflow boundary."
         },
         "stdevCHsource": {
-          "value": 80.0,
-          "_comment_": "skip \u2014 class default. Wide spread = multi-channel belts. Drop to ~1 only for MEANDER_OXBOW (single deterministic channel)."
+          "range": [
+            5.0,
+            300.0
+          ],
+          "scale": "log",
+          "_comment_": "VARIED (v3). Across-flow scatter (std, m) of the entry point of every channel drawn from the pool; 80.0 m fixed in v2 = nodal entry. 5 m keeps that, 300 m spreads entries over the whole 1280 m edge."
         },
         "mLVdepth": {
           "value": 0.6,
@@ -316,6 +320,20 @@
             3
           ],
           "_comment_": "VARIED. Entry points on the upstream edge; sources at least 15% of the edge apart."
+        },
+        "poro_noise_std": {
+          "range": [
+            0.05,
+            0.15
+          ],
+          "_comment_": "VARIED (v3). Relative std of a correlated porosity texture inside sand cells; perm follows via the K-C slope. 0 = smooth ramp (v1/v2)."
+        },
+        "poro_noise_range": {
+          "range": [
+            2.0,
+            8.0
+          ],
+          "_comment_": "VARIED (v3). Lateral correlation length of that texture in cells (20-80 m); vertical is a third."
         }
       }
     }

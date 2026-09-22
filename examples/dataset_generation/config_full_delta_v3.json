@@ -49,8 +49,7 @@
           "column": 64.0,
           "min": 1,
           "max": 40,
-          "_comment_": "AUTO. Same aggradation-ratio rule as the channels; DeltaLayer anchors its lowest generation top at dz = 1 m (base), so n = round((64 - 1) / (r * depth)) + 1.",
-          "base": 1.0
+          "_comment_": "AUTO. Same aggradation-ratio rule as the channels: DeltaLayer now anchors the bottom generation's base on the floor, so n = round((64 - depth) / (r * depth)) + 1."
         },
         "ntime_per_gen": {
           "value": 200,
@@ -434,6 +433,20 @@
             0.6
           ],
           "_comment_": "VARIED. How much further a big channel progrades than a small one: 0.1 smooth arcuate front, 0.6 bird's foot."
+        },
+        "poro_noise_std": {
+          "range": [
+            0.05,
+            0.15
+          ],
+          "_comment_": "VARIED (v3). Relative std of a correlated porosity texture inside sand cells; perm follows via the K-C slope. 0 = smooth ramp (v1/v2)."
+        },
+        "poro_noise_range": {
+          "range": [
+            2.0,
+            8.0
+          ],
+          "_comment_": "VARIED (v3). Lateral correlation length of that texture in cells (20-80 m); vertical is a third."
         }
       }
     }

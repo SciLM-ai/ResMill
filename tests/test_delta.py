@@ -134,3 +134,14 @@ def test_delta_tree_flag_off_is_default():
     b.create_geology(seed=7, azimuth=0.0, bifurcate=False)
     assert np.array_equal(a.active, b.active)
     assert a.tree_branches == []
+
+
+def test_delta_bottom_generation_sits_on_the_floor():
+    """The lowest generation's channel base is on the floor (no one-cell sand sliver
+    from a generation buried below it)."""
+    from resmill.layers.delta import DeltaLayer
+    layer = DeltaLayer(nx=48, ny=48, nz=16, x_len=480, y_len=480, z_len=16, top_depth=0.0)
+    layer.create_geology(n_generations=2, mCHdepth=4.0, bifurcate=True, seed=3)
+    sand = (layer.facies >= 1).mean(axis=(0, 1))
+    assert sand[0] > 0                     # bottom generation reaches the floor ...
+    assert sand[0] <= 1.5 * sand[2] + 1e-6  # ... as a full body, not a sliver over mud

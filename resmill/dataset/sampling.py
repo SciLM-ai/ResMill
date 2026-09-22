@@ -29,9 +29,9 @@ Per-parameter specs supported:
   column, then ``round((H - b) / (r * depth)) + 1`` clipped to [m, M].
   ``H`` is the layer's ``z_len`` (the engine spreads the levels over
   the whole column) and ``b`` the height of the lowest level top, which
-  defaults to the depth (``ChannelLayer``: bottom channel base on the
-  floor); ``DeltaLayer`` puts its lowest generation at ``dz``, so pass
-  ``"base": dz``. r below 1 makes successive levels cut into each other,
+  defaults to the depth (bottom channel base on the floor, as both
+  ``ChannelLayer`` and ``DeltaLayer`` anchor it); pass ``"base"`` only
+  for a layer anchored elsewhere. r below 1 makes successive levels cut into each other,
   above 1 leaves floodplain between them, at most (r - 1) x depth.
 - ``{"range": [...], "shared": "tag"}``         couple params by tying them
   to the same Sobol/LHS coordinate — every param with the same tag uses

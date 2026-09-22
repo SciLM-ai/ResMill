@@ -52,6 +52,18 @@ FACIES_PROPS: dict[int, dict[str, float]] = {
 }
 
 
+def _correlated_noise(shape: tuple, range_xy: float) -> np.ndarray:
+    """Unit-variance Gaussian field with lateral correlation ``range_xy``
+    cells and a third of that vertically (smoothed white noise), drawn from
+    the global numpy state so it follows the layer's seed."""
+    from scipy.ndimage import gaussian_filter
+    white = np.random.normal(0.0, 1.0, shape).astype(np.float32)
+    r = max(float(range_xy), 1e-3)
+    field = gaussian_filter(white, sigma=(r, r, max(r / 3.0, 0.5)), mode="reflect")
+    sd = float(field.std())
+    return (field / sd if sd > 0 else field).astype(np.float32)
+
+
 class ChannelLayer(Layer):
     """Fluvial channel-belt layer driving the Alluvsim-port engine.
 
@@ -67,7 +79,9 @@ class ChannelLayer(Layer):
                                poro_mult_field: np.ndarray | None = None,
                                log_perm_offset_field: np.ndarray | None = None,
                                poro_realization_mult: float = 1.0,
-                               perm_realization_mult: float = 1.0):
+                               perm_realization_mult: float = 1.0,
+                               poro_noise_std: float = 0.0,
+                               poro_noise_range: float = 3.0):
         """Build ``self.facies / active / poro_mat / perm_mat`` from engine outputs.
 
         Inputs:
@@ -85,6 +99,12 @@ class ChannelLayer(Layer):
         * ``poro_realization_mult`` — single scalar applied uniformly to
           all cells in the realization (Sobol-controlled "regional rock
           quality"). Default 1.0 (no shift).
+        * ``poro_noise_std`` — relative standard deviation of a spatially
+          correlated Gaussian field multiplied into the porosity of every
+          sand cell (facies >= 1); 0 (default) leaves the bodies as the
+          smooth ramp. ``poro_noise_range`` is its lateral correlation
+          length in cells (vertical = a third of that). Permeability
+          follows through the same K-C slope. Mud cells stay untouched.
         * ``perm_realization_mult`` — single scalar (linear) applied
           uniformly. log10(perm_realization_mult) is added to log_perm
           for every cell. Sobol-sampled log-uniformly, default 1.0.
@@ -165,6 +185,15 @@ class ChannelLayer(Layer):
             poro_mat[mud_mask] = base_poro[mud_mask]
             log_perm[mud_mask] = base_log_perm[mud_mask]
 
+        # Cell-scale texture inside sand bodies: a correlated Gaussian
+        # field, one draw per cube, so a channel is not a perfect ramp.
+        if poro_noise_std > 0.0:
+            noise = _correlated_noise(self.facies.shape, poro_noise_range)
+            mult = np.clip(1.0 + float(poro_noise_std) * noise, 0.3, 1.7).astype(np.float32)
+            sand_mask = self.facies >= 1
+            poro_mat = np.where(sand_mask, poro_mat * mult, poro_mat)
+            log_perm = np.where(sand_mask, log_perm + KC_SLOPE * np.log10(mult), log_perm)
+
         # Inactive cells (FF=-1) get poro = base FF value; perm tracks.
         # Clip poro to a physical range to avoid float16 overflow / negatives.
         poro_mat = np.clip(poro_mat, 0.0, 0.5)
@@ -236,6 +265,9 @@ class ChannelLayer(Layer):
         # (drawn at each stamp call inside the engine) wiggle on top.
         poro_realization_mult: float = 1.0,
         perm_realization_mult: float = 1.0,
+        # Cell-scale porosity texture inside sand bodies (0 = smooth ramp)
+        poro_noise_std: float = 0.0,
+        poro_noise_range: float = 3.0,
         seed: int | None = None,
     ):
         """Generate channel geology with Alluvsim-faithful semantics.
@@ -302,6 +334,8 @@ class ChannelLayer(Layer):
             log_perm_offset_field=engine.log_perm_offset_field,
             poro_realization_mult=poro_realization_mult,
             perm_realization_mult=perm_realization_mult,
+            poro_noise_std=poro_noise_std,
+            poro_noise_range=poro_noise_range,
         )
         # Stash for downstream tooling (parquet writers can record the
         # engine-level multiplier std values, generate.py uses these to

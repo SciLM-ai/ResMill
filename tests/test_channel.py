@@ -130,3 +130,26 @@ def test_channel_several_entry_points():
     c.create_geology(seed=5, azimuth=0.0, n_sources=1, **kw)
     assert np.array_equal(b.active, c.active)
     assert c._engine._sources is None
+
+
+def test_channel_porosity_noise_textures_sand_only():
+    """poro_noise_std > 0 adds cell-scale texture to sand cells and leaves mud alone;
+    0 reproduces the smooth-ramp output exactly."""
+    from resmill.layers.channel import ChannelLayer, PV_SHOESTRING
+    kw = dict(PV_SHOESTRING, seed=7)
+    a = ChannelLayer(nx=40, ny=40, nz=24, x_len=400, y_len=400, z_len=24, top_depth=0.0)
+    a.create_geology(**kw)
+    b = ChannelLayer(nx=40, ny=40, nz=24, x_len=400, y_len=400, z_len=24, top_depth=0.0)
+    b.create_geology(**kw, poro_noise_std=0.0)
+    assert np.array_equal(a.poro_mat, b.poro_mat) and np.array_equal(a.perm_mat, b.perm_mat)
+    c = ChannelLayer(nx=40, ny=40, nz=24, x_len=400, y_len=400, z_len=24, top_depth=0.0)
+    c.create_geology(**kw, poro_noise_std=0.1, poro_noise_range=3.0)
+    assert np.array_equal(a.facies, c.facies)
+    sand = a.facies >= 1; mud = ~sand
+    assert sand.sum() > 100
+    assert np.array_equal(a.poro_mat[mud], c.poro_mat[mud])
+    ratio = c.poro_mat[sand] / np.maximum(a.poro_mat[sand], 1e-6)
+    assert 0.04 < ratio.std() < 0.2 and abs(ratio.mean() - 1.0) < 0.03
+    # perm follows the porosity texture (K-C slope 3 in log10)
+    lp = np.log10(c.perm_mat[sand]) - np.log10(a.perm_mat[sand])
+    assert np.allclose(lp, 3.0 * np.log10(ratio), atol=1e-2)

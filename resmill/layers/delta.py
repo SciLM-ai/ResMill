@@ -210,6 +210,8 @@ class DeltaLayer(ChannelLayer):
                        facies_props: dict | None = None,
                        poro_realization_mult: float = 1.0,
                        perm_realization_mult: float = 1.0,
+                       poro_noise_std: float = 0.0,
+                       poro_noise_range: float = 3.0,
                        seed: int | None = None,
                        **kwargs):
         """Generate a prograding distributary-fan delta.
@@ -284,10 +286,14 @@ class DeltaLayer(ChannelLayer):
         # Wire direct branch-spread control
         cfg['stdev_branch_azi'] = float(max(branch_spread_deg, 0.0))
 
-        # Per-generation chelev: span the full z column. ``level_z``
-        # passed by the user wins; otherwise spread linearly between
-        # zsiz and z_len.
+        # Per-generation chelev (channel top): span the full z column.
+        # ``level_z`` passed by the user wins; otherwise spread linearly
+        # from the channel depth (bottom generation's base on the floor,
+        # as ChannelLayer does) to z_len (top generation's top on the
+        # roof). Anchoring at dz used to leave the lowest generation
+        # below the floor with a one-cell sand sliver in slice 0.
         z_len = self.nz * self.dz
+        z_bot = max(self.dz, float(cfg.get('mCHdepth', DELTA_FAN['mCHdepth'])))
         if 'level_z' in cfg and cfg['level_z'] is not None:
             chelev_per_gen = list(cfg.pop('level_z'))
             if len(chelev_per_gen) != n_generations:
@@ -296,7 +302,8 @@ class DeltaLayer(ChannelLayer):
                     f"n_generations={n_generations}")
         else:
             cfg.pop('level_z', None)
-            chelev_per_gen = list(np.linspace(self.dz, z_len, n_generations))
+            chelev_per_gen = ([z_len] if n_generations == 1
+                              else list(np.linspace(z_bot, z_len, n_generations)))
 
         # Progradation = per-generation **trunk-length** advance. Every
         # streamline still starts at the upstream-boundary entry point
@@ -397,6 +404,8 @@ class DeltaLayer(ChannelLayer):
             log_perm_offset_field=accum_log_perm_offset,
             poro_realization_mult=poro_realization_mult,
             perm_realization_mult=perm_realization_mult,
+            poro_noise_std=poro_noise_std,
+            poro_noise_range=poro_noise_range,
         )
         # Expose final engine + accumulated distal tips for tutorial / debug
         self._engine = last_engine
