@@ -1,20 +1,20 @@
 #!/bin/bash
 #SBATCH -q regular
 #SBATCH -C cpu
-#SBATCH -N 2
+#SBATCH -N 5
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=2
-#SBATCH -t 03:00:00
-#SBATCH -J resmill_cb_labyrinth_v2
+#SBATCH -t 05:00:00
+#SBATCH -J resmill_cb_labyrinth_v3
 #SBATCH --licenses=cfs,SCRATCH
 #SBATCH -A REPLACE_WITH_YOUR_ALLOCATION
 #SBATCH -o logs/%x-%j.out
 
-# v2 dataset, 100,000 cb_labyrinth samples from ../config_full_cb_labyrinth_v2.json (ResMill 3e71977 or later),
+# 100,000 cb_labyrinth volumes of 128 x 128 x 64 from ../config_full_cb_labyrinth_v3.json (v3), ResMill a8bfbfd or later,
 # on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
-# Cost from the Vista measurement of 2026-09-22 (12.7 s a cube on one Grace core,
-# assumed 1.3x slower per core here): 459 core-hours = 3.6 node-hours,
-# about 1.8 h on 2 node(s); walltime 03:00 leaves a 1.3x margin.
+# Cost from the Vista measurement of 2026-09-22 (62 s a volume on one Grace core,
+# assumed 1.3x slower per core here): 2,246 core-hours = 17.5 node-hours,
+# about 3.5 h on 5 node(s); walltime 05:00 leaves a 1.3x margin.
 
 export OMP_NUM_THREADS=1
 export NUMBA_NUM_THREADS=1
@@ -28,6 +28,6 @@ conda activate $WORK/conda_envs/resmill     # the env that has ResMill installed
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
-git merge-base --is-ancestor 3e71977 HEAD 2>/dev/null || { echo "this checkout does not contain ResMill 3e71977 (final engine and v2 configs); git pull"; exit 1; }
+git merge-base --is-ancestor a8bfbfd HEAD 2>/dev/null || { echo "this checkout does not contain ResMill a8bfbfd (v3 configs and the aggradation-ratio sampler); git pull"; exit 1; }
 
-srun --cpu-bind=cores python -m resmill.dataset.cli examples/dataset_generation/config_full_cb_labyrinth_v2.json
+srun --cpu-bind=cores python -m resmill.dataset.cli examples/dataset_generation/config_full_cb_labyrinth_v3.json

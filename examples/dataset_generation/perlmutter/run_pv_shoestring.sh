@@ -4,17 +4,17 @@
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=2
-#SBATCH -t 02:00:00
-#SBATCH -J resmill_pv_shoestring_v2
+#SBATCH -t 05:00:00
+#SBATCH -J resmill_pv_shoestring_v3
 #SBATCH --licenses=cfs,SCRATCH
 #SBATCH -A REPLACE_WITH_YOUR_ALLOCATION
 #SBATCH -o logs/%x-%j.out
 
-# v2 dataset, 100,000 pv_shoestring samples from ../config_full_pv_shoestring_v2.json (ResMill 3e71977 or later),
+# 100,000 pv_shoestring volumes of 128 x 128 x 64 from ../config_full_pv_shoestring_v3.json (v3), ResMill a8bfbfd or later,
 # on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
-# Cost from the Vista measurement of 2026-09-22 (3.4 s a cube on one Grace core,
-# assumed 1.3x slower per core here): 123 core-hours = 1.0 node-hours,
-# about 1.0 h on 1 node(s); walltime 02:00 leaves a 1.3x margin.
+# Cost from the Vista measurement of 2026-09-22 (13 s a volume on one Grace core,
+# assumed 1.3x slower per core here): 459 core-hours = 3.6 node-hours,
+# about 3.6 h on 1 node(s); walltime 05:00 leaves a 1.3x margin.
 
 export OMP_NUM_THREADS=1
 export NUMBA_NUM_THREADS=1
@@ -28,6 +28,6 @@ conda activate $WORK/conda_envs/resmill     # the env that has ResMill installed
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
-git merge-base --is-ancestor 3e71977 HEAD 2>/dev/null || { echo "this checkout does not contain ResMill 3e71977 (final engine and v2 configs); git pull"; exit 1; }
+git merge-base --is-ancestor a8bfbfd HEAD 2>/dev/null || { echo "this checkout does not contain ResMill a8bfbfd (v3 configs and the aggradation-ratio sampler); git pull"; exit 1; }
 
-srun --cpu-bind=cores python -m resmill.dataset.cli examples/dataset_generation/config_full_pv_shoestring_v2.json
+srun --cpu-bind=cores python -m resmill.dataset.cli examples/dataset_generation/config_full_pv_shoestring_v3.json

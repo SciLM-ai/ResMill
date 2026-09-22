@@ -3,18 +3,17 @@
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=144
 #SBATCH --cpus-per-task=1
-#SBATCH -t 01:30:00
-#SBATCH -J resmill_pv_shoestring
+#SBATCH -t 03:30:00
+#SBATCH -J resmill_pv_shoestring_v3
 #SBATCH -A CHE23004
 #SBATCH -o logs/%x-%j.out
 
-# 100,000 pv_shoestring samples from ../config_full_pv_shoestring_v2.json, ResMill 3e71977 or later, on TACC Vista gg
-# nodes (2 x 72 Grace cores, no SMT: 144 single-thread ranks per node).
-# Measured 2026-09-21 on warm processes with the node fully loaded, rows drawn
-# from the published dataset's own parameter table: 3.4 s per volume on one
-# core -> 94 core-hours = 0.7 node-hours; on 1 node(s) about
-# 0.7 h wall, walltime 01:30:00 gives a 1.3x margin. Each rank takes
-# every N-th job of the shuffled Sobol job list, so ranks finish together.
+# 100,000 pv_shoestring volumes of 128 x 128 x 64 from ../config_full_pv_shoestring_v3.json (v3: uncropped, depth 3-16 m,
+# levels from the aggradation ratio), ResMill a8bfbfd or later, on TACC Vista gg nodes
+# (2 x 72 Grace cores, no SMT: 144 single-thread ranks per node).
+# Measured 2026-09-22 on the 144-volume preview with the node fully loaded: 13 s per volume on one
+# core -> 353 core-hours = 2.4 node-hours at 144 ranks per node; on 1 node(s) about 2.4 h wall,
+# walltime 03:30 gives a 1.3x margin. Each rank takes every N-th job of the shuffled Sobol job list.
 
 export OMP_NUM_THREADS=1
 export NUMBA_NUM_THREADS=1
@@ -26,8 +25,8 @@ REPO=/work/08405/ilgar/vista/codes/ResMill_ls6
 PY=/work/08405/ilgar/vista/conda_libraries/resmill/bin/python
 cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
-git merge-base --is-ancestor 3e71977 HEAD 2>/dev/null || { echo "this checkout does not contain ResMill 3e71977 (final engine and v2 configs); check out main"; exit 1; }
+git merge-base --is-ancestor a8bfbfd HEAD 2>/dev/null || { echo "this checkout does not contain ResMill a8bfbfd (v3 configs and the aggradation-ratio sampler); git pull"; exit 1; }
 
 # env -u LD_PRELOAD: TACC's XALT preload brings its own libcrypto into rank 0 and pyarrow
 # then fails to import (OPENSSL_3.3.0 not found); measured on Vista 2026-09-22, rank 0 lost.
-srun --cpu-bind=cores env -u LD_PRELOAD "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_pv_shoestring_v2.json
+srun --cpu-bind=cores env -u LD_PRELOAD "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_pv_shoestring_v3.json
