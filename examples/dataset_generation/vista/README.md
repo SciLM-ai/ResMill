@@ -44,3 +44,36 @@ Output goes to `$SCRATCH/resmill_dataset/<env>/shard_r*_s*/` as set in each
 config's `output_dir` (rank shards: facies, poro, perm, params.parquet), then to
 the combined 256-shard layout. Failed samples, if any, are listed in
 `failures_r*.jsonl` per rank (the published run lost about 0.01%).
+
+## Throughput scaling
+
+Per-volume cost is flat as the node fills (lobe 1.8 s, PV 4.5 to 5.5 s,
+CB_LABYRINTH 14.5 to 15.4 s at 36, 72, 108 and 140 concurrent processes), so
+144 single-thread ranks per node is the maximum throughput; ResMill has no
+internal parallelism to trade against it.
+
+## The same counts at 128 x 128 x 64
+
+Simulated at 144 x 144 x 82 and cropped by the same margins, same 10 m cells and
+1 m layers (a 1.28 km x 1.28 km x 64 m box). Budgets scaled as the ResBench
+field generator does: channel event budgets by area (x3.24), delta generations
+by linear size (x1.8), channel levels by thickness (x1.64), lobe unchanged.
+Realized sand fractions stay close to the small volumes (MEANDER 0.43 vs 0.43,
+delta 0.38 vs 0.41, lobe 0.44 vs 0.48, CB_JIGSAW 0.42 vs 0.36, PV 0.21 vs 0.23);
+tune the budgets before a production run. Six real rows per environment (ten
+for lobe and PV), warm processes, node loaded:
+
+| environment | samples | s/volume | core-hours | node-hours |
+|---|---|---|---|---|
+| lobes | 200,000 | 9.7 | 539 | 3.7 |
+| pv_shoestring | 100,000 | 26.9 | 747 | 5.2 |
+| cb_labyrinth | 100,000 | 183.1 | 5,086 | 35.3 |
+| cb_jigsaw | 150,000 | 214.6 | 8,942 | 62.1 |
+| sh_distal | 100,000 | 341.9 | 9,497 | 66.0 |
+| sh_proximal | 100,000 | 237.1 | 6,586 | 45.7 |
+| meander_oxbow | 100,000 | 756.3 | 21,008 | 145.9 |
+| delta | 150,000 | 693.7 | 28,904 | 200.7 |
+| **total** | 1,000,000 | | **81,310** | **565** |
+
+About 565 gg node-hours, 188 SU at the 1/3 charge factor, roughly 10x the
+dataset size; MEANDER_OXBOW and delta are 62% of it at either size.
