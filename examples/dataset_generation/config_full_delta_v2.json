@@ -82,15 +82,15 @@
         },
         "mouth_bar_length_factor": {
           "range": [
-            1.2,
-            2.0
+            0.8,
+            1.4
           ],
-          "_comment_": "VARIED. Bar length relative to the tip's channel width."
+          "_comment_": "VARIED. Bar length relative to the channel width at the tip (bars sit at every channel end and every split)."
         },
         "mouth_bar_width_factor": {
           "range": [
-            1.2,
-            1.8
+            0.5,
+            0.9
           ]
         },
         "mouth_bar_hw_ratio": {
@@ -360,10 +360,10 @@
         },
         "branch_length_scale": {
           "range": [
-            0.35,
-            0.8
+            0.2,
+            0.5
           ],
-          "_comment_": "VARIED. A branch runs at most this x diagonal x sqrt(Q) before ending in a mouth bar."
+          "_comment_": "VARIED. Only terminal channels (share below q_min) stop by length: this x diagonal x sqrt(Q)."
         },
         "max_splits_per_branch": {
           "range": [
@@ -411,13 +411,19 @@
         },
         "branch_taper": {
           "range": [
-            0.5,
-            0.8
-          ],
-          "_comment_": "VARIED. Width at a branch's end relative to its start."
+            0.6,
+            0.9
+          ]
         },
         "y_split": {
           "value": true
+        },
+        "front_radius": {
+          "range": [
+            0.6,
+            1.6
+          ],
+          "_comment_": "VARIED. Delta front radius from the apex in units of the box length; below 1 the front, its mouth bars and the terminal channels are inside the cube, above 1 the cube is all delta plain."
         }
       }
     }

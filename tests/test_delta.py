@@ -116,7 +116,7 @@ def test_delta_tree_is_a_tree():
     splits happen beyond the trunk (order >= 2 exists), some branches end on
     the plain and some rejoin, and the channel presets are untouched."""
     layer = DeltaLayer(nx=64, ny=64, nz=32, x_len=640, y_len=640, z_len=32, top_depth=0)
-    layer.create_geology(seed=3, azimuth=0.0, bifurcate=True, n_trees=2, paint_mouth_bars=False)
+    layer.create_geology(seed=3, azimuth=0.0, bifurcate=True, n_trees=2, front_radius=0.8, paint_mouth_bars=False)
     tb = layer.tree_branches
     assert layer.active.sum() > 50
     assert max(b['order'] for b in tb) >= 2

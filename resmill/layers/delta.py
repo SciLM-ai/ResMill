@@ -97,6 +97,7 @@ DELTA_FAN = dict(
     y_split=True,
     branch_relax=0.5,
     branch_taper=0.7,
+    front_radius=1.5,
     merge_branches=True,
     width_exp=0.5, depth_exp=0.4,
 )

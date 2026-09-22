@@ -16,7 +16,11 @@
   (`y_split`), land near a segment's upstream end when `split_pos_exp` > 1,
   branches ease back toward the regional slope by `branch_relax`, taper to
   `branch_taper` of their start width, and their mouth bars are sized by
-  the tip's own width. `n_trees` networks per generation. Off by default; the published dataset is
+  the tip's own width. A branch runs to the delta front (`front_radius`
+  from the apex) or the grid edge and ends in a mouth bar; only terminal
+  channels (share below `q_min`) stop by a width-scaled length; a bar sits at
+  every bifurcation; with `n_trees` networks per generation the older ones are
+  abandoned and mud-filled with `mFFCHprop`. Off by default; the published dataset is
   unchanged. `examples/dataset_generation/config_full_delta_v2.json` is the
   dataset config for it. `layer.tree_branches` lists every segment.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);

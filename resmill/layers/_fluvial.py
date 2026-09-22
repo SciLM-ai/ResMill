@@ -200,6 +200,10 @@ class fluvial:
         # width at a branch's end relative to its start (discharge lost to
         # the plain and to unresolved splits along the way)
         branch_taper: float = 0.7,
+        # the delta front: a branch that gets this far from the apex, in
+        # units of the walk-frame x span, ends there in a mouth bar; > 1
+        # puts the front outside the grid (all of it is delta plain)
+        front_radius: float = 1.5,
         merge_branches: bool = True,
         width_exp: float = 0.5,
         depth_exp: float = 0.4,
@@ -315,6 +319,7 @@ class fluvial:
         self.y_split = bool(y_split)
         self.branch_relax = float(np.clip(branch_relax, 0.0, 1.0))
         self.branch_taper = float(np.clip(branch_taper, 0.1, 1.0))
+        self.front_radius = float(max(front_radius, 0.05))
         self.merge_branches = bool(merge_branches)
         self.width_exp = float(width_exp)
         self.depth_exp = float(depth_exp)
@@ -1515,7 +1520,7 @@ class fluvial:
                         if not self._draw_from_pool():
                             break
                         self.cal_curv()
-                    self._simulate_tree()
+                    self._simulate_tree(old=itree < self.n_trees - 1)
                 continue
 
             while ((self.ntg_counter[0] - ntg_at_level_start)
@@ -1597,8 +1602,12 @@ class fluvial:
 
     # ----------------------------------------------------------------- distributary tree
 
-    def _simulate_tree(self):
+    def _simulate_tree(self, old: bool = False):
         """Grow and stamp one distributary network for the current level.
+
+        ``old``: an earlier network of the level, abandoned when the next one
+        formed; its channels are stamped with the level's mud-fill fraction
+        (``mFFCHprop``) like any abandoned channel.
 
         Starts from the trunk just drawn from the pool, carrying discharge
         ``Q = 1``. Each of ``n_bifurcations`` splits picks a branch with
@@ -1628,9 +1637,17 @@ class fluvial:
         def half_of(q):
             return 0.5 * w0 * q ** self.width_exp
 
-        n = self.cx.size
-        branches = [dict(cx=self.cx.copy(), cy=self.cy.copy(), q=1.0, order=0, splits=0,
-                         protect=max(1, int(self.min_avul_node_frac * n)), tip=False, merged=False)]
+        # the delta front: a circle about the apex; a branch reaching it ends
+        # there in a mouth bar
+        apex = (float(self.cx[0]), float(self.cy[0]))
+        R_front = self.front_radius * (self.xmax - self.xmin)
+        tcx, tcy, at_front = self._cut_at_front(self.cx.copy(), self.cy.copy(), apex, R_front)
+        n = tcx.size
+        if n < 20:
+            return
+        branches = [dict(cx=tcx, cy=tcy, q=1.0, order=0, splits=0,
+                         protect=max(1, int(self.min_avul_node_frac * n)), tip=at_front, merged=False)]
+        bars = []                                          # (x, y, heading, width): a bar at every bifurcation
         reg = np.radians(450.0 - self.mCHazi)             # regional flow, walk frame, math radians
         lim = np.radians(80.0)
         for _ in range(self.n_bifurcations):
@@ -1662,12 +1679,17 @@ class fluvial:
             # the branch leaves at the full angle and eases back
             mean_math = reg + (1.0 - self.branch_relax) * ((child_math - reg + np.pi) % (2.0 * np.pi) - np.pi)
             chazi_child = (450.0 - np.degrees(mean_math)) % 360.0
-            cap = int(max(12, min(self.ndis_cap,
-                                  self.branch_length_scale * diag / self.step * np.sqrt(q_child))))
+            terminal = q_child < self.q_min
+            cap = int(max(12, min(self.ndis_cap, self.branch_length_scale * diag / self.step * np.sqrt(q_child)))) \
+                if terminal else int(self.ndis_cap)
             cx_t, cy_t = self._ar2_walk(float(pcx[k]), float(pcy[k]), chazi_child, chsinu, cap, azi0=launch)
             if cx_t is None or cx_t.size < 8:
                 continue
-            ended_on_plain = cx_t.size >= cap
+            ended_on_plain = terminal and cx_t.size >= cap
+            cx_t, cy_t, reached = self._cut_at_front(cx_t, cy_t, apex, R_front)
+            if cx_t.size < 8:
+                continue
+            ended_on_plain = ended_on_plain or reached
             hit = None
             if self.merge_branches:
                 hit = self._first_contact(branches, parent, cx_t, cy_t, half_of(q_child), half_of)
@@ -1690,15 +1712,17 @@ class fluvial:
                 d_math = reg + float(np.clip(d_off, -lim, lim))
                 d_launch = (450.0 - np.degrees(d_math)) % 360.0
                 d_mean = reg + (1.0 - self.branch_relax) * ((d_math - reg + np.pi) % (2.0 * np.pi) - np.pi)
-                d_cap = int(max(12, min(self.ndis_cap,
-                                        self.branch_length_scale * diag / self.step * np.sqrt(q_down))))
-                if parent['order'] == 0:
-                    d_cap = self.ndis_cap        # the trunk's own reach still runs to the edge
+                d_cap = int(self.ndis_cap)
                 dcx, dcy = self._ar2_walk(float(pcx[k]), float(pcy[k]), (450.0 - np.degrees(d_mean)) % 360.0,
                                           chsinu, d_cap, azi0=d_launch)
                 if dcx is not None and dcx.size >= 8:
-                    down = dict(cx=dcx, cy=dcy, q=q_down, order=parent['order'], protect=6,
-                                tip=bool(dcx.size >= d_cap and parent['order'] > 0), merged=False, splits=0)
+                    dcx, dcy, d_front = self._cut_at_front(dcx, dcy, apex, R_front)
+                    if dcx.size >= 8:
+                        down = dict(cx=dcx, cy=dcy, q=q_down, order=parent['order'], protect=6,
+                                    tip=bool(d_front), merged=False, splits=0)
+            # the bar that split the channel sits between the two branches: about
+            # half the parent's width, so record it as a tip of that width
+            bars.append((float(pcx[k]), float(pcy[k]), head, 1.0 * half_of(parent['q'])))
             branches[self._index_of(branches, parent)] = up
             branches.append(down)
             branches.append(dict(cx=cx_t, cy=cy_t, q=q_child, order=parent['order'] + 1, splits=0,
@@ -1722,7 +1746,10 @@ class fluvial:
                 continue
             self._set_branch(b, base_depth, base_wd)
             self.totalid += 1
-            self._stamp_channel(facies_code=CH, erode_above=False)
+            if old:
+                self._stamp_abandoned(_gauss_clip(self.mFFCHprop, self.stdevFFCHprop, lo=0.0, hi=1.0))
+            else:
+                self._stamp_channel(facies_code=CH, erode_above=False)
             lv_depth = _gauss_clip(self.mLVdepth, self.stdevLVdepth, lo=0.0)
             lv_width = _gauss_clip(self.mLVwidth, self.stdevLVwidth, lo=0.0)
             lv_height = _gauss_clip(self.mLVheight, self.stdevLVheight, lo=0.0)
@@ -1737,10 +1764,26 @@ class fluvial:
                 tip_half = float(self._chwidth_arr[-1]) if self._chwidth_arr is not None else self.CHhalfwidth
                 self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)),
                                          2.0 * tip_half))
+        for bx, by, bhead, bw in bars:
+            tx, ty = self._rot_xy(bx, by)
+            hx = np.cos(bhead) * self._cos_az + np.sin(bhead) * self._sin_az
+            hy = -np.cos(bhead) * self._sin_az + np.sin(bhead) * self._cos_az
+            self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)), float(bw)))
 
     @staticmethod
     def _index_of(branches, b):
         return next(i for i, x in enumerate(branches) if x is b)
+
+    @staticmethod
+    def _cut_at_front(cx, cy, apex, R):
+        """Truncate a walk at the delta front (distance R from the apex).
+        Returns (cx, cy, reached)."""
+        r = np.hypot(cx - apex[0], cy - apex[1])
+        beyond = np.flatnonzero(r >= R)
+        if beyond.size == 0:
+            return cx, cy, False
+        j = int(beyond[0])
+        return cx[:max(j, 2)], cy[:max(j, 2)], True
 
     @staticmethod
     def _reach_has_branches(branches, parent, pcx, pcy, k):
