@@ -30,4 +30,6 @@ cd "$REPO" || exit 1
 mkdir -p examples/dataset_generation/logs
 test "$(git rev-parse --short HEAD)" = fdd8511 || { echo "checkout ResMill fdd8511 first"; exit 1; }
 
-srun --cpu-bind=cores "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_delta_v2.json
+# env -u LD_PRELOAD: TACC's XALT preload brings its own libcrypto into rank 0 and pyarrow
+# then fails to import (OPENSSL_3.3.0 not found); measured on Vista 2026-09-22, rank 0 lost.
+srun --cpu-bind=cores env -u LD_PRELOAD "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_delta_v2.json

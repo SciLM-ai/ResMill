@@ -79,3 +79,13 @@ for lobe and PV), warm processes, node loaded:
 
 About 565 gg node-hours, 188 SU at the 1/3 charge factor, roughly 10x the
 dataset size; MEANDER_OXBOW and delta are 62% of it at either size.
+
+## Full-node check (2026-09-22)
+
+144 ranks on one gg node through the production CLI: 288 tree-delta cubes in
+32 s, 144 MEANDER_OXBOW cubes in 123 s, peak 0.25 GB per rank (lobe 0.37 GB),
+so a node uses well under 60 GB of its 237 GB. One thing bit: TACC's XALT
+`LD_PRELOAD` loads its own libcrypto into rank 0 and pyarrow's import then
+fails (`OPENSSL_3.3.0 not found`), losing that rank's samples. The scripts run
+python as `env -u LD_PRELOAD python -m resmill.dataset.cli`, which removes it;
+with that every rank reports and every sample is on disk.
