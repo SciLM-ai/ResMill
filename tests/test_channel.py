@@ -110,3 +110,23 @@ def test_reservoir_stacking_with_channel():
 
     res = Reservoir([g, c])
     assert res.poro_mat.shape == (64, 32, 16)
+
+
+def test_channel_several_entry_points():
+    """``n_sources=3``: three entry positions on the upstream edge, spaced by at
+    least ``source_spacing_min`` of the edge; ``n_sources=1`` is the default and
+    leaves the random stream untouched."""
+    import resmill as rm
+    from resmill.layers.channel import PV_SHOESTRING
+    kw = dict(PV_SHOESTRING)
+    a = rm.ChannelLayer(nx=64, ny=64, nz=32, x_len=640, y_len=640, z_len=32, top_depth=0)
+    a.create_geology(seed=5, azimuth=0.0, n_sources=3, **kw)
+    src = a._engine._sources
+    assert len(src) == 3
+    assert min(np.diff(sorted(src))) >= 0.15 * 640 - 1e-6
+    b = rm.ChannelLayer(nx=64, ny=64, nz=32, x_len=640, y_len=640, z_len=32, top_depth=0)
+    b.create_geology(seed=5, azimuth=0.0, **kw)
+    c = rm.ChannelLayer(nx=64, ny=64, nz=32, x_len=640, y_len=640, z_len=32, top_depth=0)
+    c.create_geology(seed=5, azimuth=0.0, n_sources=1, **kw)
+    assert np.array_equal(b.active, c.active)
+    assert c._engine._sources is None

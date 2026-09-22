@@ -163,6 +163,14 @@ class fluvial:
         # giving direct control over the angular fan-out between sibling
         # distributaries (used by DeltaLayer's ``branch_spread_deg``).
         stdev_branch_azi: float = 0.0,
+        # ---- several entry points (channel presets) --------------------
+        # ``n_sources`` > 1: that many sources are drawn along the upstream
+        # edge at simulation start, at least ``source_spacing_min`` of the
+        # edge apart and away from its ends, and every streamline enters at
+        # one of them (``mCHsource`` +- ``stdevCHsource`` becomes source +-
+        # ``stdevCHsource``). With the default 1 nothing changes.
+        n_sources: int = 1,
+        source_spacing_min: float = 0.15,
         # ---- distributary tree (DeltaLayer ``bifurcate`` mode) --------
         # When ``True`` a level is not an event loop but one branching
         # network grown from the level's trunk: ``n_bifurcations`` splits,
@@ -312,6 +320,9 @@ class fluvial:
         # Delta extensions (no-ops when at default values).
         self.min_avul_node_frac = float(np.clip(min_avul_node_frac, 0.0, 0.95))
         self.stdev_branch_azi = float(max(stdev_branch_azi, 0.0))
+        self.n_sources = int(max(n_sources, 1))
+        self.source_spacing_min = float(np.clip(source_spacing_min, 0.0, 0.5))
+        self._sources: list[float] | None = None
         self.bifurcate = bool(bifurcate)
         self.n_trees = int(max(n_trees, 1))
         self.n_bifurcations = int(max(n_bifurcations, 0))
@@ -573,6 +584,26 @@ class fluvial:
             return None
         return x0 + s_in * dx, y0 + s_in * dy
 
+    def _draw_sources(self):
+        """Draw ``n_sources`` entry positions along the upstream edge.
+
+        Positions are uniform over the middle 80% of everything the grid
+        spans perpendicular to the flow, at least ``source_spacing_min`` of
+        that span apart (rejection, up to 200 tries per source).
+        """
+        half = 0.5 * ((self.xmax - self.xmin) * abs(self._sin_az)
+                      + (self.ymax - self.ymin) * abs(self._cos_az))
+        lo, hi = self._pivot_y - 0.8 * half, self._pivot_y + 0.8 * half
+        gap = self.source_spacing_min * 2.0 * half
+        src = []
+        for _ in range(self.n_sources):
+            for _try in range(200):
+                y = float(np.random.uniform(lo, hi))
+                if all(abs(y - s) >= gap for s in src):
+                    src.append(y)
+                    break
+        self._sources = sorted(src)
+
     def _sample_streamline(self):
         """Sample (x0, y0, chazi, chsinu) per Alluvsim ``buildCHtable.for:73-88``.
 
@@ -588,7 +619,10 @@ class fluvial:
         dx, dy = float(np.cos(ang)), float(np.sin(ang))
         for _ in range(1000):
             if self.stdevCHsource > 0.0:
-                y0 = float(np.random.normal(self.mCHsource, self.stdevCHsource))
+                centre = self.mCHsource
+                if self._sources:
+                    centre = self._sources[int(np.random.randint(len(self._sources)))]
+                y0 = float(np.random.normal(centre, self.stdevCHsource))
                 y0 = float(np.clip(y0, self.ymin, self.ymax))
             else:
                 # Uniform over everything the grid spans perpendicular to the
@@ -1476,6 +1510,8 @@ class fluvial:
         # building the pool so the proximal trunk position matches.
         if self.mCHentry_x_offset_per_level is not None:
             self._entry_x_offset = float(self.mCHentry_x_offset_per_level[0])
+        if self.n_sources > 1:
+            self._draw_sources()
         # Build the streamline pool once at sim start (Alluvsim:702 buildCHtable)
         self._build_streamline_pool()
 

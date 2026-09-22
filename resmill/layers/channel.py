@@ -193,6 +193,7 @@ class ChannelLayer(Layer):
         mCHsinu: float = 1.6, stdevCHsinu: float = 0.15,
         mCHazi: float = 90.0, stdevCHazi: float = 1.0,
         mCHsource: float | None = None, stdevCHsource: float = 80.0,
+        n_sources: int = 1, source_spacing_min: float = 0.15,
         # ---- migration --------------------------------------------------
         mdistMigrate: float = 35.0, stdevdistMigrate: float = 10.0,
         # ---- levee (LV) — Alluvsim makepar central values --------------
@@ -270,6 +271,7 @@ class ChannelLayer(Layer):
             mCHsinu=mCHsinu, stdevCHsinu=stdevCHsinu,
             mCHazi=mCHazi, stdevCHazi=stdevCHazi,
             mCHsource=mCHsource, stdevCHsource=stdevCHsource,
+            n_sources=n_sources, source_spacing_min=source_spacing_min,
             mdistMigrate=mdistMigrate, stdevdistMigrate=stdevdistMigrate,
             mLVdepth=mLVdepth, stdevLVdepth=stdevLVdepth,
             mLVwidth=mLVwidth, stdevLVwidth=stdevLVwidth,

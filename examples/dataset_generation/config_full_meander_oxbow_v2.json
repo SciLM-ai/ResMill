@@ -1,0 +1,316 @@
+{
+  "_comment_": "v2: same as v1 plus n_sources, the number of entry points on the upstream edge (1, 1, 2 or 3: half the reservoirs a single valley outlet, the rest two or three coeval belts entering at different positions, all with the reservoir azimuth). Needs the ResMill commit that adds n_sources. MEANDER_OXBOW (resmill-only specialised preset) \u2014 single highly-sinuous channel per level, neck cutoffs deposit FFCH mud plugs in the abandoned oxbow loops, levels stack vertically as a multi-storey channel sandstone. The single-channel-per-level signature comes from the preset's stdevCHsource=1.0 (we KEEP that \u2014 do NOT override). See header of config_full_pv_shoestring.json for the comment-tag convention.",
+  "output_dir": "$SCRATCH/resmill_dataset/channels_meander_oxbow",
+  "seed": 42,
+  "shard_size": 1000,
+  "grid": {
+    "nx": 80,
+    "ny": 80,
+    "nz": 50,
+    "x_len": 800.0,
+    "y_len": 800.0,
+    "z_len": 50.0,
+    "_comment_dx_": "dx=dy=10m, dz=1m. OXBOW channels are ~55m wide -> 5-6 cells (W:D=11, depth=5m). Migration step ~3m -> 0.3 cells/event (very tight bends). 8 levels x 5m channel depth fills the 50m basin nicely.",
+    "top_depth": 5000.0,
+    "dip": 0.0,
+    "kzkx": 0.1,
+    "crop": {
+      "x": "8:-8",
+      "y": "8:-8",
+      "z": "9:-9"
+    }
+  },
+  "layers": {
+    "channel": {
+      "count": 100000,
+      "sampling": "sobol",
+      "params": {
+        "preset": {
+          "value": "MEANDER_OXBOW",
+          "_comment_": "Specialised preset: single highly sinuous channel per level, neck-cutoff oxbow loops painted as FFCH mud plugs. Keeps stdevCHsource=1 (single channel) and probAvul*=0 (no avulsion)."
+        },
+        "NTGtarget": {
+          "range": [
+            0.3,
+            0.9
+          ]
+        },
+        "mCHsinu": {
+          "range": [
+            1.4,
+            1.85
+          ],
+          "_comment_": "VARIED. Mean sinuosity. Preset baseline 1.5; high sinuosity is the whole signature, range covers tight to highly tortuous."
+        },
+        "mCHwdratio": {
+          "range": [
+            8.0,
+            14.0
+          ],
+          "_comment_": "VARIED. OXBOW W:D. Narrow meander belt."
+        },
+        "mCHdepth": {
+          "range": [
+            3.0,
+            10.0
+          ],
+          "_comment_": "VARIED. Channel depth (m). Range [3, 10] keeps deep stacks below half of z_len so several levels still fit (nlevel auto-tunes inversely)."
+        },
+        "mdistMigrate": {
+          "range": [
+            2.0,
+            5.0
+          ],
+          "_comment_": "VARIED. Migration distance per event (m). Preset baseline 3. Tight migration -> tight bends -> neck cutoffs."
+        },
+        "mNeckFFCHprop": {
+          "range": [
+            0.3,
+            0.7
+          ],
+          "_comment_": "VARIED. Fraction of upper channel column painted as FFCH mud plug at neck-cutoff. Preset baseline 0.5 \u2014 distinctive feature of OXBOW preset."
+        },
+        "azimuth": {
+          "range": [
+            0,
+            360
+          ],
+          "_comment_": "VARIED. Flow direction (deg, clockwise from +x). Channels are not 180-symmetric so the full circle matters."
+        },
+        "probAvulInside": {
+          "value": 0.0,
+          "_comment_": "FIXED at preset baseline. Must stay 0 to keep single-channel-per-level. Varying breaks the OXBOW signature."
+        },
+        "probAvulOutside": {
+          "value": 0.0,
+          "_comment_": "FIXED at preset baseline. Must stay 0 (no out-of-belt avulsion either)."
+        },
+        "mFFCHprop": {
+          "value": 0.0,
+          "_comment_": "FIXED at preset baseline. Mud plugs are handled by mNeckFFCHprop instead."
+        },
+        "stdevCHsource": {
+          "value": 1.0,
+          "_comment_": "FIXED at preset baseline 1.0 (NOT class default 80). This is what restricts each level to a single deterministic channel \u2014 the OXBOW signature. DO NOT change."
+        },
+        "mCSnum": {
+          "value": 0.0,
+          "_comment_": "splays disabled \u2014 adds visual complexity without diagnostic value; future versions can re-enable."
+        },
+        "stdevCSnum": {
+          "value": 0.0,
+          "_comment_": "splays off."
+        },
+        "mCSnumlobe": {
+          "value": 0.0,
+          "_comment_": "FIXED at preset baseline."
+        },
+        "stdevCSnumlobe": {
+          "value": 0.0,
+          "_comment_": "FIXED at preset baseline."
+        },
+        "nlevel": {
+          "inverse_of": "mCHdepth",
+          "scale": 50.0,
+          "min": 2,
+          "max": 12,
+          "type": "int",
+          "_comment_": "AUTO. nlevel = clip(50 / mCHdepth, 2, 12). Deeper channels stack fewer levels; shallower stack more \u2014 basin always full."
+        },
+        "level_z": {
+          "value": null,
+          "_comment_": "skip \u2014 class default. Engine spreads 8 levels evenly across nz*dz=50m."
+        },
+        "ntime": {
+          "value": 150
+        },
+        "ntime_per_level": {
+          "value": true,
+          "_comment_": "TRUE so every level gets its own event budget (independent of how many lower levels consumed). Without this, deep levels starve when NTGtarget=0.99 stops never firing."
+        },
+        "stdevCHsinu": {
+          "value": 0.03,
+          "_comment_": "skip \u2014 preset default. Override of class 0.15 -> 0.03 (tight sinuosity distribution)."
+        },
+        "stdevCHdepth": {
+          "value": 0.3,
+          "_comment_": "skip \u2014 preset default. Override of class 0.4 -> 0.3."
+        },
+        "stdevCHdepth2": {
+          "value": 0.3,
+          "_comment_": "skip \u2014 class default."
+        },
+        "stdevCHwdratio": {
+          "value": 0.5,
+          "_comment_": "skip \u2014 preset default. Override of class 1.0 -> 0.5."
+        },
+        "stdevdistMigrate": {
+          "value": 0.6,
+          "_comment_": "skip \u2014 preset default. Override of class 10 -> 0.6 (tight migration distribution)."
+        },
+        "mCHazi": {
+          "value": 90.0,
+          "_comment_": "skip \u2014 class default."
+        },
+        "stdevCHazi": {
+          "value": 1.0,
+          "_comment_": "skip \u2014 class default."
+        },
+        "mCHsource": {
+          "value": null,
+          "_comment_": "skip \u2014 class default."
+        },
+        "mLVdepth": {
+          "value": 0.8,
+          "_comment_": "skip \u2014 preset default. Override of class 1.0 -> 0.8."
+        },
+        "stdevLVdepth": {
+          "value": 0.1,
+          "_comment_": "skip \u2014 preset default. Override of class 0.2 -> 0.1."
+        },
+        "mLVwidth": {
+          "value": 40.0,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "stdevLVwidth": {
+          "value": 5.0,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "mLVheight": {
+          "value": 0.5,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "stdevLVheight": {
+          "value": 0.05,
+          "_comment_": "skip \u2014 preset default. Override of class 0.1 -> 0.05."
+        },
+        "mLVasym": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 preset default. Override of class 0.3 -> 0.0 (symmetric levees)."
+        },
+        "stdevLVasym": {
+          "value": 0.1,
+          "_comment_": "skip \u2014 class default."
+        },
+        "mLVthin": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 preset default. Override of class 0.3 -> 0.0."
+        },
+        "stdevLVthin": {
+          "value": 0.1,
+          "_comment_": "skip \u2014 class default."
+        },
+        "mCSsource": {
+          "value": 50.0,
+          "_comment_": "skip \u2014 class default. Unused (mCSnum=0)."
+        },
+        "stdevCSsource": {
+          "value": 20.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOLL": {
+          "value": 200.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOLL": {
+          "value": 50.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOWW": {
+          "value": 30.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOWW": {
+          "value": 10.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOl": {
+          "value": 100.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOl": {
+          "value": 20.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLOw": {
+          "value": 20.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLOw": {
+          "value": 10.0,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLO_hwratio": {
+          "value": 0.03,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLO_hwratio": {
+          "value": 0.01,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "mCSLO_dwratio": {
+          "value": 0.02,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevCSLO_dwratio": {
+          "value": 0.005,
+          "_comment_": "skip \u2014 class default. Unused."
+        },
+        "stdevFFCHprop": {
+          "value": 0.0,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "Cf": {
+          "value": 0.0036,
+          "_comment_": "skip \u2014 preset default. Override of class 0.0078 -> 0.0036."
+        },
+        "scour_factor": {
+          "value": 10.0,
+          "_comment_": "skip \u2014 preset default. Override of class 2.0 -> 10.0."
+        },
+        "gradient": {
+          "value": 0.001,
+          "_comment_": "skip \u2014 preset default (also class default)."
+        },
+        "Q": {
+          "value": 3.256,
+          "_comment_": "skip \u2014 preset default. Override of class 5.0 -> 3.256 (matches Pyrcz tutorial Showcase B hydraulics)."
+        },
+        "CHndraw": {
+          "value": 50,
+          "_comment_": "skip \u2014 class default."
+        },
+        "ndiscr": {
+          "value": 5,
+          "_comment_": "skip \u2014 class default."
+        },
+        "nCHcor": {
+          "value": 10,
+          "_comment_": "skip \u2014 class default."
+        },
+        "poro_realization_mult": {
+          "range": [
+            0.7,
+            1.3
+          ]
+        },
+        "perm_realization_mult": {
+          "range": [
+            0.1,
+            10.0
+          ],
+          "scale": "log"
+        },
+        "n_sources": {
+          "choices": [
+            1,
+            1,
+            2,
+            3
+          ],
+          "_comment_": "VARIED. Entry points on the upstream edge; sources at least 15% of the edge apart."
+        }
+      }
+    }
+  }
+}

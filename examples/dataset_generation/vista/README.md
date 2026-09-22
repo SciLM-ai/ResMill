@@ -1,7 +1,9 @@
 # Regenerating the dataset on TACC Vista (gg partition)
 
-Same configs, same Sobol seed 42, same job list as the published dataset
-(REPRODUCIBILITY.md); only the engine changes, to ResMill `fdd8511`, which fixes
+Same Sobol seed 42 and ranges as the published dataset (REPRODUCIBILITY.md),
+with two additions in the v2 configs: channels sample `n_sources` (entry
+points, {1, 1, 2, 3}) and the delta is the distributary tree
+(`config_full_delta_v2.json`). The engine also changes, to ResMill `fdd8511`, which fixes
 the three fluvial-walker defects listed in CHANGELOG.md. Every row keeps its
 parameters and seed, so downstream selections by (shard, index) stay valid once
 the shards are combined the same way.

@@ -8,7 +8,7 @@
 #SBATCH -A CHE23004
 #SBATCH -o logs/%x-%j.out
 
-# 100,000 pv_shoestring samples from ../config_full_pv_shoestring.json, ResMill fdd8511, on TACC Vista gg
+# 100,000 pv_shoestring samples from ../config_full_pv_shoestring_v2.json, ResMill fdd8511, on TACC Vista gg
 # nodes (2 x 72 Grace cores, no SMT: 144 single-thread ranks per node).
 # Measured 2026-09-21 on warm processes with the node fully loaded, rows drawn
 # from the published dataset's own parameter table: 3.4 s per volume on one
@@ -30,4 +30,4 @@ test "$(git rev-parse --short HEAD)" = fdd8511 || { echo "checkout ResMill fdd85
 
 # env -u LD_PRELOAD: TACC's XALT preload brings its own libcrypto into rank 0 and pyarrow
 # then fails to import (OPENSSL_3.3.0 not found); measured on Vista 2026-09-22, rank 0 lost.
-srun --cpu-bind=cores env -u LD_PRELOAD "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_pv_shoestring.json
+srun --cpu-bind=cores env -u LD_PRELOAD "$PY" -m resmill.dataset.cli examples/dataset_generation/config_full_pv_shoestring_v2.json
