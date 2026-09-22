@@ -200,10 +200,17 @@ class fluvial:
         # width at a branch's end relative to its start (discharge lost to
         # the plain and to unresolved splits along the way)
         branch_taper: float = 0.7,
-        # the delta front: a branch that gets this far from the apex, in
-        # units of the walk-frame x span, ends there in a mouth bar; > 1
-        # puts the front outside the grid (all of it is delta plain)
+        # the delta front. A branch ends where its own lobe ends, at
+        # ``front_radius * (1 + front_bulge * sqrt(Q)) * exp(N(0, front_jitter))``
+        # walk-frame x spans from the apex: bigger channels prograde further,
+        # so the shoreline is scalloped (large ``front_bulge``: bird's foot).
+        # ``front_radius`` > 1 puts the front outside the grid and channels
+        # run through to the edges. At every terminus the jet drops a mouth
+        # bar and the channel splits around it into two short terminal
+        # channels with bars of their own (the mouth-bar complex).
         front_radius: float = 1.5,
+        front_bulge: float = 0.3,
+        front_jitter: float = 0.1,
         merge_branches: bool = True,
         width_exp: float = 0.5,
         depth_exp: float = 0.4,
@@ -320,6 +327,8 @@ class fluvial:
         self.branch_relax = float(np.clip(branch_relax, 0.0, 1.0))
         self.branch_taper = float(np.clip(branch_taper, 0.1, 1.0))
         self.front_radius = float(max(front_radius, 0.05))
+        self.front_jitter = float(max(front_jitter, 0.0))
+        self.front_bulge = float(max(front_bulge, 0.0))
         self.merge_branches = bool(merge_branches)
         self.width_exp = float(width_exp)
         self.depth_exp = float(depth_exp)
@@ -1641,7 +1650,12 @@ class fluvial:
         # there in a mouth bar
         apex = (float(self.cx[0]), float(self.cy[0]))
         R_front = self.front_radius * (self.xmax - self.xmin)
-        tcx, tcy, at_front = self._cut_at_front(self.cx.copy(), self.cy.copy(), apex, R_front)
+
+        def front(q):                                      # where this branch's lobe ends
+            jit = float(np.exp(np.random.normal(0.0, self.front_jitter))) if self.front_jitter > 0 else 1.0
+            return R_front * (1.0 + self.front_bulge * np.sqrt(q)) * jit
+
+        tcx, tcy, at_front = self._cut_at_front(self.cx.copy(), self.cy.copy(), apex, front(1.0))
         n = tcx.size
         if n < 20:
             return
@@ -1686,7 +1700,7 @@ class fluvial:
             if cx_t is None or cx_t.size < 8:
                 continue
             ended_on_plain = terminal and cx_t.size >= cap
-            cx_t, cy_t, reached = self._cut_at_front(cx_t, cy_t, apex, R_front)
+            cx_t, cy_t, reached = self._cut_at_front(cx_t, cy_t, apex, front(q_child))
             if cx_t.size < 8:
                 continue
             ended_on_plain = ended_on_plain or reached
@@ -1716,7 +1730,7 @@ class fluvial:
                 dcx, dcy = self._ar2_walk(float(pcx[k]), float(pcy[k]), (450.0 - np.degrees(d_mean)) % 360.0,
                                           chsinu, d_cap, azi0=d_launch)
                 if dcx is not None and dcx.size >= 8:
-                    dcx, dcy, d_front = self._cut_at_front(dcx, dcy, apex, R_front)
+                    dcx, dcy, d_front = self._cut_at_front(dcx, dcy, apex, front(q_down))
                     if dcx.size >= 8:
                         down = dict(cx=dcx, cy=dcy, q=q_down, order=parent['order'], protect=6,
                                     tip=bool(d_front), merged=False, splits=0)
@@ -1739,6 +1753,24 @@ class fluvial:
                     branches[self._index_of(branches, recv)] = r_up
                     branches.append(r_down)
 
+        # mouth-bar complex: a channel that reached its front splits around its
+        # bar into two short terminal channels, each ending in a smaller bar
+        fringe = []
+        for b in branches:
+            if not b['tip'] or b['cx'].size < 4 or 2.0 * half_of(b['q']) < 2.0 * self.step:
+                continue
+            ex, ey = float(b['cx'][-1]), float(b['cy'][-1])
+            h = float(np.arctan2(b['cy'][-1] - b['cy'][-3], b['cx'][-1] - b['cx'][-3]))
+            for side in (-1.0, 1.0):
+                th = np.radians(float(np.clip(np.random.normal(35.0, 10.0), 15.0, 60.0)))
+                m = h + side * th
+                q_t = 0.5 * b['q']
+                cap = int(max(6, 3.0 * 2.0 * half_of(b['q']) / self.step))
+                tcx2, tcy2 = self._ar2_walk(ex, ey, (450.0 - np.degrees(m)) % 360.0, chsinu, cap)
+                if tcx2 is not None and tcx2.size >= 4:
+                    fringe.append(dict(cx=tcx2, cy=tcy2, q=q_t, order=b['order'] + 1, splits=self.max_splits_per_branch,
+                                       protect=0, tip=True, merged=False))
+        branches.extend(fringe)
         self.tree_branches.extend(dict(order=b['order'], q=b['q'], n=int(b['cx'].size),
                                        tip=b['tip'], merged=b['merged']) for b in branches)
         for b in sorted(branches, key=lambda b: -b['q']):

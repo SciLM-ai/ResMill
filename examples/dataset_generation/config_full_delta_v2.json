@@ -420,10 +420,20 @@
         },
         "front_radius": {
           "range": [
-            0.6,
+            0.7,
             1.6
           ],
-          "_comment_": "VARIED. Delta front radius from the apex in units of the box length; below 1 the front, its mouth bars and the terminal channels are inside the cube, above 1 the cube is all delta plain."
+          "_comment_": "VARIED. Base front distance from the apex in box lengths: below 1 the front is inside the cube (lobes, bars, prodelta beyond), above 1 the cube is plain and channels run to its edges. It progrades with progradation_fraction."
+        },
+        "front_jitter": {
+          "value": 0.1
+        },
+        "front_bulge": {
+          "range": [
+            0.1,
+            0.6
+          ],
+          "_comment_": "VARIED. How much further a big channel progrades than a small one: 0.1 smooth arcuate front, 0.6 bird's foot."
         }
       }
     }

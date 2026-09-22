@@ -98,6 +98,8 @@ DELTA_FAN = dict(
     branch_relax=0.5,
     branch_taper=0.7,
     front_radius=1.5,
+    front_bulge=0.3,
+    front_jitter=0.1,
     merge_branches=True,
     width_exp=0.5, depth_exp=0.4,
 )
@@ -332,6 +334,11 @@ class DeltaLayer(ChannelLayer):
         for igen in range(n_generations):
             chelev = float(chelev_per_gen[igen])
             gen_seed = None if seed is None else int(seed) + igen
+            cfg_gen = dict(cfg)
+            if cfg.get('bifurcate') and progradation_fraction > 0.0 and n_generations > 1:
+                # the front progrades: each generation's lobes end further out
+                cfg_gen['front_radius'] = float(cfg.get('front_radius', 1.5)) * (
+                    1.0 + progradation_fraction * igen / (n_generations - 1))
             engine = fluvial(
                 nx=nx_, ny=ny_, nz=nz_,
                 xsiz=self.dx, ysiz=self.dy, zsiz=self.dz,
@@ -340,7 +347,7 @@ class DeltaLayer(ChannelLayer):
                 A=scour_factor, I=gradient,
                 min_avul_node_frac=float(trunk_per_gen[igen]),
                 seed=gen_seed,
-                **cfg,
+                **cfg_gen,
             )
             engine.simulation()
             # Cells where this generation outranks the accumulated facies
