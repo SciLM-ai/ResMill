@@ -91,13 +91,30 @@ Each rank buffers one shard in memory before writing it, and a 128 x 128 x 64
 sample is 6 MB, so the configs use `shard_size` 32 (192 MB per rank); v1's
 1000 would need 6 GB per rank and OOM every node.
 
-## After the eight jobs
+## After the eight jobs: windows, combined shards, staging, splits
+
+The raw shards hold whole 128 x 128 x 64 volumes. The training dataset is one
+random 64 x 64 x 32 window per volume; the raw volumes stay on scratch as the
+context around each window. Four deterministic steps, all from the repo root
+with the ResMill env active:
 
 ```bash
 cd examples/dataset_generation
-python combine_shards.py --root $SCRATCH/resmill_dataset_v2 --target 256 --workers 32
+# 1. one window per volume (origin from crop_seed 42 and the sample seed; z0 in 1..31),
+#    same shard layout, ntg / poro_ave / perm_ave / caption recomputed on the window
+python crop_windows.py --src $SCRATCH/resmill_dataset_v2 --dst $SCRATCH/resmill_dataset_v2_win64 --workers 96 --verify
+# 2. eight 32-sample rank shards -> one combined shard of up to 256 samples, counts verified
+python combine_shards.py --root $SCRATCH/resmill_dataset_v2_win64 --group 8 --workers 64
+# 3. HuggingFace layout: <layer type>/shard_NNNN symlinks to the combined shards
+python stage_dataset.py --src $SCRATCH/resmill_dataset_v2_win64 --dst $SCRATCH/SiliciclasticReservoirs_v2
+# 4. 90 / 5 / 5 splits stratified by layer type, seed 42
 python build_splits.py --root $SCRATCH/SiliciclasticReservoirs_v2 --out $SCRATCH/SiliciclasticReservoirs_v2/splits --seed 42 --train-frac 0.90 --val-frac 0.05
 ```
+
+Every window's parquet row carries `crop_x0, crop_y0, crop_z0, source_shard,
+source_row`, so the full volume around it is
+`$SCRATCH/resmill_dataset_v2/<preset>/<source_shard>` row `source_row`.
+Disk: raw volumes 5.8 TB, windows and their combined copy 0.7 TB each.
 
 Output goes to `$SCRATCH/resmill_dataset_v2/<env>/` as set by each config's
 `output_dir`. A 128 x 128 x 64 volume is 8 x the cells of a 64-cube, so the

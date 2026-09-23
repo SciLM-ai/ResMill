@@ -287,7 +287,7 @@ File issues at [`anonymous.4open.science/r/ResMill-7377`](https://anonymous.4ope
 
 ---
 
-## 3. The v2 dataset (2026-09)
+## 4. The v2 dataset (2026-09)
 
 v2 is a redesign, not a re-run of v1: 128 x 128 x 64 volumes (dx = dy = 10 m,
 dz = 1 m, lobes dx = 100 m) stored whole, with random 64 x 64 x 32 training
@@ -299,6 +299,17 @@ delta; correlated porosity texture inside sand; and the fixed engine (entries on
 the grid boundary, walk clipped by the grid). The configs are
 `examples/dataset_generation/config_full_<env>_v2.json`; the Sobol seed and the
 sample counts are v1's. Launch scripts and measured costs: `vista/` (TACC Vista,
-about 33 gg node-hours in total) and `perlmutter/` (NERSC). The original
-`run_*.sh` in this directory are the Perlmutter scripts that produced v1 and are
-kept for the record.
+33 gg node-hours measured for the whole run) and `perlmutter/` (NERSC). The
+original `run_*.sh` in this directory are the Perlmutter scripts that produced
+v1 and are kept for the record.
+
+Post-processing (the `vista/README.md` has the exact commands): `crop_windows.py`
+cuts one random 64 x 64 x 32 window per volume (origin from `crop_seed` 42 and
+the sample seed, window base between 1 and 31 so it never contains the engine's
+floor or roof) into a second shard tree with the same names and recomputes
+`ntg`, `poro_ave`, `perm_ave` and the caption on the window; `combine_shards.py
+--group 8` merges eight 32-sample rank shards into one combined shard;
+`stage_dataset.py` builds the HuggingFace layout of per-layer-type `shard_NNNN`
+symlinks; `build_splits.py` writes the 90/5/5 splits. The window rows keep
+`crop_x0, crop_y0, crop_z0, source_shard, source_row`, so the raw 128 x 128 x 64
+volume around any window is recoverable.

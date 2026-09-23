@@ -103,24 +103,28 @@ def _concat_one_group(args):
     return group_idx, sum(per_shard_counts), per_shard_counts
 
 
-def combine_preset(preset_dir: Path, target_n: int, out_dir: Path,
-                   workers: int, dry_run: bool):
+def combine_preset(preset_dir: Path, target_n, out_dir: Path,
+                   workers: int, dry_run: bool, group: int | None = None):
     rank_shards = list_rank_shards(preset_dir)
     n_rank = len(rank_shards)
-    if n_rank % target_n != 0:
-        raise RuntimeError(
-            f"{preset_dir.name}: {n_rank} rank shards not divisible by "
-            f"target {target_n}"
-        )
-    group_size = n_rank // target_n
+    if group is not None:
+        group_size = int(group)
+        target_n = (n_rank + group_size - 1) // group_size
+    else:
+        if n_rank % target_n != 0:
+            raise RuntimeError(
+                f"{preset_dir.name}: {n_rank} rank shards not divisible by "
+                f"target {target_n}"
+            )
+        group_size = n_rank // target_n
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"  rank shards: {n_rank}  →  combined: {target_n}  (group={group_size})")
 
     tasks = []
     for g in range(target_n):
-        group = rank_shards[g * group_size : (g + 1) * group_size]
-        tasks.append((g, group, str(out_dir), dry_run))
+        group_paths = rank_shards[g * group_size : (g + 1) * group_size]
+        tasks.append((g, group_paths, str(out_dir), dry_run))
 
     t0 = time.perf_counter()
     total_combined = 0
@@ -186,8 +190,11 @@ def verify(preset_dir: Path, out_dir: Path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="$SCRATCH/resmill_dataset")
-    ap.add_argument("--target", type=int, default=256,
-                    help="target number of combined shards per preset")
+    ap.add_argument("--target", type=int, default=None,
+                    help="number of combined shards per preset (rank-shard count must divide by it)")
+    ap.add_argument("--group", type=int, default=None,
+                    help="alternative to --target: rank shards per combined shard (8 x 32-sample "
+                         "rank shards = 256-sample combined shards); the last group may be smaller")
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--out-suffix", default="_combined")
     ap.add_argument("--dry-run", action="store_true",
@@ -197,9 +204,11 @@ def main():
     args = ap.parse_args()
 
     root = Path(os.path.expandvars(os.path.expanduser(args.root)))
-    all_presets = ["lobes", "channels_pv_shoestring", "channels_cb_labyrinth",
-                   "channels_cb_jigsaw", "channels_sh_distal",
-                   "channels_sh_proximal", "channels_meander_oxbow", "delta"]
+    # v2 preset directories (v1 used channels_<preset>; pass --presets for those)
+    all_presets = ["lobes", "pv_shoestring", "cb_labyrinth", "cb_jigsaw", "sh_distal",
+                   "sh_proximal", "meander_oxbow", "delta"]
+    if (args.target is None) == (args.group is None):
+        ap.error("give exactly one of --target or --group")
     presets = args.presets if args.presets else all_presets
 
     grand_total = 0
@@ -210,7 +219,7 @@ def main():
             print(f"SKIP {p}: {in_dir} does not exist")
             continue
         print(f"\n=== {p} ===")
-        n = combine_preset(in_dir, args.target, out_dir, args.workers, args.dry_run)
+        n = combine_preset(in_dir, args.target, out_dir, args.workers, args.dry_run, args.group)
         if not args.dry_run:
             verify(in_dir, out_dir)
         grand_total += n
