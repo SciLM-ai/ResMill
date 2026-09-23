@@ -24,11 +24,16 @@ MIN_SAND_CELLS = 1
 
 
 def window_origin(crop_seed: int, sample_seed: int, shape, win=WINDOW, z_min: int = Z_MIN,
-                  facies=None, min_sand_cells: int = MIN_SAND_CELLS, max_tries: int = 64):
-    """Origin ``(x0, y0, z0)`` of the window of one sample; see the module doc."""
+                  facies=None, min_sand_cells: int = MIN_SAND_CELLS, max_tries: int = 64, k: int = 0):
+    """Origin ``(x0, y0, z0)`` of the window of one sample; see the module doc.
+
+    ``k`` = 0 is the dataset's window. ``k`` >= 1 are further windows of the
+    same volume, drawn the same way from ``default_rng([crop_seed, seed, k])``;
+    the dataset never stores them, but reference builders that need many
+    windows per parameter row (ResBench's well pools) use them."""
     nx, ny, nz = shape
     wx, wy, wz = win
-    rng = np.random.default_rng([int(crop_seed), int(sample_seed)])
+    rng = np.random.default_rng([int(crop_seed), int(sample_seed)] + ([int(k)] if k else []))
     for _ in range(max_tries):
         x0 = int(rng.integers(0, nx - wx + 1))
         y0 = int(rng.integers(0, ny - wy + 1))
@@ -47,8 +52,9 @@ def cut(volume, origin, win=WINDOW):
     return np.ascontiguousarray(volume[x0:x0 + wx, y0:y0 + wy, z0:z0 + wz])
 
 
-def dataset_window(facies, sample_seed: int, crop_seed: int = CROP_SEED, win=WINDOW):
+def dataset_window(facies, sample_seed: int, crop_seed: int = CROP_SEED, win=WINDOW, k: int = 0):
     """Origin and facies window of an engine volume exactly as the dataset
-    would store it for a sample with this seed."""
-    origin = window_origin(crop_seed, sample_seed, facies.shape, win, Z_MIN, facies, MIN_SAND_CELLS)
+    would store it for a sample with this seed (``k`` = 0), or the k-th extra
+    window of that volume."""
+    origin = window_origin(crop_seed, sample_seed, facies.shape, win, Z_MIN, facies, MIN_SAND_CELLS, k=k)
     return origin, cut(facies, origin, win)
