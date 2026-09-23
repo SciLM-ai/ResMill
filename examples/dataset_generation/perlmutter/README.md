@@ -5,7 +5,7 @@ Same eight jobs as `../vista/`, with Perlmutter headers: `-C cpu`, `-q regular`
 the v1 run used, `--licenses=cfs,SCRATCH`, and `-A REPLACE_WITH_YOUR_ALLOCATION`
 to fill in. Each script activates `$WORK/conda_envs/resmill`, the env the v1
 scripts used; if yours lives elsewhere, edit that line. Every script refuses
-to run unless the checkout contains ResMill `5bf93ad`, so `git pull` first.
+to run unless the checkout contains ResMill `adf8c29`, so `git pull` first.
 
 ```bash
 cd $WORK/codes/ResMill && git pull                     # or wherever the repo is
@@ -16,7 +16,7 @@ for j in perlmutter/run_*.sh; do sbatch "$j"; done     # 8 independent jobs
 
 ## What v3 is
 
-Eight `config_full_<env>_v3.json` files (ResMill `5bf93ad` or later):
+Eight `config_full_<env>_v3.json` files (ResMill `adf8c29` or later):
 
 - **128 x 128 x 64 cells, stored whole.** dx = dy = 10 m, dz = 1 m (lobes keep
   dx = 100 m), so 1280 x 1280 x 64 m, no crop. Training takes random
@@ -66,17 +66,17 @@ cores and another 1.3 x in the walltime. Perlmutter nodes have 512 GB, so the
 
 | job | volumes | s per volume | core-hours | node-hours | nodes x walltime |
 |---|---|---|---|---|---|
-| run_lobes.sh | 200,000 | 7 | 491 | 3.8 | 1 x 05:00 |
-| run_pv_shoestring.sh | 100,000 | 14 | 506 | 3.9 | 1 x 05:30 |
-| run_cb_labyrinth.sh | 100,000 | 71 | 2,564 | 20.0 | 6 x 04:30 |
-| run_cb_jigsaw.sh | 150,000 | 86 | 4,675 | 36.5 | 10 x 05:00 |
-| run_sh_distal.sh | 100,000 | 126 | 4,536 | 35.4 | 9 x 05:30 |
-| run_sh_proximal.sh | 100,000 | 107 | 3,864 | 30.2 | 8 x 05:00 |
-| run_meander_oxbow.sh | 100,000 | 427 | 15,412 | 120.4 | 31 x 05:30 |
-| run_delta.sh | 150,000 | 19 | 1,013 | 7.9 | 2 x 05:30 |
-| **total** | 1,000,000 | | **33,060** | **258** | |
+| run_lobes.sh | 200,000 | 6 | 455 | 3.6 | 1 x 05:00 |
+| run_pv_shoestring.sh | 100,000 | 5 | 177 | 1.4 | 1 x 02:00 |
+| run_cb_labyrinth.sh | 100,000 | 13 | 459 | 3.6 | 1 x 05:00 |
+| run_cb_jigsaw.sh | 150,000 | 16 | 861 | 6.7 | 2 x 04:30 |
+| run_sh_distal.sh | 100,000 | 21 | 755 | 5.9 | 2 x 04:00 |
+| run_sh_proximal.sh | 100,000 | 18 | 654 | 5.1 | 2 x 03:30 |
+| run_meander_oxbow.sh | 100,000 | 56 | 2,019 | 15.8 | 4 x 05:30 |
+| run_delta.sh | 150,000 | 11 | 612 | 4.8 | 2 x 03:30 |
+| **total** | 1,000,000 | | **5,991** | **47** | |
 
-About 258 Perlmutter node-hours at the regular QOS.
+About 47 Perlmutter node-hours at the regular QOS.
 
 ## After the eight jobs
 

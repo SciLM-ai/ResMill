@@ -9,12 +9,12 @@ cd examples/dataset_generation
 for j in vista/run_*.sh; do sbatch "$j"; done
 ```
 
-Every script refuses to run unless the checkout contains ResMill `5bf93ad`
+Every script refuses to run unless the checkout contains ResMill `adf8c29`
 (the v3 configs and the aggradation-ratio sampler).
 
 ## What v3 is
 
-Eight `config_full_<env>_v3.json` files (ResMill `5bf93ad` or later):
+Eight `config_full_<env>_v3.json` files (ResMill `adf8c29` or later):
 
 - **128 x 128 x 64 cells, stored whole.** dx = dy = 10 m, dz = 1 m (lobes keep
   dx = 100 m), so 1280 x 1280 x 64 m, no crop. Training takes random
@@ -58,26 +58,29 @@ Preview: `/scratch/08405/ilgar/resmill_preview144/preview144_v5_perm.pdf`
 ## Cost (measured 2026-09-22)
 
 Per-volume times are the mean rank wall time of the 144-volume preview, 18
-ranks per environment through `resmill.dataset.cli`, cold Numba JIT included.
+ranks per environment through `resmill.dataset.cli`, cold Numba JIT included,
+with the engine of `adf8c29`: its Numba nearest-node search, smoother, curvature
+and migration kernels made the fluvial environments 5 to 8 x cheaper than the
+`5bf93ad` engine with output bit-identical (MEANDER 427 -> 56 s a volume).
 The earlier full-node check found linear scaling to 144 ranks; the walltimes
 carry a 1.3 x margin on top. Lobes need 1.4 GB per rank at this size, so the
 lobe script runs 96 ranks per node; the fluvial environments stay under 0.5 GB.
 
 | job | volumes | s per volume | core-hours | node-hours | nodes x walltime |
 |---|---|---|---|---|---|
-| run_lobes.sh | 200,000 | 7 | 378 | 3.9 | 1 x 05:30 |
-| run_pv_shoestring.sh | 100,000 | 14 | 389 | 2.7 | 1 x 04:00 |
-| run_cb_labyrinth.sh | 100,000 | 71 | 1,972 | 13.7 | 4 x 04:30 |
-| run_cb_jigsaw.sh | 150,000 | 86 | 3,596 | 25.0 | 7 x 05:00 |
-| run_sh_distal.sh | 100,000 | 126 | 3,489 | 24.2 | 7 x 04:30 |
-| run_sh_proximal.sh | 100,000 | 107 | 2,972 | 20.6 | 6 x 04:30 |
-| run_meander_oxbow.sh | 100,000 | 427 | 11,856 | 82.3 | 21 x 05:30 |
-| run_delta.sh | 150,000 | 19 | 779 | 5.4 | 2 x 04:00 |
-| **total** | 1,000,000 | | **25,431** | **178** | |
+| run_lobes.sh | 200,000 | 6 | 350 | 3.6 | 1 x 05:00 |
+| run_pv_shoestring.sh | 100,000 | 5 | 136 | 0.9 | 1 x 01:30 |
+| run_cb_labyrinth.sh | 100,000 | 13 | 353 | 2.4 | 1 x 03:30 |
+| run_cb_jigsaw.sh | 150,000 | 16 | 662 | 4.6 | 2 x 03:00 |
+| run_sh_distal.sh | 100,000 | 21 | 581 | 4.0 | 2 x 03:00 |
+| run_sh_proximal.sh | 100,000 | 18 | 503 | 3.5 | 1 x 05:00 |
+| run_meander_oxbow.sh | 100,000 | 56 | 1,553 | 10.8 | 3 x 05:00 |
+| run_delta.sh | 150,000 | 11 | 471 | 3.3 | 1 x 04:30 |
+| **total** | 1,000,000 | | **4,608** | **33** | |
 
-About 178 gg node-hours, about 59 SU at the 1/3 charge factor. Node counts
+About 33 gg node-hours, about 11 SU at the 1/3 charge factor. Node counts
 target roughly 4 h of wall time; trade nodes for time freely (halve `-N`,
-double `-t`). MEANDER is the long pole; on 21 nodes it takes about 4 h.
+double `-t`). MEANDER is the long pole; on 3 nodes it takes about 3.6 h.
 
 The ranks run with `env -u LD_PRELOAD`: TACC's XALT preload brings its own
 libcrypto into rank 0 and pyarrow then fails to import (OPENSSL_3.3.0 not
