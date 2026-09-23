@@ -9,12 +9,12 @@ cd examples/dataset_generation
 for j in vista/run_*.sh; do sbatch "$j"; done
 ```
 
-Every script refuses to run unless the checkout contains ResMill `adf8c29`
+Every script refuses to run unless the checkout contains ResMill `d459b4b`
 (the v3 configs and the aggradation-ratio sampler).
 
 ## What v3 is
 
-Eight `config_full_<env>_v3.json` files (ResMill `adf8c29` or later):
+Eight `config_full_<env>_v3.json` files (ResMill `d459b4b` or later):
 
 - **128 x 128 x 64 cells, stored whole.** dx = dy = 10 m, dz = 1 m (lobes keep
   dx = 100 m), so 1280 x 1280 x 64 m, no crop. Training takes random
@@ -59,7 +59,7 @@ Preview: `/scratch/08405/ilgar/resmill_preview144/preview144_v5_perm.pdf`
 
 Per-volume times are the mean rank wall time of the 144-volume preview, 18
 ranks per environment through `resmill.dataset.cli`, cold Numba JIT included,
-with the engine of `adf8c29`: its Numba nearest-node search, smoother, curvature
+with the engine of `d459b4b`: its Numba nearest-node search, smoother, curvature
 and migration kernels made the fluvial environments 5 to 8 x cheaper than the
 `5bf93ad` engine with output bit-identical (MEANDER 427 -> 56 s a volume).
 The earlier full-node check found linear scaling to 144 ranks; the walltimes

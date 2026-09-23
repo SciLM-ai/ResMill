@@ -5,7 +5,7 @@ Same eight jobs as `../vista/`, with Perlmutter headers: `-C cpu`, `-q regular`
 the v1 run used, `--licenses=cfs,SCRATCH`, and `-A REPLACE_WITH_YOUR_ALLOCATION`
 to fill in. Each script activates `$WORK/conda_envs/resmill`, the env the v1
 scripts used; if yours lives elsewhere, edit that line. Every script refuses
-to run unless the checkout contains ResMill `adf8c29`, so `git pull` first.
+to run unless the checkout contains ResMill `d459b4b`, so `git pull` first.
 
 ```bash
 cd $WORK/codes/ResMill && git pull                     # or wherever the repo is
@@ -16,7 +16,7 @@ for j in perlmutter/run_*.sh; do sbatch "$j"; done     # 8 independent jobs
 
 ## What v3 is
 
-Eight `config_full_<env>_v3.json` files (ResMill `adf8c29` or later):
+Eight `config_full_<env>_v3.json` files (ResMill `d459b4b` or later):
 
 - **128 x 128 x 64 cells, stored whole.** dx = dy = 10 m, dz = 1 m (lobes keep
   dx = 100 m), so 1280 x 1280 x 64 m, no crop. Training takes random
