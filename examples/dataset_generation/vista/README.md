@@ -87,6 +87,10 @@ The ranks run with `env -u LD_PRELOAD`: TACC's XALT preload brings its own
 libcrypto into rank 0 and pyarrow then fails to import (OPENSSL_3.3.0 not
 found), which silently loses rank 0's samples.
 
+Each rank buffers one shard in memory before writing it, and a 128 x 128 x 64
+sample is 6 MB, so the configs use `shard_size` 32 (192 MB per rank); v1's
+1000 would need 6 GB per rank and OOM every node.
+
 ## After the eight jobs
 
 ```bash

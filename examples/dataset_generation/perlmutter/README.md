@@ -79,6 +79,10 @@ cores and another 1.3 x in the walltime. Perlmutter nodes have 512 GB, so the
 
 About 47 Perlmutter node-hours at the regular QOS.
 
+Each rank buffers one shard in memory before writing it, and a 128 x 128 x 64
+sample is 6 MB, so the configs use `shard_size` 32 (192 MB per rank); v1's
+1000 would need 6 GB per rank and OOM every node.
+
 ## After the eight jobs
 
 ```bash

@@ -2,7 +2,7 @@
   "_comment_": "v2 (2026-09-22): 128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored uncropped; training takes random 64 x 64 x 32 windows (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). Changes from the published v1: channel depth 3-16 m log-uniform (v1: 3-10 m uniform); nlevel from a sampled aggradation ratio (level spacing / depth, U(0.7, 1.4)) so the column is spanned floor to roof; per-level event budget x2.56 for the 2.56x plan area; n_sources {1,1,2,3}; probAvulOutside sampled; entry scatter stdevCHsource log-uniform 5-300 m (v1: fixed); correlated porosity texture inside sand; engine with entries on the grid boundary and the walk clipped by the grid.",
   "output_dir": "$SCRATCH/resmill_dataset_v2/sh_proximal",
   "seed": 42,
-  "shard_size": 1000,
+  "shard_size": 32,
   "grid": {
     "nx": 128,
     "ny": 128,
@@ -337,5 +337,6 @@
         }
       }
     }
-  }
+  },
+  "_comment_shard_size_": "32, not v1's 1000: the writer buffers a whole shard in memory and a 128 x 128 x 64 sample is 6 MB, so 1000 samples would be 6 GB per rank and 144 ranks would need 860 GB on a 237 GB node. 32 samples = 192 MB per rank."
 }
