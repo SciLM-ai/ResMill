@@ -45,15 +45,15 @@ combination raises inside the engine are skipped and logged to
 
 ```bash
 python crop_windows.py  --src $SCRATCH/resmill_dataset --dst $SCRATCH/resmill_dataset_win64 --workers 96 --verify
-python combine_shards.py --root $SCRATCH/resmill_dataset_win64 --group 8 --workers 64
+python combine_shards.py --root $SCRATCH/resmill_dataset_win64 --target 256 --workers 96
 python stage_dataset.py --src $SCRATCH/resmill_dataset_win64 --dst $SCRATCH/SiliciclasticReservoirs
 python build_splits.py  --root $SCRATCH/SiliciclasticReservoirs --out $SCRATCH/SiliciclasticReservoirs/splits --seed 42 --train-frac 0.90 --val-frac 0.05
 ```
 
 One random 64 x 64 x 32 window per volume (deterministic from `crop_seed` 42
-and the sample seed, base between 1 and 31), combined shards of up to 256
-windows, the HuggingFace layout of per-layer-type `shard_NNNN` links, and the
-90 / 5 / 5 splits. Each window row carries `crop_x0, crop_y0, crop_z0,
+and the sample seed, base between 1 and 31, redrawn while the window has no
+sand), 256 combined shards per family, the HuggingFace layout of per-layer-type
+`shard_NNNN` directories, and the 90 / 5 / 5 splits. Each window row carries `crop_x0, crop_y0, crop_z0,
 source_shard, source_row`, so the raw volume around it is
 `$SCRATCH/resmill_dataset/<env>/<source_shard>` row `source_row`.
 

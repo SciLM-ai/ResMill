@@ -110,12 +110,14 @@ random windows against the volumes.
 ### 3c. Combine the rank shards
 
 ```bash
-python combine_shards.py --root $SCRATCH/resmill_dataset_win64 --group 8 --workers 64
+python combine_shards.py --root $SCRATCH/resmill_dataset_win64 --target 256 --workers 96
 ```
 
-Eight consecutive rank shards (lex-numeric order, rank 0 first) become one
-`combined_shard_NNNN` of up to 256 samples under `<env>_combined/`, arrays and
-parquets concatenated in that order. The script checks the total sample count
+The rank shards of a family (lex-numeric order, rank 0 first) are split into
+256 consecutive groups differing by at most one shard, and each group becomes
+one `combined_shard_NNNN` under `<env>_combined/`, arrays and parquets
+concatenated in that order: about 390 samples per shard for a 100,000-sample
+family, 585 for 150,000, 780 for the lobes. The script checks the total sample count
 per environment and that sample 0 of `combined_shard_0000` equals sample 0 of
 `shard_r0000_s000000`.
 
@@ -126,8 +128,9 @@ python stage_dataset.py --src $SCRATCH/resmill_dataset_win64 --dst $SCRATCH/Sili
 ```
 
 One directory per layer type (`lobe`, `channel_pv_shoestring`, ...,
-`channel_meander_oxbow`, `delta`) holding `shard_NNNN` symlinks to the combined
-shards, plus the dataset card and datasheet from
+`channel_meander_oxbow`, `delta`) holding `shard_NNNN` directories whose files
+are hard links to the combined shards (no extra space, and every uploader sees
+plain files), plus the dataset card, datasheet and reviewer notebook from
 `examples/dataset_generation/dataset_card/`.
 
 ### 3e. Splits
@@ -140,8 +143,15 @@ python build_splits.py --root $SCRATCH/SiliciclasticReservoirs --out $SCRATCH/Si
 `(layer_type, shard_dir, sample_idx)`, 90 / 5 / 5 stratified by layer type,
 deterministic with the seed.
 
-Then `hf upload AnonymouScientist/SiliciclasticReservoirs . --repo-type=dataset`
-from the staged directory.
+Then, from the staged directory, with the owning account's write token in `HF_TOKEN`:
+
+```bash
+hf upload-large-folder AnonymouScientist/SiliciclasticReservoirs . --repo-type=dataset --num-workers 16
+```
+
+`upload-large-folder` uploads with many workers, commits in batches and resumes
+where it stopped; files already in the repository are overwritten, files absent
+from the staged directory (`.gitattributes`) are left alone.
 
 ---
 
