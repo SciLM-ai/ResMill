@@ -146,12 +146,15 @@ deterministic with the seed.
 Then, from the staged directory, with the owning account's write token in `HF_TOKEN`:
 
 ```bash
-hf upload-large-folder SciLM/SiliciclasticReservoirs . --repo-type=dataset --num-workers 16
+hf upload-large-folder SciLM/SiliciclasticReservoirs . --repo-type=dataset --num-workers 4
 ```
 
-`upload-large-folder` uploads with many workers, commits in batches and resumes
-where it stopped; files already in the repository are overwritten, files absent
-from the staged directory (`.gitattributes`) are left alone.
+`upload-large-folder` hashes and uploads in parallel, commits in batches and
+resumes where it stopped (its bookkeeping lives in `.cache/huggingface/` inside
+the folder); files already in the repository are overwritten, files absent from
+the staged directory (`.gitattributes`) are left alone. Keep the worker count
+low: a free account has 1,000 API requests per 5 minutes, and 16 workers hit
+that limit within minutes (429 errors, the run aborts and must be resumed).
 
 ---
 
