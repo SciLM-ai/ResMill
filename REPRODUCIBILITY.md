@@ -127,7 +127,8 @@ python stage_dataset.py --src $SCRATCH/resmill_dataset_win64 --dst $SCRATCH/Sili
 
 One directory per layer type (`lobe`, `channel_pv_shoestring`, ...,
 `channel_meander_oxbow`, `delta`) holding `shard_NNNN` symlinks to the combined
-shards.
+shards, plus the dataset card and datasheet from
+`examples/dataset_generation/dataset_card/`.
 
 ### 3e. Splits
 
