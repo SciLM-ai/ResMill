@@ -62,7 +62,7 @@ SiliciclasticReservoirs/
 │   ├── train.parquet           ← 900,000 rows
 │   ├── validation.parquet      ←  50,000 rows
 │   └── test.parquet            ←  50,000 rows
-├── lobe/                       ← 200,000 samples, 792 shards
+├── lobe/                       ← 200,000 samples, 256 shards
 │   ├── shard_0000/
 │   │   ├── facies.npy          (n, 64, 64, 32) int8 — binary 0/1
 │   │   ├── facies_alluvsim.npy (n, 64, 64, 32) int8 — 6-class -1..4
@@ -72,16 +72,16 @@ SiliciclasticReservoirs/
 │   │   └── params.parquet      ← full physics for reproducibility
 │   ├── shard_0001/
 │   └── …
-├── channel_pv_shoestring/      ← 100,000 samples, 396 shards
-├── channel_cb_labyrinth/       ← 100,000 samples, 396 shards
-├── channel_cb_jigsaw/          ← 150,000 samples, 612 shards
-├── channel_sh_distal/          ← 100,000 samples, 396 shards
-├── channel_sh_proximal/        ← 100,000 samples, 396 shards
-├── channel_meander_oxbow/      ← 100,000 samples, 432 shards
-└── delta/                      ← 150,000 samples, 594 shards
+├── channel_pv_shoestring/      ← 100,000 samples, 256 shards
+├── channel_cb_labyrinth/       ← 100,000 samples, 256 shards
+├── channel_cb_jigsaw/          ← 150,000 samples, 256 shards
+├── channel_sh_distal/          ← 100,000 samples, 256 shards
+├── channel_sh_proximal/        ← 100,000 samples, 256 shards
+├── channel_meander_oxbow/      ← 100,000 samples, 256 shards
+└── delta/                      ← 150,000 samples, 256 shards
 ```
 
-Shards hold up to 256 samples (about 200 MB each); the last shards of a family are smaller.
+256 shards per family, each about 390 samples (100,000-sample families, ~300 MB), 585 (150,000, ~460 MB) or 780 (lobes, ~615 MB).
 
 ## Layer types
 

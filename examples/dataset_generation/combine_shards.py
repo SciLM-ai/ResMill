@@ -110,21 +110,27 @@ def combine_preset(preset_dir: Path, target_n, out_dir: Path,
     if group is not None:
         group_size = int(group)
         target_n = (n_rank + group_size - 1) // group_size
+        bounds = [(g * group_size, min((g + 1) * group_size, n_rank)) for g in range(target_n)]
     else:
-        if n_rank % target_n != 0:
-            raise RuntimeError(
-                f"{preset_dir.name}: {n_rank} rank shards not divisible by "
-                f"target {target_n}"
-            )
-        group_size = n_rank // target_n
+        # exactly target_n combined shards; when the rank-shard count does not
+        # divide, the first (n_rank % target_n) groups take one rank shard more
+        # (numpy.array_split order), so the result is still deterministic
+        q, r = divmod(n_rank, target_n)
+        if q == 0:
+            raise RuntimeError(f"{preset_dir.name}: only {n_rank} rank shards for target {target_n}")
+        sizes = [q + 1] * r + [q] * (target_n - r)
+        starts = [0]
+        for sz in sizes[:-1]:
+            starts.append(starts[-1] + sz)
+        bounds = [(a, a + sz) for a, sz in zip(starts, sizes)]
+        group_size = f"{q}-{q + 1}" if r else str(q)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"  rank shards: {n_rank}  →  combined: {target_n}  (group={group_size})")
 
     tasks = []
-    for g in range(target_n):
-        group_paths = rank_shards[g * group_size : (g + 1) * group_size]
-        tasks.append((g, group_paths, str(out_dir), dry_run))
+    for g, (a, b) in enumerate(bounds):
+        tasks.append((g, rank_shards[a:b], str(out_dir), dry_run))
 
     t0 = time.perf_counter()
     total_combined = 0
@@ -191,7 +197,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default="$SCRATCH/resmill_dataset")
     ap.add_argument("--target", type=int, default=None,
-                    help="number of combined shards per preset (rank-shard count must divide by it)")
+                    help="number of combined shards per preset (groups differ by at most one rank shard when the count does not divide)")
     ap.add_argument("--group", type=int, default=None,
                     help="alternative to --target: rank shards per combined shard (8 x 32-sample "
                          "rank shards = 256-sample combined shards); the last group may be smaller")

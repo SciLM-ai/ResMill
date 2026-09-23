@@ -1,6 +1,6 @@
 """Stage the dataset directory the way the HuggingFace layout expects it: one
-folder per layer type holding ``shard_NNNN`` symlinks to the combined shards
-written by ``combine_shards.py``, plus the dataset's README.md, DATASHEET.md and
+folder per layer type holding ``shard_NNNN`` directories of hard links to the
+combined shards written by ``combine_shards.py`` (or symlinks with ``--link symlink``), plus the dataset's README.md, DATASHEET.md and
 representative_sample.ipynb from ``dataset_card/``.
 
     python stage_dataset.py --src $SCRATCH/resmill_dataset_win64 --dst $SCRATCH/SiliciclasticReservoirs
@@ -30,6 +30,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--src", required=True)
     ap.add_argument("--dst", required=True)
+    ap.add_argument("--link", choices=("symlink", "hardlink"), default="hardlink",
+                    help="shard_NNNN as a symlink to the combined shard dir, or a real dir of hard-linked files (default; every uploader sees plain files, no extra space)")
     ap.add_argument("--cards", default=str(Path(__file__).resolve().parent / "dataset_card"),
                     help="directory with the dataset's README.md, DATASHEET.md and notebook, copied to --dst (default: dataset_card/ next to this script)")
     args = ap.parse_args()
@@ -44,9 +46,16 @@ def main():
         (dst / hf).mkdir(parents=True, exist_ok=True)
         for shard in shards:
             link = dst / hf / ("shard_" + shard.name.split("combined_shard_")[1])
-            if link.is_symlink() or link.exists():
+            if link.is_symlink():
                 link.unlink()
-            link.symlink_to(shard)
+            elif link.is_dir():
+                shutil.rmtree(link)
+            if args.link == "symlink":
+                link.symlink_to(shard)
+            else:
+                link.mkdir()
+                for f in sorted(shard.iterdir()):
+                    os.link(f, link / f.name)
         total += len(shards)
         print(f"  {hf:24s} {len(shards)} shards -> {dst / hf}")
     cards = Path(os.path.expandvars(os.path.expanduser(args.cards)))
