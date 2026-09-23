@@ -6,7 +6,7 @@ volume, so ``combine_shards.py`` / ``stage_dataset.py`` / ``build_splits.py``
 run on it unchanged, and the raw volumes stay available as context.
 
 Determinism contract:
-  1. The window origin of a sample is drawn from
+  1. The window origin of a sample (``resmill.dataset.windows.window_origin``) is drawn from
      ``numpy.random.default_rng([crop_seed, sample_seed])`` (``seed`` column of
      the sample): ``x0`` uniform on ``[0, nx - wx]``, ``y0`` on ``[0, ny - wy]``,
      ``z0`` uniform on ``[z_min, nz - wz - 1]`` (default ``z_min`` = 1 so the
@@ -46,29 +46,10 @@ import pyarrow.parquet as pq
 from resmill.dataset.captions import caption_for
 from resmill.dataset.generate import realized_stats
 from resmill.dataset.io import ShardWriter
+from resmill.dataset.windows import window_origin
 
 PRESETS = ["lobes", "pv_shoestring", "cb_labyrinth", "cb_jigsaw", "sh_distal",
            "sh_proximal", "meander_oxbow", "delta"]
-
-
-def window_origin(crop_seed: int, sample_seed: int, shape, win, z_min: int, facies=None,
-                  min_sand_cells: int = 1, max_tries: int = 64):
-    """Window origin for one sample. Draws from ``default_rng([crop_seed, sample_seed])``
-    and, when ``facies`` is given, redraws until the window holds at least
-    ``min_sand_cells`` sand cells (a mud-only window has no porosity or
-    permeability statistics), taking the last draw if ``max_tries`` fail."""
-    nx, ny, nz = shape
-    wx, wy, wz = win
-    rng = np.random.default_rng([int(crop_seed), int(sample_seed)])
-    for _ in range(max_tries):
-        x0 = int(rng.integers(0, nx - wx + 1))
-        y0 = int(rng.integers(0, ny - wy + 1))
-        z0 = int(rng.integers(z_min, nz - wz))      # high is exclusive: z0 <= nz - wz - 1
-        if facies is None or min_sand_cells <= 0:
-            break
-        if int(np.count_nonzero(facies[x0:x0 + wx, y0:y0 + wy, z0:z0 + wz])) >= min_sand_cells:
-            break
-    return x0, y0, z0
 
 
 def realised_meta(facies: np.ndarray, poro: np.ndarray, perm: np.ndarray, meta: dict) -> dict:
