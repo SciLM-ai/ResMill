@@ -1,24 +1,19 @@
 {
-  "_comment_": "v2: same as v1 plus n_sources, the number of entry points on the upstream edge (1, 1, 2 or 3: half the reservoirs a single valley outlet, the rest two or three coeval belts entering at different positions, all with the reservoir azimuth). Needs the ResMill commit that adds n_sources. SH_DISTAL (Pyrcz 2004) \u2014 sand-rich distal sheet architecture; high NTG, wide stacked channel sheets with thick prominent levees, very rare avulsion. See header of config_full_pv_shoestring.json for the comment-tag convention used here ('skip \u2014 preset default' / 'skip \u2014 class default' / 'VARIED').",
-  "output_dir": "$SCRATCH/resmill_dataset/channels_sh_distal",
+  "_comment_": "v2 (2026-09-22): 128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored uncropped; training takes random 64 x 64 x 32 windows (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). Changes from the published v1: channel depth 3-16 m log-uniform (v1: 3-10 m uniform); nlevel from a sampled aggradation ratio (level spacing / depth, U(0.7, 1.4)) so the column is spanned floor to roof; per-level event budget x2.56 for the 2.56x plan area; n_sources {1,1,2,3}; probAvulOutside sampled; entry scatter stdevCHsource log-uniform 5-300 m (v1: fixed); correlated porosity texture inside sand; engine with entries on the grid boundary and the walk clipped by the grid.",
+  "output_dir": "$SCRATCH/resmill_dataset_v2/sh_distal",
   "seed": 42,
   "shard_size": 1000,
   "grid": {
-    "nx": 80,
-    "ny": 80,
-    "nz": 50,
-    "x_len": 800.0,
-    "y_len": 800.0,
-    "z_len": 50.0,
-    "_comment_dx_": "dx=dy=10m, dz=1m. SH-distal channels are 70-110m wide -> 7-11 cells. Migration step ~35m -> 3.5 cells/event. Note SH_DISTAL preset uses nlevel=6 (not 8) \u2014 see kwarg below.",
+    "nx": 128,
+    "ny": 128,
+    "nz": 64,
+    "x_len": 1280.0,
+    "y_len": 1280.0,
+    "z_len": 64.0,
+    "_comment_dx_": "v2: 128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored uncropped; training takes random 64 x 64 x 32 windows (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). dx=dy=10m, dz=1m. SH-distal channels are 70-110m wide -> 7-11 cells. Migration step ~35m -> 3.5 cells/event. Note SH_DISTAL preset uses nlevel=6 (not 8) \u2014 see kwarg below.",
     "top_depth": 5000.0,
     "dip": 0.0,
-    "kzkx": 0.1,
-    "crop": {
-      "x": "8:-8",
-      "y": "8:-8",
-      "z": "9:-9"
-    }
+    "kzkx": 0.1
   },
   "layers": {
     "channel": {
@@ -52,9 +47,10 @@
         "mCHdepth": {
           "range": [
             3.0,
-            10.0
+            16.0
           ],
-          "_comment_": "VARIED. Channel depth (m). Range [3, 10] keeps deep stacks below half of z_len so several levels still fit (nlevel auto-tunes inversely)."
+          "scale": "log",
+          "_comment_": "VARIED. Channel depth (m), log-uniform so 3-8 m stays as common as 8-16 m; 16 m = half the column, two levels at least."
         },
         "probAvulInside": {
           "range": [
@@ -85,20 +81,23 @@
           "_comment_": "VARIED. Flow direction (deg, clockwise from +x). Channels are not 180-symmetric so the full circle matters."
         },
         "nlevel": {
-          "inverse_of": "mCHdepth",
-          "scale": 50.0,
-          "min": 2,
-          "max": 12,
-          "type": "int",
-          "_comment_": "AUTO. nlevel = clip(50 / mCHdepth, 2, 12). Deeper channels stack fewer levels; shallower stack more \u2014 basin always full."
+          "levels_from_ratio": "mCHdepth",
+          "ratio": [
+            0.7,
+            1.4
+          ],
+          "column": 64.0,
+          "min": 1,
+          "max": 40,
+          "_comment_": "AUTO. Aggradation ratio r = level spacing / channel depth, uniform 0.7-1.4 per reservoir; nlevel = round((64 - depth) / (r * depth)) + 1 so the levels span the whole 64 m column: r < 1 stacked channels cut into each other, r > 1 floodplain between levels, never more than 0.4 depth."
         },
         "level_z": {
           "value": null,
           "_comment_": "skip \u2014 class default."
         },
         "ntime": {
-          "value": 50,
-          "_comment_": "per-level event budget (50 events \u00d7 nlevel total). Sized so each level fills with the preset's typical channel density."
+          "value": 128,
+          "_comment_": "v2: 50 events per level in v1's 800 x 800 m box, x2.56 (plan area) for 1280 x 1280 m. ntime is a cap: a level stops as soon as it has its NTG share, so only high-NTG rows use the extra events. Measured 2026-09-22: with the old cap SH_DIST delivered 0.73 of target, x1.6 0.82, x2.56 0.88."
         },
         "ntime_per_level": {
           "value": true,
@@ -144,8 +143,12 @@
           "_comment_": "skip \u2014 class default."
         },
         "stdevCHsource": {
-          "value": 80.0,
-          "_comment_": "skip \u2014 class default."
+          "range": [
+            5.0,
+            300.0
+          ],
+          "scale": "log",
+          "_comment_": "VARIED (v2). Across-flow scatter (std, m) of the entry point of every channel drawn from the pool; fixed at 80 m in v1 (nodal entry). 5 m keeps that, 300 m spreads entries over the whole 1280 m edge."
         },
         "mLVdepth": {
           "value": 1.2,
@@ -316,6 +319,20 @@
             3
           ],
           "_comment_": "VARIED. Entry points on the upstream edge; sources at least 15% of the edge apart."
+        },
+        "poro_noise_std": {
+          "range": [
+            0.05,
+            0.15
+          ],
+          "_comment_": "VARIED (v2). Relative std of a correlated porosity texture inside sand cells; perm follows via the K-C slope. 0 = smooth ramp (v1)."
+        },
+        "poro_noise_range": {
+          "range": [
+            2.0,
+            8.0
+          ],
+          "_comment_": "VARIED (v2). Lateral correlation length of that texture in cells (20-80 m); vertical is a third."
         }
       }
     }

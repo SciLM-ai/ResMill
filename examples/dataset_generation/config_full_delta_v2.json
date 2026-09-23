@@ -1,24 +1,19 @@
 {
-  "_comment_": "v2: DeltaLayer in distributary-tree mode (bifurcate=true, ResMill >= the commit that adds _fluvial._simulate_tree). A generation is n_trees branching networks: discharge is split at every bifurcation, width ~ Q^0.5 and depth ~ Q^0.4, branches end on the plain in mouth bars or rejoin. Everything else (grid, crop, seed 42, counts, the other ranges) is the published v1 config.",
-  "output_dir": "$SCRATCH/resmill_dataset/delta",
+  "_comment_": "v2 (2026-09-22): 128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored uncropped; training takes random 64 x 64 x 32 windows (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). Changes from the published v1: DeltaLayer in distributary-tree mode (bifurcate=true: discharge split at every bifurcation, width ~ Q^0.5, depth ~ Q^0.4, mouth bars, prograding front), channel depth 3-16 m log-uniform, n_generations from a sampled aggradation ratio with the bottom generation's base on the floor, correlated porosity texture inside sand.",
+  "output_dir": "$SCRATCH/resmill_dataset_v2/delta",
   "seed": 42,
   "shard_size": 1000,
   "grid": {
-    "nx": 80,
-    "ny": 80,
-    "nz": 50,
-    "x_len": 800.0,
-    "y_len": 800.0,
-    "z_len": 50.0,
-    "_comment_dx_": "dx=dy=10m, dz=1m. Distributaries are ~56m wide -> 5-6 cells (W:D=14, depth=4m). Migration step ~3m -> 0.3 cells/event. 8 generations x 4m channel depth fills 32m vertically; widen z_len if you bump n_generations or mCHdepth.",
+    "nx": 128,
+    "ny": 128,
+    "nz": 64,
+    "x_len": 1280.0,
+    "y_len": 1280.0,
+    "z_len": 64.0,
+    "_comment_dx_": "v2: 128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored uncropped; training takes random 64 x 64 x 32 windows (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). dx=dy=10m, dz=1m. Distributaries are ~56m wide -> 5-6 cells (W:D=14, depth=4m). Migration step ~3m -> 0.3 cells/event. 8 generations x 4m channel depth fills 32m vertically; widen z_len if you bump n_generations or mCHdepth.",
     "top_depth": 5000.0,
     "dip": 0.0,
-    "kzkx": 0.1,
-    "crop": {
-      "x": "8:-8",
-      "y": "8:-8",
-      "z": "9:-9"
-    }
+    "kzkx": 0.1
   },
   "layers": {
     "delta": {
@@ -46,12 +41,15 @@
           ]
         },
         "n_generations": {
-          "inverse_of": "mCHdepth",
-          "scale": 50.0,
-          "min": 2,
-          "max": 12,
-          "type": "int",
-          "_comment_": "AUTO. n_generations = clip(50 / mCHdepth, 2, 12). Deeper trunks stack fewer generations."
+          "levels_from_ratio": "mCHdepth",
+          "ratio": [
+            0.7,
+            1.4
+          ],
+          "column": 64.0,
+          "min": 1,
+          "max": 40,
+          "_comment_": "AUTO. Same aggradation-ratio rule as the channels: DeltaLayer now anchors the bottom generation's base on the floor, so n = round((64 - depth) / (r * depth)) + 1."
         },
         "ntime_per_gen": {
           "value": 200,
@@ -144,9 +142,10 @@
         "mCHdepth": {
           "range": [
             3.0,
-            10.0
+            16.0
           ],
-          "_comment_": "VARIED. Channel depth (m). Range [3, 10] keeps deep stacks below half of z_len so several levels still fit (nlevel auto-tunes inversely)."
+          "scale": "log",
+          "_comment_": "VARIED. Channel depth (m), log-uniform so 3-8 m stays as common as 8-16 m; 16 m = half the column, two levels at least."
         },
         "stdevCHsource": {
           "value": 0.2,
@@ -323,7 +322,7 @@
         },
         "bifurcate": {
           "value": true,
-          "_comment_": "tree mode; the published v1 dataset was made with the avulsion-history delta (false)."
+          "_comment_": "tree mode; v1 was made with the avulsion-history delta (false)."
         },
         "n_trees": {
           "range": [
@@ -335,11 +334,11 @@
         },
         "n_bifurcations": {
           "range": [
-            5,
-            20
+            8,
+            32
           ],
           "type": "int",
-          "_comment_": "VARIED. Splits per network in a 640 m cube; the field generator scales it with domain size."
+          "_comment_": "VARIED. Splits per network; 5-20 in the 800 m box of the 64-cube trials, scaled by the 1.6x longer box edge."
         },
         "split_frac_lo": {
           "value": 0.25
@@ -434,6 +433,20 @@
             0.6
           ],
           "_comment_": "VARIED. How much further a big channel progrades than a small one: 0.1 smooth arcuate front, 0.6 bird's foot."
+        },
+        "poro_noise_std": {
+          "range": [
+            0.05,
+            0.15
+          ],
+          "_comment_": "VARIED (v2). Relative std of a correlated porosity texture inside sand cells; perm follows via the K-C slope. 0 = smooth ramp (v1)."
+        },
+        "poro_noise_range": {
+          "range": [
+            2.0,
+            8.0
+          ],
+          "_comment_": "VARIED (v2). Lateral correlation length of that texture in cells (20-80 m); vertical is a third."
         }
       }
     }
