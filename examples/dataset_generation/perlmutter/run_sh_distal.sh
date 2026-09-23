@@ -11,7 +11,7 @@
 #SBATCH -o logs/%x-%j.out
 
 # 100,000 sh_distal volumes of 128 x 128 x 64 from ../config_full_sh_distal.json, ResMill 27c48e4 or later,
-# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
+# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node.
 # Cost from the Vista measurement of 2026-09-22 (21 s a volume on one Grace core,
 # assumed 1.3x slower per core here): 755 core-hours = 5.9 node-hours,
 # about 2.9 h on 2 node(s); walltime 04:00 leaves a 1.3x margin.

@@ -11,7 +11,7 @@
 #SBATCH -o logs/%x-%j.out
 
 # 150,000 delta volumes of 128 x 128 x 64 from ../config_full_delta.json, ResMill 27c48e4 or later,
-# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
+# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node.
 # Cost from the Vista measurement of 2026-09-22 (11 s a volume on one Grace core,
 # assumed 1.3x slower per core here): 612 core-hours = 4.8 node-hours,
 # about 2.4 h on 2 node(s); walltime 03:30 leaves a 1.3x margin.

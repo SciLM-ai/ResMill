@@ -204,7 +204,7 @@ def main():
     args = ap.parse_args()
 
     root = Path(os.path.expandvars(os.path.expanduser(args.root)))
-    # v2 preset directories (v1 used channels_<preset>; pass --presets for those)
+    # the eight preset directories of the dataset; pass --presets for another layout
     all_presets = ["lobes", "pv_shoestring", "cb_labyrinth", "cb_jigsaw", "sh_distal",
                    "sh_proximal", "meander_oxbow", "delta"]
     if (args.target is None) == (args.group is None):

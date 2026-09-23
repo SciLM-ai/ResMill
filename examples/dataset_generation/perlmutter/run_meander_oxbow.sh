@@ -11,7 +11,7 @@
 #SBATCH -o logs/%x-%j.out
 
 # 100,000 meander_oxbow volumes of 128 x 128 x 64 from ../config_full_meander_oxbow.json, ResMill 27c48e4 or later,
-# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
+# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node.
 # Cost from the Vista measurement of 2026-09-22 (56 s a volume on one Grace core,
 # assumed 1.3x slower per core here): 2,019 core-hours = 15.8 node-hours,
 # about 3.9 h on 4 node(s); walltime 05:30 leaves a 1.3x margin.

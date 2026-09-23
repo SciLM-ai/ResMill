@@ -11,7 +11,7 @@
 #SBATCH -o logs/%x-%j.out
 
 # 100,000 pv_shoestring volumes of 128 x 128 x 64 from ../config_full_pv_shoestring.json, ResMill 27c48e4 or later,
-# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
+# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node.
 # Cost from the Vista measurement of 2026-09-22 (5 s a volume on one Grace core,
 # assumed 1.3x slower per core here): 177 core-hours = 1.4 node-hours,
 # about 1.4 h on 1 node(s); walltime 02:00 leaves a 1.3x margin.

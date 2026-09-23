@@ -11,7 +11,7 @@
 #SBATCH -o logs/%x-%j.out
 
 # 150,000 cb_jigsaw volumes of 128 x 128 x 64 from ../config_full_cb_jigsaw.json, ResMill 27c48e4 or later,
-# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node as in v1.
+# on NERSC Perlmutter CPU nodes: 128 single-thread ranks per node.
 # Cost from the Vista measurement of 2026-09-22 (16 s a volume on one Grace core,
 # assumed 1.3x slower per core here): 861 core-hours = 6.7 node-hours,
 # about 3.4 h on 2 node(s); walltime 04:30 leaves a 1.3x margin.
