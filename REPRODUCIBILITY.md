@@ -287,13 +287,18 @@ File issues at [`anonymous.4open.science/r/ResMill-7377`](https://anonymous.4ope
 
 ---
 
-## 3. The v2 dataset (Vista, 2026-09)
+## 3. The v2 dataset (2026-09)
 
-The v2 regeneration keeps the Sobol seed, grid, crop and counts and changes
-the engine and three sampled parameters; everything needed to run it on TACC
-Vista is in `examples/dataset_generation/vista/` (eight `run_*.sh` for
-`sbatch`, one per environment, and a README with the measured cost, about 30
-gg node-hours in total). The original `run_*.sh` in this directory are the
-NERSC Perlmutter scripts that produced v1 (`-C cpu`, 128 ranks per node,
-`--licenses=cfs`); they are kept for the record and are not the ones to
-submit on Vista.
+v2 is a redesign, not a re-run of v1: 128 x 128 x 64 volumes (dx = dy = 10 m,
+dz = 1 m, lobes dx = 100 m) stored whole, with random 64 x 64 x 32 training
+windows taken later; channel depth 3 to 16 m log-uniform; the number of levels
+from a sampled aggradation ratio (level spacing over channel depth, 0.7 to 1.4)
+so every column is spanned floor to roof; per-level event budgets scaled by the
+plan area; several entry points and a sampled entry scatter; a distributary-tree
+delta; correlated porosity texture inside sand; and the fixed engine (entries on
+the grid boundary, walk clipped by the grid). The configs are
+`examples/dataset_generation/config_full_<env>_v2.json`; the Sobol seed and the
+sample counts are v1's. Launch scripts and measured costs: `vista/` (TACC Vista,
+about 33 gg node-hours in total) and `perlmutter/` (NERSC). The original
+`run_*.sh` in this directory are the Perlmutter scripts that produced v1 and are
+kept for the record.

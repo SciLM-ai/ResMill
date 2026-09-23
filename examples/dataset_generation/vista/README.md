@@ -1,4 +1,4 @@
-# Regenerating the dataset on TACC Vista (v3)
+# Regenerating the dataset on TACC Vista (v2)
 
 Eight Slurm scripts, one per environment, for the `gg` partition (2 x 72 Grace
 cores, 237 GB, no SMT), allocation `CHE23004`. Submit from a login node:
@@ -10,18 +10,18 @@ for j in vista/run_*.sh; do sbatch "$j"; done
 ```
 
 Every script refuses to run unless the checkout contains ResMill `d459b4b`
-(the v3 configs and the aggradation-ratio sampler).
+(the v2 configs and the aggradation-ratio sampler).
 
-## What v3 is
+## What v2 is
 
-Eight `config_full_<env>_v3.json` files (ResMill `d459b4b` or later):
+Eight `config_full_<env>_v2.json` files (ResMill `d459b4b` or later):
 
 - **128 x 128 x 64 cells, stored whole.** dx = dy = 10 m, dz = 1 m (lobes keep
   dx = 100 m), so 1280 x 1280 x 64 m, no crop. Training takes random
   64 x 64 x 32 windows; keep the z offset between 1 and 31 so a window never
   contains the engine's floor or roof, where the level ladder is anchored
   (bottom channel base on the floor, top channel top on the roof).
-- **Channel depth 3 to 16 m, log-uniform** (v2: 3 to 10 m uniform).
+- **Channel depth 3 to 16 m, log-uniform** (v1: 3 to 10 m uniform).
 - **Levels from a sampled aggradation ratio.** `nlevel` (channels) and
   `n_generations` (delta) come from the new sampler spec `levels_from_ratio`:
   r = level spacing / channel depth, uniform 0.7 to 1.4 per reservoir, and
@@ -36,21 +36,22 @@ Eight `config_full_<env>_v3.json` files (ResMill `d459b4b` or later):
   cube). A ratio above 1 caps the reachable NTG at 1 / r, because the
   per-level target is split evenly across levels.
 - **Entry scatter sampled.** `stdevCHsource`, the across-flow scatter of every
-  channel's entry point, is log-uniform 5 to 300 m per reservoir (v2: fixed
+  channel's entry point, is log-uniform 5 to 300 m per reservoir (v1: fixed
   80 m, 1 m for MEANDER): 5 m is a nodal entry, 300 m spreads entries over
   the whole edge. With several sources each channel scatters around its own
   source.
 - **Porosity texture.** `poro_noise_std` (0.05 to 0.15, relative) and
   `poro_noise_range` (2 to 8 cells laterally, a third of that vertically)
   multiply a correlated Gaussian field into every sand cell's porosity, with
-  permeability following through the Kozeny-Carman slope. v1 and v2 channel
+  permeability following through the Kozeny-Carman slope. v1 channel
   bodies were a smooth upward-fining ramp with one multiplier per event.
 - **Delta floor.** The lowest generation's channel base now sits on the
   floor like the channels; before, its top sat at 1 m and only a one-cell
   sand sliver showed in slice 0 (hidden in v1 by the z-crop).
-- Delta `n_bifurcations` 8 to 32 (v2: 5 to 20, scaled by the 1.6 x longer edge).
-  Everything else is the approved v2 setting (n_sources {1,1,2,3}, sampled
-  `probAvulOutside`, tree delta, lobes v1 ranges).
+- Delta `n_bifurcations` 8 to 32 (5 to 20 in the 800 m box of the 64-cube
+  trials, scaled by the 1.6 x longer edge).
+- Also new against v1: n_sources {1,1,2,3}, sampled `probAvulOutside`, the
+  tree delta. Lobes keep the v1 ranges.
 
 Preview: `/scratch/08405/ilgar/resmill_preview144/preview144_v5_perm.pdf`
 (18 volumes per environment through this CLI, xy slices and xz / yz sections).
@@ -90,10 +91,10 @@ found), which silently loses rank 0's samples.
 
 ```bash
 cd examples/dataset_generation
-python combine_shards.py --root $SCRATCH/resmill_dataset_v3 --target 256 --workers 32
-python build_splits.py --root $SCRATCH/SiliciclasticReservoirs_v3 --out $SCRATCH/SiliciclasticReservoirs_v3/splits --seed 42 --train-frac 0.90 --val-frac 0.05
+python combine_shards.py --root $SCRATCH/resmill_dataset_v2 --target 256 --workers 32
+python build_splits.py --root $SCRATCH/SiliciclasticReservoirs_v2 --out $SCRATCH/SiliciclasticReservoirs_v2/splits --seed 42 --train-frac 0.90 --val-frac 0.05
 ```
 
-Output goes to `$SCRATCH/resmill_dataset_v3/<env>/` as set by each config's
+Output goes to `$SCRATCH/resmill_dataset_v2/<env>/` as set by each config's
 `output_dir`. A 128 x 128 x 64 volume is 8 x the cells of a 64-cube, so the
 dataset is about 8 x the v1 size on disk.
