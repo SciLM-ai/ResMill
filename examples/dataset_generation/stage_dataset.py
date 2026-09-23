@@ -1,7 +1,7 @@
 """Stage the dataset directory the way the HuggingFace layout expects it: one
 folder per layer type holding ``shard_NNNN`` symlinks to the combined shards
-written by ``combine_shards.py``, plus the dataset's README.md and DATASHEET.md
-from ``dataset_card/``.
+written by ``combine_shards.py``, plus the dataset's README.md, DATASHEET.md and
+representative_sample.ipynb from ``dataset_card/``.
 
     python stage_dataset.py --src $SCRATCH/resmill_dataset_win64 --dst $SCRATCH/SiliciclasticReservoirs
 
@@ -31,7 +31,7 @@ def main():
     ap.add_argument("--src", required=True)
     ap.add_argument("--dst", required=True)
     ap.add_argument("--cards", default=str(Path(__file__).resolve().parent / "dataset_card"),
-                    help="directory with the dataset's README.md and DATASHEET.md, copied to --dst (default: dataset_card/ next to this script)")
+                    help="directory with the dataset's README.md, DATASHEET.md and notebook, copied to --dst (default: dataset_card/ next to this script)")
     args = ap.parse_args()
     src = Path(os.path.expandvars(os.path.expanduser(args.src))).resolve()
     dst = Path(os.path.expandvars(os.path.expanduser(args.dst)))
@@ -50,7 +50,7 @@ def main():
         total += len(shards)
         print(f"  {hf:24s} {len(shards)} shards -> {dst / hf}")
     cards = Path(os.path.expandvars(os.path.expanduser(args.cards)))
-    for name in ("README.md", "DATASHEET.md"):
+    for name in ("README.md", "DATASHEET.md", "representative_sample.ipynb"):
         if (cards / name).is_file():
             shutil.copyfile(cards / name, dst / name)
             print(f"  copied {name}")
