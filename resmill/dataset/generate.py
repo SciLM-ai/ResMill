@@ -146,7 +146,7 @@ def generate_sample(job: dict, grid_cfg: dict):
         perm = perm[sl]
         facies_alluvsim = facies_alluvsim[sl]
 
-    realized_ntg = float(facies.mean())
+    realized_ntg = realized_stats(facies, poro, perm)["ntg"]
 
     # Pre-compute physical (m) and cell-count equivalents for the size
     # parameters that show up in captions / parquet. Cell count of a
@@ -202,16 +202,7 @@ def generate_sample(job: dict, grid_cfg: dict):
 
     # Realized poro/perm averages (active cells only) — flow-matching
     # condition. Computed post-crop so they match the saved arrays.
-    active_mask = facies > 0
-    if active_mask.any():
-        # poro/perm here are float16 cubes (already cropped above)
-        poro_f32 = poro.astype(np.float32)
-        perm_f32 = np.maximum(perm.astype(np.float32), 1e-3)  # log-safe floor
-        size_meta["poro_ave"] = float(poro_f32[active_mask].mean())
-        size_meta["perm_ave"] = float(np.log10(perm_f32[active_mask]).mean())
-    else:
-        size_meta["poro_ave"] = None
-        size_meta["perm_ave"] = None
+    size_meta.update(realized_stats(facies, poro, perm))
 
     # Caption should describe the realized data, not the request, so
     # text-conditioned downstream models train on faithful (data ↔ text)
@@ -255,6 +246,28 @@ def generate_sample(job: dict, grid_cfg: dict):
         meta["requested_ntg"] = params["NTGtarget"]
     meta["ntg"] = realized_ntg
     return facies, poro, perm, facies_alluvsim, meta
+
+
+def realized_stats(facies, poro, perm) -> dict:
+    """Realised reservoir statistics of one stored cube, as recorded in the
+    parquet: ``ntg`` = sand fraction of the binary facies, ``poro_ave`` = mean
+    porosity and ``perm_ave`` = mean log10 permeability over sand cells (None
+    when there is no sand). Shared by ``generate_sample`` and
+    ``examples/dataset_generation/crop_windows.py`` so a window is described
+    exactly like a volume."""
+    facies = np.asarray(facies)
+    out = {"ntg": float(facies.mean())}
+    active_mask = facies > 0
+    if active_mask.any():
+        # poro/perm are float16 cubes
+        poro_f32 = np.asarray(poro).astype(np.float32)
+        perm_f32 = np.maximum(np.asarray(perm).astype(np.float32), 1e-3)  # log-safe floor
+        out["poro_ave"] = float(poro_f32[active_mask].mean())
+        out["perm_ave"] = float(np.log10(perm_f32[active_mask]).mean())
+    else:
+        out["poro_ave"] = None
+        out["perm_ave"] = None
+    return out
 
 
 def _parse_axis_slice(spec):

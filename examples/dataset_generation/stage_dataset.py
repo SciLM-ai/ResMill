@@ -1,17 +1,17 @@
 """Stage the dataset directory the way the HuggingFace layout expects it: one
-folder per layer type holding ``shard_NNNN`` symlinks to the combined shards.
+folder per layer type holding ``shard_NNNN`` symlinks to the combined shards
+written by ``combine_shards.py``.
 
-    python stage_dataset.py --src $SCRATCH/resmill_dataset_v2_win64 --dst $SCRATCH/SiliciclasticReservoirs_v2
+    python stage_dataset.py --src $SCRATCH/resmill_dataset_win64 --dst $SCRATCH/SiliciclasticReservoirs
 
-``--src`` holds the ``<preset>_combined`` directories written by
-``combine_shards.py``. ``build_splits.py --root <dst>`` then indexes
-``<dst>/<layer type>/shard_NNNN``. Existing links are replaced.
+``build_splits.py --root <dst>`` then indexes ``<dst>/<layer type>/shard_NNNN``.
+Existing links are replaced.
 """
 import argparse
 import os
 from pathlib import Path
 
-# HF layer-type directory -> combined preset directory (v2 names; v1 used channels_<preset>_combined)
+# HF layer-type directory -> combined preset directory
 MAP = {
     "lobe": "lobes_combined",
     "channel_pv_shoestring": "pv_shoestring_combined",

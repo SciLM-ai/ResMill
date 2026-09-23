@@ -1,11 +1,15 @@
 # Reproducibility Guide
 
-Documents how the public **Siliciclastic Reservoirs** dataset (1,000,000 synthetic 3D reservoir cubes, hosted on HuggingFace) was produced from this engine. Every byte of the dataset can be regenerated bit-for-bit from this codebase plus the saved configs and seeds.
+How the **Siliciclastic Reservoirs** dataset (1,000,000 synthetic 3-D reservoir
+volumes and one 64 x 64 x 32 training window per volume, hosted on HuggingFace)
+is produced from this engine, end to end and deterministically.
 
-The dataset is at:
-**[`AnonymouScientist/SiliciclasticReservoirs`](https://huggingface.co/datasets/AnonymouScientist/SiliciclasticReservoirs)** (CC-BY-4.0)
+The dataset is at
+**[`AnonymouScientist/SiliciclasticReservoirs`](https://huggingface.co/datasets/AnonymouScientist/SiliciclasticReservoirs)** (CC-BY-4.0).
 
-The configs that produced it live in `examples/dataset_generation/config_full_*.json`. The Sobol master seed is `42`. Pin the engine to git tag (TBD) for exact reproduction.
+The configs are `examples/dataset_generation/config_full_<env>.json`, one per
+environment; the Sobol master seed is 42. Every path below assumes the repo root,
+the `resmill` environment (`pip install -e ".[dataset]"`) and `$SCRATCH` set.
 
 ---
 
@@ -14,240 +18,211 @@ The configs that produced it live in `examples/dataset_generation/config_full_*.
 ```bash
 git clone https://anonymous.4open.science/r/ResMill-7377
 cd ResMill
-pip install -e ".[dev]"
+pip install -e ".[dev,dataset]"
+pytest tests/            # about a minute
 ```
 
-Verify the engine works on a single sample:
+One volume through the engine:
 
 ```python
 import resmill as rm
 from resmill.layers.channel import PV_SHOESTRING
 
-layer = rm.ChannelLayer(nx=64, ny=64, nz=32,
-                        x_len=640, y_len=640, z_len=32, top_depth=0)
+layer = rm.ChannelLayer(nx=128, ny=128, nz=64, x_len=1280, y_len=1280, z_len=64, top_depth=0)
 layer.create_geology(seed=42, **PV_SHOESTRING)
-
-print(f"facies range: {layer.facies.min()}..{layer.facies.max()}")
-print(f"poro range:   {layer.poro_mat.min():.3f}..{layer.poro_mat.max():.3f}")
-print(f"perm range:   {layer.perm_mat.min():.1f}..{layer.perm_mat.max():.0f} mD")
-print(f"realized NTG: {layer.active.mean():.3f}")
-```
-
-Expected output: a `(64, 64, 32)` PV-shoestring facies cube with non-zero NTG.
-
-The 9 channel-layer pytest cases verify the engine end-to-end:
-```bash
-pytest tests/test_channel.py
+print(layer.facies.shape, layer.active.mean())
 ```
 
 ---
 
-## 2. Reproducing the published 1M dataset
+## 2. The dataset
 
-Total: 184 node-hours on an HPC CPU partition + ~50 GB scratch I/O.
+| environment | config | volumes |
+|---|---|---|
+| lobes | `config_full_lobes.json` | 200,000 |
+| pv_shoestring | `config_full_pv_shoestring.json` | 100,000 |
+| cb_labyrinth | `config_full_cb_labyrinth.json` | 100,000 |
+| cb_jigsaw | `config_full_cb_jigsaw.json` | 150,000 |
+| sh_distal | `config_full_sh_distal.json` | 100,000 |
+| sh_proximal | `config_full_sh_proximal.json` | 100,000 |
+| meander_oxbow | `config_full_meander_oxbow.json` | 100,000 |
+| delta | `config_full_delta.json` | 150,000 |
 
-### 2a. Run the 8 SLURM jobs
+Every volume is 128 x 128 x 64 cells at dx = dy = 10 m and dz = 1 m (lobes
+dx = dy = 100 m), stored whole. The training dataset is one random
+64 x 64 x 32 window per volume. `examples/dataset_generation/vista/README.md`
+describes the sampled design in detail: log-uniform channel depth 3 to 16 m,
+the number of levels from a sampled aggradation ratio so every column is
+spanned floor to roof, event budgets scaled to the box, one to three entry
+points with a sampled entry scatter, correlated porosity texture, the
+distributary-tree delta.
 
-`examples/dataset_generation/run_*.sh` are the production scripts. Each one:
-- Loads the `resmill` conda env
-- Runs `srun python -m resmill.dataset.cli config_full_<preset>.json`
-- Each MPI rank handles its rank-stripe of the 1M-job list and writes shards to `$SCRATCH/.../<output_dir>/shard_r{rank}_s{shard_idx}/`
+---
 
-Submit in any order (independent jobs):
+## 3. Producing it
+
+### 3a. Generate the volumes
+
+Eight independent Slurm jobs, one per environment, each running
+`python -m resmill.dataset.cli examples/dataset_generation/config_full_<env>.json`
+with one rank per core; rank r handles jobs r, r + world, r + 2 world, ... of the
+shuffled Sobol job list and writes `shard_rXXXX_sNNNNNN` directories of
+`shard_size` = 32 samples to the config's `output_dir`,
+`$SCRATCH/resmill_dataset/<env>/`.
+
+Launch scripts with measured costs: `examples/dataset_generation/vista/`
+(TACC Vista, 33 gg node-hours for the whole run) and
+`examples/dataset_generation/perlmutter/` (NERSC Perlmutter). Both READMEs
+give the submission commands. Each script refuses to run on a checkout that
+predates the configs it needs.
+
+A rank shard holds
+
+```
+shard_r0000_s000000/
+  facies.npy           (N, 128, 128, 64) int8     binary sand / not sand
+  poro.npy             (N, 128, 128, 64) float16  porosity
+  perm.npy             (N, 128, 128, 64) float16  permeability, mD
+  facies_alluvsim.npy  (N, 128, 128, 64) int8     six-class facies (-1 FF, 0 FFCH, 1 CS, 2 LV, 3 LA, 4 CH)
+  params.parquet       N rows: seed, layer_type, every sampled parameter, realised ntg / poro_ave / perm_ave, caption
+  params_slim.parquet  N rows: the per-family whitelist of resmill/dataset/schemas.py
+```
+
+### 3b. Cut the training windows
+
 ```bash
 cd examples/dataset_generation
-for sh in run_lobes.sh run_pv_shoestring.sh run_cb_labyrinth.sh \
-          run_cb_jigsaw.sh run_sh_distal.sh run_sh_proximal.sh \
-          run_meander_oxbow.sh run_delta.sh; do
-    sbatch "$sh"
-done
+python crop_windows.py --src $SCRATCH/resmill_dataset --dst $SCRATCH/resmill_dataset_win64 --workers 96 --verify
 ```
 
-Per-preset breakdown (matches the published dataset):
+One 64 x 64 x 32 window per volume, into a second shard tree with the same
+shard names and row order. The origin comes from
+`numpy.random.default_rng([crop_seed, seed])` with `crop_seed` 42 and the
+sample's own seed: x0 and y0 uniform over 0 to 64, z0 uniform over 1 to 31, so
+the window never contains the engine's floor or roof. `ntg`, `poro_ave`,
+`perm_ave` and the caption are recomputed on the window with the same code the
+generator uses on a volume (`resmill.dataset.generate.realized_stats`,
+`resmill.dataset.captions.caption_for`); everything else in the row is copied,
+and `crop_x0, crop_y0, crop_z0, crop_nx, crop_ny, crop_nz, crop_seed,
+source_shard, source_row` locate the window in its volume. `--verify` re-reads
+random windows against the volumes.
 
-| preset | nodes × walltime | NH (premium=2×) | samples |
-|---|---|---|---|
-| `run_lobes.sh` | 4 × 2h | 16 | 200,000 |
-| `run_pv_shoestring.sh` | 4 × 2h | 16 | 100,000 |
-| `run_cb_labyrinth.sh` | 8 × 2h | 32 | 100,000 |
-| `run_cb_jigsaw.sh` | 8 × 3h | 48 | 150,000 |
-| `run_sh_distal.sh` | 8 × 3h | 48 | 100,000 |
-| `run_sh_proximal.sh` | 8 × 3h | 48 | 100,000 |
-| `run_meander_oxbow.sh` | 8 × 4h | 64 | 100,000 |
-| `run_delta.sh` | 16 × 10h | 192 (used ~33 in practice) | 150,000 |
-
-Outputs land at `$SCRATCH/resmill_dataset/<output_dir>/` (configurable via the `output_dir` field of each `config_full_*.json`).
-
-### 2b. Combine shards into the final 256-shard-per-preset layout
-
-Rank-shards (512–2048 per preset, one per MPI rank) are too granular for typical ML pipelines. Combine them deterministically into 256 shards per preset:
+### 3c. Combine the rank shards
 
 ```bash
-python examples/dataset_generation/combine_shards.py \
-    --root $SCRATCH/resmill_dataset \
-    --target 256 \
-    --workers 32
+python combine_shards.py --root $SCRATCH/resmill_dataset_win64 --group 8 --workers 64
 ```
 
-This concatenates contiguous groups of rank-shards in deterministic lex-numeric order (rank 0..N-1 → `combined_shard_0000`, etc.). Samples within each shard preserve original row order; npy arrays + parquets stay row-aligned. Output: `<input_preset>_combined/combined_shard_NNNN/`.
+Eight consecutive rank shards (lex-numeric order, rank 0 first) become one
+`combined_shard_NNNN` of up to 256 samples under `<env>_combined/`, arrays and
+parquets concatenated in that order. The script checks the total sample count
+per environment and that sample 0 of `combined_shard_0000` equals sample 0 of
+`shard_r0000_s000000`.
 
-The script verifies after each preset that:
-- Total combined sample count == total rank-shard sample count
-- Sample 0 of `combined_shard_0000` matches sample 0 of rank `shard_r0000` for all 4 npy arrays + the slim parquet first row
-
-### 2c. Generate the train/validation/test splits
+### 3d. Stage the HuggingFace layout
 
 ```bash
-python examples/dataset_generation/build_splits.py \
-    --root $SCRATCH/SiliciclasticReservoirs \
-    --out  $SCRATCH/SiliciclasticReservoirs/splits \
-    --seed 42 --train-frac 0.90 --val-frac 0.05
+python stage_dataset.py --src $SCRATCH/resmill_dataset_win64 --dst $SCRATCH/SiliciclasticReservoirs
 ```
 
-Produces `train.parquet`, `validation.parquet`, `test.parquet` — one row per sample, columns `(layer_type, shard_dir, sample_idx)`. Stratified by `layer_type`, deterministic with the master seed.
+One directory per layer type (`lobe`, `channel_pv_shoestring`, ...,
+`channel_meander_oxbow`, `delta`) holding `shard_NNNN` symlinks to the combined
+shards.
 
-### 2d. Stage the HuggingFace upload directory
+### 3e. Splits
 
 ```bash
-# Symlinks to combined data + the staged READMEs + splits
-DST=$SCRATCH/SiliciclasticReservoirs
-SRC=$SCRATCH/resmill_dataset
-declare -A MAP=(
-  [lobe]=lobes_combined
-  [channel_pv_shoestring]=channels_pv_shoestring_combined
-  [channel_cb_labyrinth]=channels_cb_labyrinth_combined
-  [channel_cb_jigsaw]=channels_cb_jigsaw_combined
-  [channel_sh_distal]=channels_sh_distal_combined
-  [channel_sh_proximal]=channels_sh_proximal_combined
-  [channel_meander_oxbow]=channels_meander_oxbow_combined
-  [delta]=delta_combined
-)
-for hf in "${!MAP[@]}"; do
-    mkdir -p "$DST/$hf"
-    for shard in "$SRC/${MAP[$hf]}"/combined_shard_*; do
-        idx=$(basename "$shard" | sed 's/combined_shard_//')
-        ln -sf "$shard" "$DST/$hf/shard_$idx"
-    done
-done
+python build_splits.py --root $SCRATCH/SiliciclasticReservoirs --out $SCRATCH/SiliciclasticReservoirs/splits --seed 42 --train-frac 0.90 --val-frac 0.05
 ```
 
-Then upload with `hf upload AnonymouScientist/SiliciclasticReservoirs . --repo-type=dataset`.
+`train.parquet`, `validation.parquet`, `test.parquet`, one row per sample with
+`(layer_type, shard_dir, sample_idx)`, 90 / 5 / 5 stratified by layer type,
+deterministic with the seed.
+
+Then `hf upload AnonymouScientist/SiliciclasticReservoirs . --repo-type=dataset`
+from the staged directory.
 
 ---
 
-## 3. Reproducing a single sample bit-for-bit
+## 4. Reproducing a single sample bit-for-bit
 
-Every sample's `params.parquet` row carries the seed and full physics parameters. To regenerate:
+Every row of `params.parquet` carries the seed and the full parameter set. To
+regenerate a volume:
 
 ```python
-import pyarrow.parquet as pq
-import numpy as np
+import numpy as np, pyarrow.parquet as pq
 import resmill as rm
 
-# Pick a sample from a shard
-row = pq.read_table(
-    "$SCRATCH/.../delta_combined/combined_shard_0000/params.parquet"
-).to_pylist()[42]   # sample index 42
+row = pq.read_table("$SCRATCH/resmill_dataset/delta/shard_r0000_s000000/params.parquet").to_pylist()[3]
 
-# Strip non-engine keys
-ENGINE_IGNORE = {"layer_type", "preset", "caption", "ntg", "requested_ntg",
-                 "poro_ave", "perm_ave",
-                 "r_ave_m", "r_ave_cells", "r_major_m", "r_major_cells",
-                 "dh_ave_m", "dh_ave_cells",
-                 "mCHdepth_m", "mCHdepth_cells", "mCHwidth_m", "mCHwidth_cells",
-                 "width_cells", "depth_cells"}
-kwargs = {k: v for k, v in row.items() if k not in ENGINE_IGNORE and v is not None}
+NOT_ENGINE = {"layer_type", "preset", "caption", "ntg", "requested_ntg", "poro_ave", "perm_ave",
+              "r_ave_m", "r_ave_cells", "r_major_m", "r_major_cells", "dh_ave_m", "dh_ave_cells",
+              "mCHdepth_m", "mCHdepth_cells", "mCHwidth_m", "mCHwidth_cells", "width_cells", "depth_cells"}
+kwargs = {k: v for k, v in row.items() if k not in NOT_ENGINE and v is not None}
 seed = int(kwargs.pop("seed"))
 
-# Re-instantiate the layer (config grid kwargs are at examples/dataset_generation/config_full_<preset>.json)
-nx, ny, nz, x_len, y_len, z_len = 80, 80, 50, 800.0, 800.0, 50.0  # delta grid
-layer = rm.DeltaLayer(nx=nx, ny=ny, nz=nz,
-                      x_len=x_len, y_len=y_len, z_len=z_len, top_depth=0)
+layer = rm.DeltaLayer(nx=128, ny=128, nz=64, x_len=1280.0, y_len=1280.0, z_len=64.0, top_depth=5000.0)
 np.random.seed(seed)
 layer.create_geology(**kwargs)
-
-# Crop the engine output the same way the dataset writer does:
-# crop_spec from config grid: x: 8:-8, y: 8:-8, z: 9:-9
-facies_cropped = layer.facies[8:-8, 8:-8, 9:-9]   # (64, 64, 32)
-poro_cropped   = layer.poro_mat[8:-8, 8:-8, 9:-9]
-perm_cropped   = layer.perm_mat[8:-8, 8:-8, 9:-9]
+# layer.facies == facies_alluvsim.npy[3]; (layer.facies >= 1) == facies.npy[3];
+# poro_mat / perm_mat match poro.npy / perm.npy after the float16 cast.
 ```
 
-`facies_cropped` will match `facies.npy[42]` from that shard byte-for-byte (subject to float16 cast for poro/perm).
+The grid arguments are the `grid` section of the environment's config. A
+window is `volume[x0:x0+64, y0:y0+64, z0:z0+32]` with the `crop_*` columns of
+its row, and `resmill.dataset.generate.realized_stats` gives its `ntg`,
+`poro_ave` and `perm_ave`.
 
 ---
 
-## 4. Validation / QA
-
-Quick sanity check on any shard dir:
+## 5. Validation / QA
 
 ```bash
-python examples/dataset_generation/plot_dataset.py \
-    $SCRATCH/resmill_dataset/delta \
-    --workers 32 --limit 100
+python examples/dataset_generation/plot_dataset.py $SCRATCH/resmill_dataset/delta --workers 32 --limit 100
+python examples/dataset_generation/plot_dataset_stats.py $SCRATCH/resmill_dataset/delta
 ```
 
-Produces `facies_binary_pictures/`, `poro_pictures/`, `perm_pictures/`, `facies_alluvsim_pictures/` PNGs for the first 100 samples — useful for visual QA.
-
-Per-layer-type summary stats:
-
-```bash
-python examples/dataset_generation/plot_dataset_stats.py \
-    $SCRATCH/resmill_dataset/delta
-```
-
-Produces `stats_pictures/stats_delta.png` with NTG / poro / perm / geometry histograms + slim-column correlation heatmap.
-
-For a full QA cycle on 100-sample subsets per preset (used during development):
-```bash
-bash examples/dataset_generation/replot_all_test_subsets.sh
-```
+The first writes facies, porosity and permeability pictures of the first 100
+samples of a shard tree, the second per-environment histograms of NTG,
+porosity, permeability and geometry plus the slim-column correlation heatmap.
 
 ---
 
-## 5. Engine architecture (high level)
+## 6. Engine architecture (high level)
 
-For developers who want to understand or extend the engine:
-
-- **`resmill/layers/_fluvial.py`** — main fluvial-engine class. AR(2) walks (Pyrcz-Sun streamline model), avulsion-inside (anchored to `mCHazi`), neck cutoff, level aggradation, per-event K-C draws.
-- **`resmill/layers/_genchannel.py`** — Numba-JIT kernel that paints one streamline's U-shape; writes per-cell `depth_norm` for upward-fining ramp.
-- **`resmill/layers/_genabandoned.py`** — abandoned-channel mud plug (FFCH).
-- **`resmill/layers/_calc_levee.py`** — natural-levee (LV) painter.
-- **`resmill/layers/_calc_lobe_splay.py`** — crevasse-splay (CS) painters.
-- **`resmill/layers/_make_cutoff.py`** — neck cutoff geometry.
-- **`resmill/layers/channel.py`** — `ChannelLayer` (drives the engine, hosts `FACIES_PROPS`, applies per-event ramp + per-realization mults in `_finalize_facies_table`).
-- **`resmill/layers/delta.py`** — `DeltaLayer` (subclass driving `n_generations` independent fluvial sims merged by max-facies takeover; per-cell aux fields propagate from the winning generation).
-- **`resmill/layers/lobe.py`** — `LobeLayer` (separate non-fluvial implementation: stamped ellipsoidal turbidite lobes + Gaussian poro field).
+- **`resmill/layers/_fluvial.py`** — the fluvial engine: AR(2) streamline walks, several entry points, avulsion inside and outside, migration with neck cutoffs, level aggradation, per-event Kozeny-Carman draws, and the distributary-tree mode of the delta. Its Python-level loops are Numba kernels (`_movwinsmooth`, curvature, bank velocity).
+- **`resmill/layers/_genchannel.py`** — Numba kernel painting one streamline's U-shape, with the fused nearest-node search and sub-node refinement; writes per-cell `depth_norm` for the upward-fining ramp.
+- **`resmill/layers/_genabandoned.py`**, **`_calc_levee.py`**, **`_calc_lobe_splay.py`**, **`_make_cutoff.py`** — abandoned-channel mud plugs, levees, splays and mouth bars, neck-cutoff geometry.
+- **`resmill/layers/channel.py`** — `ChannelLayer`, the presets, `FACIES_PROPS`, and the property assignment (facies base values, upward-fining ramp, per-event multipliers, per-reservoir multipliers, correlated porosity texture).
+- **`resmill/layers/delta.py`** — `DeltaLayer`: `n_generations` independent single-level runs merged by facies rank, bottom generation anchored on the floor, mouth bars at the distal tips.
+- **`resmill/layers/lobe.py`** — `LobeLayer`: stamped turbidite lobes with a correlated Gaussian porosity field.
 
 The dataset pipeline:
 
-- **`resmill/dataset/sampling.py`** — Sobol/LHS/grid/uniform JobList builder with shared/jitter/derived spec types.
-- **`resmill/dataset/generate.py`** — `generate_sample(job, grid_cfg)` → `(facies, poro, perm, facies_alluvsim, meta)`.
-- **`resmill/dataset/io.py`** — `ShardWriter` per-rank shard writer (writes 4 npy + 2 parquet atomically).
-- **`resmill/dataset/cli.py`** — SLURM rank-stripe entry point.
-- **`resmill/dataset/schemas.py`** — slim parquet column whitelist per layer family.
-- **`resmill/dataset/captions.py`** — natural-language caption template per layer family.
+- **`resmill/dataset/sampling.py`** — Sobol / LHS / grid / uniform job list with the `shared`, `jitter`, `fraction_of`, `linear_of`, `inverse_of` and `levels_from_ratio` specs.
+- **`resmill/dataset/generate.py`** — `generate_sample(job, grid_cfg)` and `realized_stats`.
+- **`resmill/dataset/io.py`** — `ShardWriter`, the per-rank shard writer (4 npy + 2 parquet, written atomically).
+- **`resmill/dataset/cli.py`** — the Slurm rank-stripe entry point.
+- **`resmill/dataset/schemas.py`**, **`captions.py`** — slim-column whitelist and caption templates per layer family.
+- **`examples/dataset_generation/`** — `crop_windows.py`, `combine_shards.py`, `stage_dataset.py`, `build_splits.py`, the `vista/` and `perlmutter/` launch scripts, `run_dataset.py` (a multiprocessing driver for small runs without Slurm), and the plotting tools.
 
 ---
 
-## 6. Determinism contract
+## 7. Determinism contract
 
-Every step is deterministic given the master seed:
+1. Sobol draws: `qmc.Sobol(scramble=True, seed=section_seed)` with `section_seed = (master_seed + 1) * 10007 + lt_id`.
+2. Job list shuffle: `np.random.default_rng(master_seed).permutation(total_n)`; per-sample seeds from `np.random.default_rng(section_seed)`.
+3. Per-sample geometry: `np.random.seed(sample_seed)` before `create_geology`; Numba kernels are pure functions.
+4. Windows: origin from `default_rng([crop_seed, sample_seed])`.
+5. Combining, staging and splitting are order-preserving and seeded.
 
-1. `qmc.Sobol(scramble=True, seed=section_seed).random(N)` — bit-identical bytes per call.
-2. `section_seed = (master_seed + 1) * 10007 + lt_id` — deterministic.
-3. JobList shuffle: `np.random.default_rng(master_seed).permutation(total_n)`.
-4. Per-sample seeds: `np.random.default_rng(section_seed).integers(...)`.
-5. Per-sample geometry: `np.random.seed(sample_seed)` before each `create_geology` call.
-6. Numba kernels: pure functions, no shared state.
-
-A re-run with the same master seed produces the same 1,000,000 samples in the same order. The `combine_shards.py` and `build_splits.py` scripts are also deterministic.
+A re-run with the same master seed and configs produces the same 1,000,000
+volumes in the same order, the same windows, the same combined shards and the
+same splits.
 
 ---
 
-## 7. Citation
-
-If you use this dataset or engine, please cite:
+## 8. Citation
 
 ```bibtex
 @misc{siliciclastic_reservoirs_2026,
@@ -273,43 +248,9 @@ The engine builds on the streamline-based fluvial architecture by Pyrcz & Deutsc
 
 ---
 
-## 8. License
+## 9. License
 
-- **Engine code (this repository)**: MIT (or pick whatever you prefer — propose Apache-2.0 if you want patent grant)
-- **Dataset on HuggingFace**: CC-BY-4.0
-
----
-
-## Issues / Contact
+- Engine code (this repository): MIT
+- Dataset on HuggingFace: CC-BY-4.0
 
 File issues at [`anonymous.4open.science/r/ResMill-7377`](https://anonymous.4open.science/r/ResMill-7377).
-
-
----
-
-## 4. The v2 dataset (2026-09)
-
-v2 is a redesign, not a re-run of v1: 128 x 128 x 64 volumes (dx = dy = 10 m,
-dz = 1 m, lobes dx = 100 m) stored whole, with random 64 x 64 x 32 training
-windows taken later; channel depth 3 to 16 m log-uniform; the number of levels
-from a sampled aggradation ratio (level spacing over channel depth, 0.7 to 1.4)
-so every column is spanned floor to roof; per-level event budgets scaled by the
-plan area; several entry points and a sampled entry scatter; a distributary-tree
-delta; correlated porosity texture inside sand; and the fixed engine (entries on
-the grid boundary, walk clipped by the grid). The configs are
-`examples/dataset_generation/config_full_<env>_v2.json`; the Sobol seed and the
-sample counts are v1's. Launch scripts and measured costs: `vista/` (TACC Vista,
-33 gg node-hours measured for the whole run) and `perlmutter/` (NERSC). The
-original `run_*.sh` in this directory are the Perlmutter scripts that produced
-v1 and are kept for the record.
-
-Post-processing (the `vista/README.md` has the exact commands): `crop_windows.py`
-cuts one random 64 x 64 x 32 window per volume (origin from `crop_seed` 42 and
-the sample seed, window base between 1 and 31 so it never contains the engine's
-floor or roof) into a second shard tree with the same names and recomputes
-`ntg`, `poro_ave`, `perm_ave` and the caption on the window; `combine_shards.py
---group 8` merges eight 32-sample rank shards into one combined shard;
-`stage_dataset.py` builds the HuggingFace layout of per-layer-type `shard_NNNN`
-symlinks; `build_splits.py` writes the 90/5/5 splits. The window rows keep
-`crop_x0, crop_y0, crop_z0, source_shard, source_row`, so the raw 128 x 128 x 64
-volume around any window is recoverable.

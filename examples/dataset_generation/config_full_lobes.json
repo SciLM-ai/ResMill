@@ -1,23 +1,19 @@
 {
-  "_comment_": "Full 10M-reservoir config \u2014 curated parameter set per layer (only knobs that visually change the reservoir). Channels & delta drive the new Alluvsim-faithful fluvial engine. Channels mix the 5 Pyrcz-2004 presets via the 'preset' field; user-supplied params override preset defaults.",
+  "_comment_": "128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored whole; the training dataset takes one random 64 x 64 x 32 window per volume (crop_windows.py; z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). Lobes keep dx=dy=100 m.",
   "output_dir": "$SCRATCH/resmill_dataset/lobes",
   "seed": 42,
-  "shard_size": 1000,
+  "shard_size": 32,
   "grid": {
-    "nx": 80,
-    "ny": 80,
-    "nz": 50,
-    "x_len": 8000.0,
-    "y_len": 8000.0,
-    "z_len": 50.0,
+    "nx": 128,
+    "ny": 128,
+    "nz": 64,
+    "x_len": 12800.0,
+    "y_len": 12800.0,
+    "z_len": 64.0,
     "top_depth": 5000.0,
     "dip": 0.0,
     "kzkx": 0.1,
-    "crop": {
-      "x": "8:-8",
-      "y": "8:-8",
-      "z": "9:-9"
-    }
+    "_comment_dx_": "128 x 128 x 64 cells at dx=dy=10 m, dz=1 m (1280 x 1280 x 64 m), stored whole; the training dataset takes one random 64 x 64 x 32 window per volume (z offset 1-31 so the engine's floor and roof, where the level ladder is anchored, never coincide with a window edge). Lobes keep dx=dy=100 m."
   },
   "layers": {
     "lobe": {
@@ -95,5 +91,6 @@
         }
       }
     }
-  }
+  },
+  "_comment_shard_size_": "32: the writer buffers a whole shard in memory and a 128 x 128 x 64 sample is 6 MB, so 1000 samples would be 6 GB per rank and 144 ranks would need 860 GB on a 237 GB node. 32 samples = 192 MB per rank."
 }
