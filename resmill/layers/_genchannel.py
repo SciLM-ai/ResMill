@@ -212,19 +212,34 @@ def nearest_refined(cx, cy, x_loc, y_loc, ndiscr, two):
     n_nodes = cx.size
     dd = np.empty(n_local, dtype=np.int64)
     dist = np.empty(n_local, dtype=np.float64)
+    guess = 0
     for myid in range(n_local):
         lx = x_loc[myid]
         ly = y_loc[myid]
+        # Bound from the previous cell's nearest node (cells come in raster
+        # order, so it is usually close). A node with |dx| or |dy| beyond
+        # bound * (1 + 1e-12) has d > bound >= the true minimum and can never
+        # be the first strict minimum, so skipping it leaves the result of
+        # the in-order scan below unchanged; the 1e-12 covers the rounding
+        # of sqrt(dx*dx + dy*dy) against |dx|.
+        gx = cx[guess] - lx
+        gy = cy[guess] - ly
+        bound = np.sqrt(gx * gx + gy * gy) * (1.0 + 1e-12)
         best_d = np.inf
         best_i = 0
         for i in range(n_nodes):
             dx = cx[i] - lx
+            if dx > bound or -dx > bound:
+                continue
             dy = cy[i] - ly
+            if dy > bound or -dy > bound:
+                continue
             d = np.sqrt(dx * dx + dy * dy)
             if d < best_d:
                 best_d = d
                 best_i = i
         idis = best_i
+        guess = idis
         lo = max(0, idis - 1)
         hi = min(n_nodes - 1, idis + 1)
         best = math.pow(cx[idis] - lx, two) + math.pow(cy[idis] - ly, two)
