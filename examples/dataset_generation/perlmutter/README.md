@@ -5,7 +5,7 @@ Same eight jobs as `../vista/`, with Perlmutter headers: `-C cpu`, `-q regular`
 `--licenses=cfs,SCRATCH`, and `-A REPLACE_WITH_YOUR_ALLOCATION` to fill in.
 Each script activates `$WORK/conda_envs/resmill`; if yours lives elsewhere,
 edit that line. Every script refuses to run unless the checkout contains
-ResMill `COMMIT_SHA`, so `git pull` first.
+ResMill `27c48e4`, so `git pull` first.
 
 ```bash
 cd $WORK/codes/ResMill && git pull                     # or wherever the repo is
@@ -66,7 +66,17 @@ cores and another 1.3 x in the walltime. Perlmutter nodes have 512 GB, so the
 1.4 GB lobe ranks fit at 128 per node. Perlmutter has no XALT preload, so the
 `env -u LD_PRELOAD` of the Vista scripts is not needed.
 
-COST_TABLE
+| job | volumes | s per volume | core-hours | node-hours | nodes x walltime |
+|---|---|---|---|---|---|
+| run_lobes.sh | 200,000 | 6 | 455 | 3.6 | 1 x 05:00 |
+| run_pv_shoestring.sh | 100,000 | 5 | 177 | 1.4 | 1 x 02:00 |
+| run_cb_labyrinth.sh | 100,000 | 13 | 459 | 3.6 | 1 x 05:00 |
+| run_cb_jigsaw.sh | 150,000 | 16 | 861 | 6.7 | 2 x 04:30 |
+| run_sh_distal.sh | 100,000 | 21 | 755 | 5.9 | 2 x 04:00 |
+| run_sh_proximal.sh | 100,000 | 18 | 654 | 5.1 | 2 x 03:30 |
+| run_meander_oxbow.sh | 100,000 | 56 | 2,019 | 15.8 | 4 x 05:30 |
+| run_delta.sh | 150,000 | 11 | 612 | 4.8 | 2 x 03:30 |
+| **total** | 1,000,000 | | **5,991** | **47** | |
 
 ## After the eight jobs: windows, combined shards, staging, splits
 

@@ -9,7 +9,7 @@ cd examples/dataset_generation
 for j in vista/run_*.sh; do sbatch "$j"; done
 ```
 
-Every script refuses to run unless the checkout contains ResMill `COMMIT_SHA`
+Every script refuses to run unless the checkout contains ResMill `27c48e4`
 (the dataset configs and the aggradation-ratio sampler).
 
 ## What the configs describe
@@ -66,7 +66,17 @@ migration kernels; MEANDER 56 s a volume). Walltimes carry a 1.3 x margin.
 Lobes need 1.4 GB per rank at this size, so the lobe script runs 96 ranks per
 node; the fluvial environments stay under 0.6 GB.
 
-COST_TABLE
+| job | volumes | s per volume | core-hours | node-hours | nodes x walltime |
+|---|---|---|---|---|---|
+| run_lobes.sh | 200,000 | 6 | 350 | 3.6 | 1 x 05:00 |
+| run_pv_shoestring.sh | 100,000 | 5 | 136 | 0.9 | 1 x 01:30 |
+| run_cb_labyrinth.sh | 100,000 | 13 | 353 | 2.4 | 1 x 03:30 |
+| run_cb_jigsaw.sh | 150,000 | 16 | 662 | 4.6 | 2 x 03:00 |
+| run_sh_distal.sh | 100,000 | 21 | 581 | 4.0 | 2 x 03:00 |
+| run_sh_proximal.sh | 100,000 | 18 | 503 | 3.5 | 1 x 05:00 |
+| run_meander_oxbow.sh | 100,000 | 56 | 1,553 | 10.8 | 3 x 05:00 |
+| run_delta.sh | 150,000 | 11 | 471 | 3.3 | 1 x 04:30 |
+| **total** | 1,000,000 | | **4,608** | **33** | |
 
 The full run took 33 gg node-hours, 11 SU at the 1/3 charge factor: PV 0:24,
 SH_DIST 1:52, CB_LAB 2:01, CB_JIG 2:08, delta 2:31, SH_PROX 3:18, lobes 3:35,
