@@ -15,6 +15,8 @@ When ``erode_above`` is True (active CH) and the cell sits *above*
 ``CHelev`` with an existing reservoir code, it is reset to FF — port of
 ``genchannel.for:213-218``.
 """
+import math
+
 import numpy as np
 from numba import jit
 
@@ -41,7 +43,7 @@ def find_near_grid(cx, cy, good, xsiz, ysiz, xmn, ymn, b, nx, ny):
 @jit(nopython=True)
 def mychannel(nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx,
               thalweg, chelev_arr, zsiz, dd, facies, poro, chwidth,
-              idmat, dwratio, merge_overlap, facies_code, ntg_counter,
+              dist_arr, dwratio, merge_overlap, facies_code, ntg_counter,
               compute_poro, erode_above, poro0,
               depth_norm, poro_mult_field, log_perm_offset_field,
               ev_poro_mult, ev_log_perm_offset):
@@ -61,7 +63,7 @@ def mychannel(nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx,
         idx = mynx[myid]
         idy = myny[myid]
         idis = dd[myid]
-        dist = idmat[idis, myid]
+        dist = dist_arr[myid]
         # Local-node halfwidth gate (item 1.6)
         if dist > chwidth[idis]:
             continue
@@ -195,6 +197,49 @@ def mychannel(nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx,
     return 0
 
 
+@jit(nopython=True)
+def nearest_refined(cx, cy, x_loc, y_loc, ndiscr, two):
+    """Per local cell: index of the nearest streamline node (first minimum of the
+    Euclidean distance, exactly as ``sqrt((cx-x)**2+(cy-y)**2).argmin(axis=0)``
+    on the full node x cell matrix) and the ``_refine_nearest`` sub-node
+    distance. Bit-identical to the former matrix + Python-loop path: the
+    search squares with a multiply like NumPy's ``**2``, the refinement calls
+    ``math.pow(., two)`` with ``two`` = 2.0 passed at run time so it goes
+    through libm ``pow`` like CPython's ``float ** 2`` (a literal exponent
+    would be folded to a multiply, which differs in the last bit).
+    """
+    n_local = x_loc.size
+    n_nodes = cx.size
+    dd = np.empty(n_local, dtype=np.int64)
+    dist = np.empty(n_local, dtype=np.float64)
+    for myid in range(n_local):
+        lx = x_loc[myid]
+        ly = y_loc[myid]
+        best_d = np.inf
+        best_i = 0
+        for i in range(n_nodes):
+            dx = cx[i] - lx
+            dy = cy[i] - ly
+            d = np.sqrt(dx * dx + dy * dy)
+            if d < best_d:
+                best_d = d
+                best_i = i
+        idis = best_i
+        lo = max(0, idis - 1)
+        hi = min(n_nodes - 1, idis + 1)
+        best = math.pow(cx[idis] - lx, two) + math.pow(cy[idis] - ly, two)
+        for sub in range(1, ndiscr):
+            t = sub / float(ndiscr)
+            xt = (1.0 - t) * cx[lo] + t * cx[hi]
+            yt = (1.0 - t) * cy[lo] + t * cy[hi]
+            d2 = math.pow(xt - lx, two) + math.pow(yt - ly, two)
+            if d2 < best:
+                best = d2
+        dd[myid] = idis
+        dist[myid] = np.sqrt(max(best, 0.0))
+    return dd, dist
+
+
 def _refine_nearest(cx, cy, x_loc, y_loc, dd_initial, ndiscr=5):
     """5-step ``splint``-equivalent walk to sub-node accuracy (item 2.10).
 
@@ -267,20 +312,14 @@ def genchannel(b, xsiz, ysiz, chelev_arr, zsiz, nx, ny, nz, cx, cy, x, y,
     mynx, myny = np.where(good == 1)
     if mynx.size == 0:
         return 0
-    cx2 = cx.reshape(ndis, 1)
-    cy2 = cy.reshape(ndis, 1)
     localx = x[mynx]
     localy = y[myny]
-    idmat = np.sqrt((cx2 - localx)**2 + (cy2 - localy)**2)
-    dd = idmat.argmin(axis=0)
-    # Sub-node refinement (item 2.10)
-    refined = _refine_nearest(cx, cy, localx, localy, dd, ndiscr=5)
-    # Replace the per-cell distance row in idmat at the dd index with the refined value
-    for myid in range(localx.size):
-        idmat[dd[myid], myid] = refined[myid]
+    # Nearest node + sub-node refinement (item 2.10) in one pass; replaces
+    # the ndis x n_local distance matrix, its argmin and a Python loop.
+    dd, dist_arr = nearest_refined(cx, cy, localx, localy, 5, 2.0)
 
     mychannel(nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx, thalweg,
-              chelev_arr, zsiz, dd, facies, poro, chwidth, idmat,
+              chelev_arr, zsiz, dd, facies, poro, chwidth, dist_arr,
               dwratio, bool(merge_overlap), int(facies_code), ntg_counter,
               bool(compute_poro), bool(erode_above), float(poro0),
               depth_norm, poro_mult_field, log_perm_offset_field,

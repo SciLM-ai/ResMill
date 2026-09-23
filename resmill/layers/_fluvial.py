@@ -27,6 +27,7 @@ Conventions inside the engine match Alluvsim:
 from __future__ import annotations
 
 import numpy as np
+from numba import njit
 from scipy.interpolate import CubicSpline
 from scipy.spatial import cKDTree
 
@@ -56,29 +57,138 @@ def _gauss_clip(mean: float, stdev: float, lo: float = 0.0, hi: float | None = N
     return val
 
 
+@njit(cache=False)
+def _pairwise_sum(a, n):
+    """NumPy's ``pairwise_sum`` for a contiguous float64 block of n <= 128
+    elements (sequential below 8, eight partial accumulators above), so the
+    Numba smoother below sums in exactly the order ``ndarray.sum()`` does."""
+    if n < 8:
+        res = 0.0
+        for i in range(n):
+            res += a[i]
+        return res
+    r0 = a[0]; r1 = a[1]; r2 = a[2]; r3 = a[3]
+    r4 = a[4]; r5 = a[5]; r6 = a[6]; r7 = a[7]
+    i = 8
+    while i < n - (n % 8):
+        r0 += a[i]; r1 += a[i + 1]; r2 += a[i + 2]; r3 += a[i + 3]
+        r4 += a[i + 4]; r5 += a[i + 5]; r6 += a[i + 6]; r7 += a[i + 7]
+        i += 8
+    res = ((r0 + r1) + (r2 + r3)) + ((r4 + r5) + (r6 + r7))
+    while i < n:
+        res += a[i]
+        i += 1
+    return res
+
+
+@njit(cache=False)
+def _movwinsmooth_kernel(arr, nwin, weights, out, buf):
+    n = arr.size
+    for i in range(n):
+        lo = max(0, i - nwin)
+        hi = min(n, i + nwin + 1)
+        wlo = lo - (i - nwin)
+        m = hi - lo
+        for k in range(m):
+            buf[k] = arr[lo + k] * weights[wlo + k]
+        num = _pairwise_sum(buf, m)
+        for k in range(m):
+            buf[k] = weights[wlo + k]
+        out[i] = num / _pairwise_sum(buf, m)
+
+
+_MOVWIN_WEIGHTS: dict = {}
+
+
 def _movwinsmooth(arr: np.ndarray, nwin: int) -> np.ndarray:
     """Triangular moving-window smoother (port of Alluvsim ``movwinsmooth.for``).
 
     Weights ``w[i] = (nwin - |i| + 1) / (nwin + 1)`` for ``|i| <= nwin``,
     normalised per evaluation point so edge handling matches Alluvsim's
-    ``count``-based renormalisation.
+    ``count``-based renormalisation. Numba kernel; bit-identical to the
+    former ``(arr[lo:hi] * w).sum() / w.sum()`` loop (same products, same
+    pairwise summation order).
     """
     n = arr.size
     if n == 0 or nwin <= 0:
         return arr.copy()
-    out = np.empty_like(arr, dtype=np.float64)
-    weights = np.array(
-        [(nwin - abs(i) + 1) / (nwin + 1.0) for i in range(-nwin, nwin + 1)],
-        dtype=np.float64,
-    )
-    for i in range(n):
-        lo = max(0, i - nwin)
-        hi = min(n, i + nwin + 1)
-        wlo = lo - (i - nwin)
-        whi = wlo + (hi - lo)
-        w = weights[wlo:whi]
-        out[i] = float((arr[lo:hi] * w).sum() / w.sum())
+    weights = _MOVWIN_WEIGHTS.get(nwin)
+    if weights is None:
+        weights = np.array(
+            [(nwin - abs(i) + 1) / (nwin + 1.0) for i in range(-nwin, nwin + 1)],
+            dtype=np.float64,
+        )
+        _MOVWIN_WEIGHTS[nwin] = weights
+    out = np.empty(n, dtype=np.float64)
+    buf = np.empty(2 * nwin + 1, dtype=np.float64)
+    _movwinsmooth_kernel(np.ascontiguousarray(arr, dtype=np.float64), int(nwin), weights, out, buf)
     return out
+
+
+@njit(cache=False)
+def _curv_azimuth(cx, cy):
+    """Per-segment compass azimuth (``cal_curv`` step 1), same arithmetic as
+    the former Python loop."""
+    n0 = cx.size
+    azi = np.zeros(n0)
+    for i in range(1, n0):
+        di = cx[i] - cx[i - 1]
+        dj = cy[i] - cy[i - 1]
+        if di == 0.0:
+            azi[i] = 0.0 if dj > 0 else 180.0
+        elif di > 0.0 and dj >= 0.0:
+            azi[i] = 90.0 - np.degrees(np.arctan(dj / di))
+        elif di < 0.0:
+            azi[i] = 270.0 - np.degrees(np.arctan(dj / di))
+        else:  # di > 0, dj < 0
+            azi[i] = 90.0 - np.degrees(np.arctan(dj / di))
+    azi[0] = azi[1]
+    return azi
+
+
+@njit(cache=False)
+def _curv_from_azimuth(azi, s_seg):
+    """Curvature dazi/ds with the 360-degree wrap fix (``cal_curv`` step 3)."""
+    n0 = azi.size
+    c = np.zeros(n0)
+    for i in range(1, n0):
+        ds = s_seg[i] - s_seg[i - 1]
+        a1 = azi[i - 1]
+        a2 = azi[i]
+        d1 = a2 - a1
+        d2 = a2 - (a1 + 360.0)
+        dazi = d1 if abs(d1) < abs(d2) else d2
+        c[i] = dazi / max(ds, 1e-9)
+    c[0] = c[1]
+    return c
+
+
+@njit(cache=False)
+def _dcds(c, s_seg):
+    """dC/ds by finite difference (``cal_curv`` step 5)."""
+    n0 = c.size
+    d = np.zeros(n0)
+    for i in range(1, n0):
+        ds = s_seg[i] - s_seg[i - 1]
+        d[i] = (c[i] - c[i - 1]) / max(ds, 1e-9)
+    d[0] = d[1]
+    return d
+
+
+@njit(cache=False)
+def _bank_velocity(n, ds, c, us0, Cf, h0, part2, part3, part4):
+    """Sun 1996 eq. 15 bank-retreat velocity with the 30-node decaying
+    integral (``calcusb.for``); the former Python double loop, verbatim."""
+    usb = np.zeros(n)
+    for idis in range(1, n):
+        start = max(0, idis - 30)
+        ds_cum = 0.0
+        inte = 0.0
+        for j in range(idis, start - 1, -1):
+            ds_cum += ds[j]
+            inte += np.exp(-2.0 * Cf * ds_cum / h0) * c[j]
+        usb[idis] = -us0 * c[idis] + part2 * (part3 + part4) * inte
+    return usb
 
 
 class fluvial:
@@ -813,42 +923,13 @@ class fluvial:
         dl = np.zeros(n0)
         dl[1:] = np.sqrt(np.diff(self.cx) ** 2 + np.diff(self.cy) ** 2)
         s_seg = np.cumsum(dl)
-        # Per-segment compass azimuth
-        azi = np.zeros(n0)
-        for i in range(1, n0):
-            di = self.cx[i] - self.cx[i - 1]
-            dj = self.cy[i] - self.cy[i - 1]
-            if di == 0.0:
-                azi[i] = 0.0 if dj > 0 else 180.0
-            elif di > 0.0 and dj >= 0.0:
-                azi[i] = 90.0 - np.degrees(np.arctan(dj / di))
-            elif di < 0.0:
-                azi[i] = 270.0 - np.degrees(np.arctan(dj / di))
-            else:  # di > 0, dj < 0
-                azi[i] = 90.0 - np.degrees(np.arctan(dj / di))
-        azi[0] = azi[1]
-        azi = _movwinsmooth(azi, 10)
-
-        # Curvature with 360° wrap correction
-        c = np.zeros(n0)
-        for i in range(1, n0):
-            ds = s_seg[i] - s_seg[i - 1]
-            a1 = azi[i - 1]
-            a2 = azi[i]
-            d1 = a2 - a1
-            d2 = a2 - (a1 + 360.0)
-            dazi = d1 if abs(d1) < abs(d2) else d2
-            c[i] = dazi / max(ds, 1e-9)
-        c[0] = c[1]
-        c = _movwinsmooth(c, 10)
-
-        # dCsi/ds
-        d = np.zeros(n0)
-        for i in range(1, n0):
-            ds = s_seg[i] - s_seg[i - 1]
-            d[i] = (c[i] - c[i - 1]) / max(ds, 1e-9)
-        d[0] = d[1]
-        d = _movwinsmooth(d, 10)
+        cx64 = np.ascontiguousarray(self.cx, dtype=np.float64)
+        cy64 = np.ascontiguousarray(self.cy, dtype=np.float64)
+        # Per-segment compass azimuth, curvature with the 360-degree wrap
+        # fix, dCsi/ds: Numba kernels with the former loops' arithmetic.
+        azi = _movwinsmooth(_curv_azimuth(cx64, cy64), 10)
+        c = _movwinsmooth(_curv_from_azimuth(azi, s_seg), 10)
+        d = _movwinsmooth(_dcds(c, s_seg), 10)
 
         # Thalweg with single global max (matches AL)
         maxcurve = float(np.abs(c).max()) + 1e-9
@@ -866,29 +947,27 @@ class fluvial:
         z = self.chelev_arr if (self.chelev_arr is not None
                                  and self.chelev_arr.size == n0) else np.full(n0, self.chelev)
 
-        # Spline-resample to ndis0 uniform
+        # Spline-resample to ndis0 uniform. One natural cubic spline over
+        # the eight columns: the same knots give the same tridiagonal
+        # system, LAPACK solves the right-hand sides column by column, so
+        # every column equals its former single-column spline bit for bit.
         try:
-            sx = CubicSpline(s_seg, self.cx, bc_type='natural')
-            sy = CubicSpline(s_seg, self.cy, bc_type='natural')
-            sw = CubicSpline(s_seg, w, bc_type='natural')
-            st = CubicSpline(s_seg, thalweg, bc_type='natural')
-            sc = CubicSpline(s_seg, c, bc_type='natural')
-            sd = CubicSpline(s_seg, d, bc_type='natural')
-            si = CubicSpline(s_seg, azi, bc_type='natural')
-            sz = CubicSpline(s_seg, z, bc_type='natural')
+            spl = CubicSpline(s_seg, np.column_stack((self.cx, self.cy, w, thalweg, c, d, azi, z)),
+                              bc_type='natural')
         except Exception:
             return
 
         L = np.linspace(0.0, s_seg[-1], self.ndis0)
         self.length = L
-        self.cx = sx(L)
-        self.cy = sy(L)
-        self.chwidth = np.clip(sw(L), 0.01, None)
-        self.thalweg = np.clip(st(L), 1e-3, 1.0 - 1e-3)
-        self.curv = sc(L)
-        self.dcsids = sd(L)
-        self.azi = si(L)
-        self.chelev_arr = sz(L)
+        Y = spl(L)
+        self.cx = np.ascontiguousarray(Y[:, 0])
+        self.cy = np.ascontiguousarray(Y[:, 1])
+        self.chwidth = np.clip(Y[:, 2], 0.01, None)
+        self.thalweg = np.clip(Y[:, 3], 1e-3, 1.0 - 1e-3)
+        self.curv = np.ascontiguousarray(Y[:, 4])
+        self.dcsids = np.ascontiguousarray(Y[:, 5])
+        self.azi = np.ascontiguousarray(Y[:, 6])
+        self.chelev_arr = np.ascontiguousarray(Y[:, 7])
         # Per-node ds for the migration integral
         ds = np.zeros(self.ndis0)
         ds[1:] = np.diff(L)
@@ -927,19 +1006,14 @@ class fluvial:
         ds = self.dlength
         c = self.curv
         # Pre-sum ds backward for the 30-node integral with exp decay
-        usb = np.zeros(n)
         mCHhalfwidth_eff = self.CHhalfwidth
         part2 = mCHhalfwidth_eff * self.Cf / self.us0
         part3 = self.us0 ** 4 / (self.g * self.h0 ** 2)
         part4 = (self.A + 2.0) * self.us0 ** 2 / self.h0
-        for idis in range(1, n):
-            start = max(0, idis - 30)
-            ds_cum = 0.0
-            inte = 0.0
-            for j in range(idis, start - 1, -1):
-                ds_cum += ds[j]
-                inte += np.exp(-2.0 * self.Cf * ds_cum / self.h0) * c[j]
-            usb[idis] = -self.us0 * c[idis] + part2 * (part3 + part4) * inte
+        usb = _bank_velocity(int(n), np.ascontiguousarray(ds, dtype=np.float64),
+                             np.ascontiguousarray(c, dtype=np.float64),
+                             float(self.us0), float(self.Cf), float(self.h0),
+                             float(part2), float(part3), float(part4))
         # Rescale to peak distMigrate
         max_abs = float(np.max(np.abs(usb)))
         if max_abs <= 1e-9:

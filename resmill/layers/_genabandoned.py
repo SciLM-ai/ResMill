@@ -9,7 +9,7 @@ rounding — item 2.18); ``FFCHbot = CHelev - mud_prop*(CHelev - CHbot)``.
 import numpy as np
 from numba import jit
 
-from ._genchannel import find_near_grid, _refine_nearest
+from ._genchannel import find_near_grid, nearest_refined
 
 
 # Alluvsim facies codes
@@ -19,7 +19,7 @@ FF, FFCH, CS, LV, LA, CH = -1, 0, 1, 2, 3, 4
 @jit(nopython=True)
 def _paint_abandoned_kernel(
     nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx, thalweg,
-    chelev_arr, zsiz, dd, facies, chwidth, idmat, dwratio,
+    chelev_arr, zsiz, dd, facies, chwidth, dist_arr, dwratio,
     mud_prop, lk_ffch, lk_ch, ntg_counter, ffch_counter,
     depth_norm, poro_mult_field, log_perm_offset_field,
     ev_poro_mult, ev_log_perm_offset,
@@ -28,7 +28,7 @@ def _paint_abandoned_kernel(
         idx = mynx[myid]
         idy = myny[myid]
         idis = dd[myid]
-        dist = idmat[idis, myid]
+        dist = dist_arr[myid]
         # Local-node halfwidth gate (item 1.6 / 4.24)
         if dist > chwidth[idis]:
             continue
@@ -146,19 +146,13 @@ def paint_abandoned(
     mynx, myny = np.where(good == 1)
     if mynx.size == 0:
         return
-    cx2 = cx.reshape(ndis, 1)
-    cy2 = cy.reshape(ndis, 1)
     localx = x[mynx]
     localy = y[myny]
-    idmat = np.sqrt((cx2 - localx) ** 2 + (cy2 - localy) ** 2)
-    dd = idmat.argmin(axis=0)
-    refined = _refine_nearest(cx, cy, localx, localy, dd, ndiscr=5)
-    for myid in range(localx.size):
-        idmat[dd[myid], myid] = refined[myid]
+    dd, dist_arr = nearest_refined(cx, cy, localx, localy, 5, 2.0)
 
     _paint_abandoned_kernel(
         nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx, thalweg,
-        chelev_arr, zsiz, dd, facies, chwidth_arr, idmat, dwratio,
+        chelev_arr, zsiz, dd, facies, chwidth_arr, dist_arr, dwratio,
         float(mud_prop), int(lk_ffch), int(lk_ch),
         ntg_counter, ffch_counter,
         depth_norm, poro_mult_field, log_perm_offset_field,
