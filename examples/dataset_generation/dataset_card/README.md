@@ -36,7 +36,9 @@ configs:
     path: splits/test.parquet
 ---
 
-# SiliciclasticReservoirs
+# Siliciclastic Reservoirs
+
+> Released by SciLM.ai: <https://www.scilm.ai>
 
 **1,000,000 synthetic 3D siliciclastic-reservoir geology cubes** generated from rule-based sedimentological simulations (turbidite lobes + 6 fluvial-channel architectures + a distributary-tree delta). Each cube is a `(64, 64, 32)` voxel window cut at a random position out of a `(128, 128, 64)` simulated volume, so every cube is a piece of a larger reservoir and its faces cut through sand bodies the way the boundaries of a modelled interval do.
 
@@ -243,12 +245,12 @@ See `DATASHEET.md` for full documentation.
 ## Citation
 
 ```bibtex
-@misc{SiliciclasticReservoirs_2026,
-  author       = {Anonymous},
-  title        = {{SiliciclasticReservoirs}: 1M Synthetic 3D Reservoir Geology Cubes for Conditional Generative Modeling},
+@misc{siliciclastic_reservoirs_2026,
+  author       = {SciLM},
+  title        = {{Siliciclastic Reservoirs}: 1M Synthetic 3D Reservoir Geology Cubes for Conditional Generative Modeling},
   year         = {2026},
   publisher    = {HuggingFace},
-  howpublished = {\url{https://huggingface.co/datasets/AnonymouScientist/SiliciclasticReservoirs}}
+  howpublished = {\url{https://huggingface.co/datasets/SciLM/SiliciclasticReservoirs}}
 }
 ```
 
@@ -258,4 +260,4 @@ See `DATASHEET.md` for full documentation.
 
 ## Contact / Issues
 
-File issues at the dataset repository on HuggingFace.
+Website: <https://www.scilm.ai>. File issues at the dataset repository on HuggingFace.

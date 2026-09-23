@@ -5,7 +5,7 @@ volumes and one 64 x 64 x 32 training window per volume, hosted on HuggingFace)
 is produced from this engine, end to end and deterministically.
 
 The dataset is at
-**[`AnonymouScientist/SiliciclasticReservoirs`](https://huggingface.co/datasets/AnonymouScientist/SiliciclasticReservoirs)** (CC-BY-4.0).
+**[`SciLM/SiliciclasticReservoirs`](https://huggingface.co/datasets/SciLM/SiliciclasticReservoirs)** (CC-BY-4.0).
 
 The configs are `examples/dataset_generation/config_full_<env>.json`, one per
 environment; the Sobol master seed is 42. Every path below assumes the repo root,
@@ -146,7 +146,7 @@ deterministic with the seed.
 Then, from the staged directory, with the owning account's write token in `HF_TOKEN`:
 
 ```bash
-hf upload-large-folder AnonymouScientist/SiliciclasticReservoirs . --repo-type=dataset --num-workers 16
+hf upload-large-folder SciLM/SiliciclasticReservoirs . --repo-type=dataset --num-workers 16
 ```
 
 `upload-large-folder` uploads with many workers, commits in batches and resumes
@@ -241,7 +241,7 @@ same splits.
   title        = {{Siliciclastic Reservoirs}: 1M Synthetic 3D Reservoir Geology Cubes for Conditional Generative Modeling},
   year         = {2026},
   publisher    = {HuggingFace},
-  howpublished = {\url{https://huggingface.co/datasets/AnonymouScientist/SiliciclasticReservoirs}}
+  howpublished = {\url{https://huggingface.co/datasets/SciLM/SiliciclasticReservoirs}}
 }
 
 @software{resmill_engine_2026,
