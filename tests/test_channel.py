@@ -153,3 +153,30 @@ def test_channel_porosity_noise_textures_sand_only():
     # perm follows the porosity texture (K-C slope 3 in log10)
     lp = np.log10(c.perm_mat[sand]) - np.log10(a.perm_mat[sand])
     assert np.allclose(lp, 3.0 * np.log10(ratio), atol=1e-2)
+
+
+def test_event_cap_scaling_is_opt_in():
+    """``scale_ntime`` is off by default: the cap is the ``ntime`` given, so the
+    published dataset is unchanged; switched on, a grid larger than the presets'
+    800 x 800 m gets the cap scaled by sqrt(area / 800^2)."""
+    import math
+    kw = dict(PV_SHOESTRING, seed=3)
+    grid = dict(nx=20, ny=20, nz=4, x_len=3200.0, y_len=1600.0, z_len=8.0, top_depth=0.0)
+    off = ChannelLayer(**grid)
+    off.create_geology(**kw)
+    on = ChannelLayer(**grid)
+    on.create_geology(**kw, scale_ntime=True)
+    assert off._engine.ntime == PV_SHOESTRING["ntime"]
+    assert on._engine.ntime == math.ceil(PV_SHOESTRING["ntime"] * math.sqrt(3200.0 * 1600.0 / 800.0 ** 2))
+
+
+def test_scaled_event_cap_fills_field_size_layer():
+    """With ``scale_ntime=True`` a field-size layer keeps depositing until its NTG
+    target instead of being cut off with its upper levels still empty."""
+    from resmill.layers.channel import SH_DISTAL
+    layer = ChannelLayer(nx=40, ny=30, nz=12, x_len=4000.0, y_len=3000.0,
+                         z_len=30.0, top_depth=0.0)
+    layer.create_geology(seed=11, scale_ntime=True, **SH_DISTAL)
+    sand = layer.active > 0
+    assert sand.mean() > 0.9 * SH_DISTAL["NTGtarget"]
+    assert sand[:, :, sand.shape[2] // 2:].mean() > 0.5 * SH_DISTAL["NTGtarget"]

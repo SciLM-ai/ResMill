@@ -212,8 +212,11 @@ class ChannelLayer(Layer):
         ntime: int = 240,
         # ``True`` ⇒ ``ntime`` is interpreted per-level (counter resets
         # at every level); ``False`` ⇒ ``ntime`` is the total event cap
-        # across all levels (Alluvsim default).
+        # across all levels (Alluvsim default). Either way it is sized for
+        # an 800 x 800 m grid; ``scale_ntime=True`` scales it by
+        # sqrt(area / 800²) on larger grids (off by default).
         ntime_per_level: bool = False,
+        scale_ntime: bool = False,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -321,7 +324,7 @@ class ChannelLayer(Layer):
             mCSLO_dwratio=mCSLO_dwratio, stdevCSLO_dwratio=stdevCSLO_dwratio,
             mFFCHprop=mFFCHprop, stdevFFCHprop=stdevFFCHprop,
             mNeckFFCHprop=mNeckFFCHprop,
-            ntime_per_level=ntime_per_level,
+            ntime_per_level=ntime_per_level, scale_ntime=scale_ntime,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

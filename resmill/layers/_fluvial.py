@@ -41,6 +41,13 @@ from ._make_cutoff import make_cutoff
 # used to size the ``ndis_cap`` walk safety net from the grid diagonal.
 _MAX_SINUOSITY = 1.9
 
+# Plan area the presets' event caps (``ntime``) are sized for. With
+# ``scale_ntime=True`` the cap grows with sqrt(area / reference) on larger
+# grids: a channel crosses the grid, so the sand one event adds grows with
+# the grid's length, and a field-size layer then reaches its NTG target
+# instead of being cut off with its upper levels still empty.
+_NTIME_REFERENCE_AREA = 800.0 * 800.0
+
 
 # ---------------------------------------------------------------------------
 # Alluvsim facies codes
@@ -344,6 +351,10 @@ class fluvial:
         # belts) this flag should be ``True`` so upper levels actually
         # run instead of being starved by the lower levels.
         ntime_per_level: bool = False,
+        # ``True`` scales ``ntime`` by sqrt(area / 800²) on grids larger than
+        # the 800 x 800 m the presets are sized for; off by default, so the
+        # published dataset is unchanged.
+        scale_ntime: bool = False,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -379,6 +390,9 @@ class fluvial:
                 f"len(level_z)={len(self.level_z)} != nlevel={self.nlevel}")
         self.NTGtarget = float(NTGtarget)
         self.ntime = int(ntime)
+        if scale_ntime:
+            self.ntime = int(np.ceil(self.ntime * max(
+                1.0, np.sqrt(nx * xsiz * ny * ysiz / _NTIME_REFERENCE_AREA))))
 
         # Avulsion
         self.probAvulOutside = float(probAvulOutside)

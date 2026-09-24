@@ -4,6 +4,15 @@
 
 ### Added
 
+- `scale_ntime=True` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): the event cap `ntime`, which the presets size for an
+  800 x 800 m grid, is scaled by sqrt(area / 800²) on larger grids. A
+  channel crosses the grid, so the sand one event adds grows with the
+  grid's length. On a 4 x 3 km layer the braided and sheet presets otherwise
+  stop at 28-60 % of their NTG target, the sheet presets with the top half
+  of the layer empty; with the switch they reach it at every level, and the
+  legacy delta keeps its design density. Off by default; the published
+  dataset is unchanged.
 - `ChannelLayer(n_sources=N)`: N entry points on the upstream edge, drawn
   per reservoir at least `source_spacing_min` of the edge apart; every
   channel enters at one of them, the draws rotating through the sources so
