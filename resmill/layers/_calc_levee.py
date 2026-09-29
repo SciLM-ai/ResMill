@@ -27,7 +27,7 @@ def _paint_levee_kernel(
     LV_depth, LV_width, LV_height, LV_asym, LV_thin,
     facies, lk_lv, ntg_counter, max_curv, s_arr, max_s,
     depth_norm, poro_mult_field, log_perm_offset_field,
-    ev_poro_mult, ev_log_perm_offset,
+    ev_poro_mult, ev_log_perm_offset, side_sign,
 ):
     LV_w_scale = LV_width / 6.0
     ndis = cx.size
@@ -56,7 +56,7 @@ def _paint_levee_kernel(
         else:
             tx = 1.0
             ty = 0.0
-        side = dx2 * ty - dy2 * tx          # >0: right of tangent
+        side = side_sign * (dx2 * ty - dy2 * tx)   # >0: right of tangent (-1 mirrors)
         c = curv[idis]
         # AL same-sign rule: same-sign(side, curv) → cutbank
         if (side <= 0.0 and c <= 0.0) or (side > 0.0 and c > 0.0):
@@ -123,8 +123,10 @@ def paint_levee(
     poro_mult_field: np.ndarray | None = None,
     log_perm_offset_field: np.ndarray | None = None,
     ev_poro_mult: float = 1.0, ev_log_perm_offset: float = 0.0,
+    side_sign: float = 1.0,
 ):
-    """Public entry. No-op if LV is disabled."""
+    """Public entry. No-op if LV is disabled. ``side_sign=-1`` puts the wider,
+    cut-bank levee on the outer bank of a bend instead of Alluvsim's inner bank."""
     if LV_width <= 0.0 or (LV_height + LV_depth) <= 0.0:
         return
     if cx is None or cx.size < 3:
@@ -169,5 +171,5 @@ def paint_levee(
         float(LV_asym), float(LV_thin),
         facies, int(lk_lv), ntg_counter, max_curv, s_arr, max_s,
         depth_norm, poro_mult_field, log_perm_offset_field,
-        float(ev_poro_mult), float(ev_log_perm_offset),
+        float(ev_poro_mult), float(ev_log_perm_offset), float(side_sign),
     )

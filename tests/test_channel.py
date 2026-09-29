@@ -223,3 +223,41 @@ def test_ntime_can_be_given_per_level():
         ChannelLayer(**grid).create_geology(**{**kw, "ntime": [5, 2]})
     with pytest.raises(ValueError):
         ChannelLayer(**grid).create_geology(**{**kw, "ntime": [5, 2, 1], "ntime_per_level": False})
+
+
+def _right_hand_bend(**kw):
+    """One channel, then its levee, stamped alone on a right-hand bend (flow east,
+    turning south, radius 3 km, so the outer bank is north); the sections through
+    the bend apex at x = 2 km and the cell-centre y of their columns."""
+    from resmill.layers._fluvial import CH, FF
+    layer = ChannelLayer(nx=200, ny=150, nz=60, x_len=4000.0, y_len=3000.0, z_len=60.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=1, mCHdepth=14.0, mCHwdratio=21.0, stdevCHdepth=0.0,
+                         stdevCHdepth2=0.0, stdevCHwdratio=0.0, probAvulOutside=0.0,
+                         probAvulInside=0.0, **kw)
+    eng = layer._engine
+    th = np.radians(np.linspace(125.0, 55.0, 600))       # decreasing angle: clockwise, a right turn
+    eng.cx, eng.cy = 2000.0 + 3000.0 * np.cos(th), -1500.0 + 3000.0 * np.sin(th)
+    eng.chelev, eng.chelev_arr = 30.0, np.full(600, 30.0)
+    eng._chwidth_arr, eng._chwidth_state_n = np.full(600, 147.0), 600
+    eng.cal_curv()
+    eng.facies[:] = FF
+    eng._stamp_channel(facies_code=CH, erode_above=False)
+    channel = eng.facies[100].copy()
+    eng.facies[:] = FF
+    eng._stamp_levee(2.0, 600.0, 6.0, 0.3, 0.0)
+    return channel, eng.facies[100].copy(), (np.arange(150) + 0.5) * 20.0
+
+
+@pytest.mark.parametrize("outer", [False, True])
+def test_cutbank_side_of_a_bend(outer):
+    """``cutbank_outer=True`` puts the channel's deepest point and the wider levee on
+    the outer bank of a bend, the side the channel migrates to; the default keeps
+    Alluvsim's rules, which put both on the inner bank."""
+    from resmill.layers._fluvial import CH, LV
+    channel, levee, y = _right_hand_bend(**({"cutbank_outer": True} if outer else {}))
+    base = np.where((channel == CH).any(axis=1), np.argmax(channel == CH, axis=1), channel.shape[1])
+    deepest_north = y[np.argmin(base)] > 1500.0
+    reach = y[(levee == LV).any(axis=1)]
+    levee_wider_north = reach.max() - 1500.0 > 1500.0 - reach.min()
+    assert deepest_north == outer
+    assert levee_wider_north == outer

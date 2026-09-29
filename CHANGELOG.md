@@ -4,6 +4,14 @@
 
 ### Added
 
+- `cutbank_outer=True` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): puts each bend's cut bank on the outer bank, the side the
+  channel migrates to and where crevasse splays form: the channel's deepest
+  point and steep side (the thalweg of the Deutsch-Wang cross-section) and
+  the wider levee. Alluvsim's rules, kept by default, put both on the inner
+  bank, while the port migrates bends outward (so they grow) and places
+  splays on the outer bank. Off by default: outputs are bit-identical to
+  before.
 - `level_inherit` (`ChannelLayer`): the probability that a new level
   continues the previous level's channel path instead of drawing a fresh one
   from the pool. With 1 the levels stack into an organized complex; with

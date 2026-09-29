@@ -221,6 +221,9 @@ class ChannelLayer(Layer):
         # Probability that a level continues the previous level's channel
         # path (organized stacking); 0 draws a fresh path every level.
         level_inherit: float = 0.0,
+        # Deep, steep side of the channel and the wider levee on the outer bank
+        # of each bend (where it migrates to); False keeps Alluvsim's inner bank.
+        cutbank_outer: bool = False,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -329,7 +332,7 @@ class ChannelLayer(Layer):
             mFFCHprop=mFFCHprop, stdevFFCHprop=stdevFFCHprop,
             mNeckFFCHprop=mNeckFFCHprop,
             ntime_per_level=ntime_per_level, scale_ntime=scale_ntime,
-            level_inherit=level_inherit,
+            level_inherit=level_inherit, cutbank_outer=cutbank_outer,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

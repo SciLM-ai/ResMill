@@ -359,6 +359,10 @@ class fluvial:
         # path instead of drawing a fresh one from the pool: 0 (default) gives
         # independent levels, 1 an organized, vertically stacked complex.
         level_inherit: float = 0.0,
+        # Put each bend's cut bank (the channel's deep, steep side and the wider
+        # levee) on the outer bank, where the channel migrates to and splays form.
+        # False keeps Alluvsim's rules as written, which put both on the inner bank.
+        cutbank_outer: bool = False,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -437,6 +441,7 @@ class fluvial:
         self.mNeckFFCHprop = float(mNeckFFCHprop)
         self.ntime_per_level = bool(ntime_per_level)
         self.level_inherit = float(level_inherit)
+        self.cutbank_outer = bool(cutbank_outer)
 
         # Hydraulic
         g = 9.8
@@ -962,6 +967,8 @@ class fluvial:
             0.5 - 0.25 * np.abs(c) / maxcurve,
             0.5 + 0.25 * np.abs(c) / maxcurve,
         )
+        if self.cutbank_outer:                      # deepest point next to the outer bank
+            thalweg = 1.0 - thalweg
 
         # Per-node halfwidth
         self._refresh_chwidth()
@@ -1510,6 +1517,7 @@ class fluvial:
             poro_mult_field=self.poro_mult_field,
             log_perm_offset_field=self.log_perm_offset_field,
             ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
+            side_sign=-1.0 if self.cutbank_outer else 1.0,
         )
 
     def _stamp_neck_oxbows(self, surviving_idx, n_pre,
