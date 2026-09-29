@@ -302,3 +302,36 @@ def test_extend_to_boundary_keeps_channels_flowing_out(extend):
     assert eng._migrate_one_step(5.0) == 1
     to_edge = min(eng.cx[-1], 2000.0 - eng.cx[-1], eng.cy[-1], 1000.0 - eng.cy[-1])
     assert (to_edge < 2 * eng.step) == extend
+
+
+def _bend_thalweg(radius, **kw):
+    """How far the deepest point sits from the channel's centre (fraction of its
+    width) along the middle of a 1.5 km right-hand bend of ``radius`` m (None:
+    straight), for a 294 m wide channel. Flow starts east and turns south, so the
+    heading never passes due north, where the engine's azimuth wraps."""
+    layer = ChannelLayer(nx=200, ny=150, nz=10, x_len=4000.0, y_len=3000.0, z_len=10.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=1, probAvulOutside=0.0, probAvulInside=0.0, **kw)
+    eng = layer._engine
+    if radius is None:
+        cx, cy = 1000.0 + np.linspace(0.0, 1500.0, 400), np.full(400, 2500.0)
+    else:
+        th = np.linspace(0.0, 1500.0 / radius, 400)
+        cx, cy = 1000.0 + radius * np.sin(th), 2500.0 - radius * (1.0 - np.cos(th))
+    eng.cx, eng.cy = cx, cy
+    eng.chelev_arr = np.full(400, 5.0)
+    eng._chwidth_arr, eng._chwidth_state_n = np.full(400, 147.0), 400
+    eng.cal_curv()
+    return np.abs(eng.thalweg[eng.ndis // 4:3 * eng.ndis // 4] - 0.5)
+
+
+def test_thalweg_max_follows_each_bends_own_tightness():
+    """With ``thalweg_max`` each bend's asymmetry depends on its own tightness: a
+    straight reach stays symmetric, a bend of radius 1.5 channel widths gets the full
+    ``thalweg_max`` and a gentle one (10 widths) about a sixth of it. By default every
+    bend is scaled by the sharpest point of its channel, so a lone bend always gets
+    Alluvsim's maximum, 0.75, however gentle."""
+    w = 294.0
+    assert np.allclose(_bend_thalweg(None, thalweg_max=0.9), 0.0, atol=1e-6)
+    assert np.allclose(_bend_thalweg(1.5 * w, thalweg_max=0.9), 0.4, atol=0.01)
+    assert np.allclose(_bend_thalweg(10.0 * w, thalweg_max=0.9), 0.4 * 0.15, atol=0.01)
+    assert np.allclose(_bend_thalweg(10.0 * w), 0.25, atol=0.01)

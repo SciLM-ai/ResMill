@@ -372,6 +372,11 @@ class fluvial:
         # cutoff leaves its downstream end inside the volume; False keeps
         # Alluvsim's paths, whose ends can drift back into the grid.
         extend_to_boundary: bool = False,
+        # Thalweg position (fraction of the width from the inner bank) at a tight
+        # bend, reached once the radius is 1.5 channel widths; each bend then gets
+        # its own asymmetry from its tightness. None keeps Alluvsim's rule, which
+        # scales every bend by the sharpest point of the channel (max 0.75).
+        thalweg_max: float | None = None,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -453,6 +458,7 @@ class fluvial:
         self.cutbank_outer = bool(cutbank_outer)
         self.cutoff_loop_ratio = float(cutoff_loop_ratio)
         self.extend_to_boundary = bool(extend_to_boundary)
+        self.thalweg_max = None if thalweg_max is None else float(thalweg_max)
 
         # Hydraulic
         g = 9.8
@@ -956,7 +962,8 @@ class fluvial:
         3. Curvature ``c = dazi/ds`` (with 360° wrap fix).
         4. ``movwinsmooth(spline_c, nwin=10)`` — smooth curvature.
         5. ``d = dc/ds`` (finite difference) → ``movwinsmooth(spline_d, nwin=10)``.
-        6. Single global ``maxcurve = max|c|`` → thalweg = 0.5 ± 0.25|c|/maxcurve.
+        6. Single global ``maxcurve = max|c|`` → thalweg = 0.5 ± 0.25|c|/maxcurve
+           (or, with ``thalweg_max``, each bend by its own tightness).
         7. Resample (cx, cy, w, t, c, d, i, z, ds) to ``ndis0`` uniform spacing.
         """
         if self.cx is None or self.cx.size < 3:
@@ -973,21 +980,23 @@ class fluvial:
         c = _movwinsmooth(_curv_from_azimuth(azi, s_seg), 10)
         d = _movwinsmooth(_dcds(c, s_seg), 10)
 
-        # Thalweg with single global max (matches AL)
-        maxcurve = float(np.abs(c).max()) + 1e-9
-        thalweg = np.where(
-            c < 0.0,
-            0.5 - 0.25 * np.abs(c) / maxcurve,
-            0.5 + 0.25 * np.abs(c) / maxcurve,
-        )
-        if self.cutbank_outer:                      # deepest point next to the outer bank
-            thalweg = 1.0 - thalweg
-
         # Per-node halfwidth
         self._refresh_chwidth()
         w = self._chwidth_arr
         if w is None or w.size != n0:
             w = self.CHhalfwidth * np.ones(n0)
+
+        # Thalweg. Alluvsim scales every bend by the single sharpest point of the
+        # channel (one global max); ``thalweg_max`` scales each bend by its own
+        # tightness instead: the transverse bed slope A*H/R with A = 3 (Ikeda et
+        # al. 1981; Odgaard 1981), full asymmetry once the radius is 1.5 widths.
+        if self.thalweg_max is None:
+            offset = 0.25 * np.abs(c) / (float(np.abs(c).max()) + 1e-9)
+        else:
+            offset = (self.thalweg_max - 0.5) * np.minimum(1.0, 3.0 * w * np.radians(np.abs(c)))
+        thalweg = np.where(c < 0.0, 0.5 - offset, 0.5 + offset)
+        if self.cutbank_outer:                      # deepest point next to the outer bank
+            thalweg = 1.0 - thalweg
         z = self.chelev_arr if (self.chelev_arr is not None
                                  and self.chelev_arr.size == n0) else np.full(n0, self.chelev)
 

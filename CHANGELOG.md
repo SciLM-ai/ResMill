@@ -4,6 +4,17 @@
 
 ### Added
 
+- `thalweg_max` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): the thalweg position (fraction of the width from the inner
+  bank) at a tight bend. Each bend then gets its asymmetry from its own
+  tightness, the transverse bed slope A*H/R with A = 3 (Ikeda et al. 1981;
+  Odgaard 1981), reaching `thalweg_max` once the radius is 1.5 channel
+  widths; straight reaches and crossings stay symmetric. Alluvsim's rule,
+  kept by default, scales every bend by the sharpest point of its channel
+  (at most 0.75), so one kink leaves the other bends nearly symmetric.
+  Observed: ~0.9 in river bends (Fisk 1952), ~0.75-0.8 in submarine bends
+  (Jobe et al. 2010; Palm et al. 2021). Off by default: outputs are bit-
+  identical to before.
 - `extend_to_boundary=True` (`ChannelLayer`, and `DeltaLayer` through its
   fluvial passthrough): whenever migration or a cutoff leaves a channel's
   downstream end inside the grid, the channel is walked on (the pool's AR(2)
