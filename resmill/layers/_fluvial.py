@@ -183,6 +183,26 @@ def _dcds(c, s_seg):
 
 
 @njit(cache=False)
+def _lagged_curvature(ds, c, Cf, h0):
+    """Curvature as the bank-erosion model feels it: the same exponentially
+    weighted mean over the 30 upstream nodes as ``_bank_velocity``'s integral."""
+    n = c.size
+    out = np.empty(n)
+    for idis in range(n):
+        start = max(0, idis - 30)
+        ds_cum = 0.0
+        num = 0.0
+        den = 0.0
+        for j in range(idis, start - 1, -1):
+            ds_cum += ds[j]
+            wgt = np.exp(-2.0 * Cf * ds_cum / h0)
+            num += wgt * c[j]
+            den += wgt
+        out[idis] = num / den
+    return out
+
+
+@njit(cache=False)
 def _bank_velocity(n, ds, c, us0, Cf, h0, part2, part3, part4):
     """Sun 1996 eq. 15 bank-retreat velocity with the 30-node decaying
     integral (``calcusb.for``); the former Python double loop, verbatim."""
@@ -382,6 +402,12 @@ class fluvial:
         # curvature there is 2-40x too large with the wrong sign (it drives the
         # migration, the thalweg and the levee side) and so are the tangents.
         unwrap_azimuth: bool = False,
+        # Place the thalweg (its side and strength) by the curvature the migration
+        # model feels, its upstream-weighted memory, instead of the local curvature.
+        # The pool then lags the bend as the bank erosion does: just past an
+        # inflection the channel still erodes toward the previous outer bank, and
+        # the point bar forms on the shallow side. False: local curvature.
+        thalweg_lag: bool = False,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -465,6 +491,7 @@ class fluvial:
         self.extend_to_boundary = bool(extend_to_boundary)
         self.thalweg_max = None if thalweg_max is None else float(thalweg_max)
         self.unwrap_azimuth = bool(unwrap_azimuth)
+        self.thalweg_lag = bool(thalweg_lag)
 
         # Hydraulic
         g = 9.8
@@ -1000,11 +1027,18 @@ class fluvial:
         # channel (one global max); ``thalweg_max`` scales each bend by its own
         # tightness instead: the transverse bed slope A*H/R with A = 3 (Ikeda et
         # al. 1981; Odgaard 1981), full asymmetry once the radius is 1.5 widths.
+        # ``thalweg_lag``: the pool lags the bend as the bank erosion does, so use
+        # the curvature the migration model feels (its upstream memory).
+        cs = c
+        if self.thalweg_lag and n0 > 1:
+            ds = dl.copy()
+            ds[0] = ds[1]
+            cs = _lagged_curvature(ds, c, float(self.Cf), float(self.h0))
         if self.thalweg_max is None:
-            offset = 0.25 * np.abs(c) / (float(np.abs(c).max()) + 1e-9)
+            offset = 0.25 * np.abs(cs) / (float(np.abs(cs).max()) + 1e-9)
         else:
-            offset = (self.thalweg_max - 0.5) * np.minimum(1.0, 3.0 * w * np.radians(np.abs(c)))
-        thalweg = np.where(c < 0.0, 0.5 - offset, 0.5 + offset)
+            offset = (self.thalweg_max - 0.5) * np.minimum(1.0, 3.0 * w * np.radians(np.abs(cs)))
+        thalweg = np.where(cs < 0.0, 0.5 - offset, 0.5 + offset)
         if self.cutbank_outer:                      # deepest point next to the outer bank
             thalweg = 1.0 - thalweg
         z = self.chelev_arr if (self.chelev_arr is not None

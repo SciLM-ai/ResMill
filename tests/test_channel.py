@@ -354,3 +354,37 @@ def test_unwrap_azimuth_keeps_curvature_through_due_north():
     true = -np.degrees(1.0 / 500.0)                       # deg/m; negative: a left turn
     assert np.allclose(curvature(unwrap_azimuth=True), true, rtol=0.02)
     assert np.abs(curvature()).max() > 5 * abs(true)
+
+
+def _s_bend_thalweg(**kw):
+    """Thalweg position (> 0.5: deep side right of the flow) along an S-bend of a
+    294 m wide channel with deepwater hydraulics: 900 m turning right, then 1500 m
+    turning left, both of radius 600 m, nodes 12 m apart; and each resampled node's
+    distance past the inflection."""
+    layer = ChannelLayer(nx=200, ny=150, nz=10, x_len=4000.0, y_len=3000.0, z_len=10.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=1, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=14.0, mCHwdratio=21.0, Q=5000.0, **kw)
+    eng = layer._engine
+    s = np.arange(0.0, 2400.0, 12.0)
+    heading = np.cumsum(np.where(s < 900.0, -1.0, 1.0) * 12.0 / 600.0)
+    eng.cx = 500.0 + np.cumsum(12.0 * np.cos(heading))
+    eng.cy = 1500.0 + np.cumsum(12.0 * np.sin(heading))
+    eng.chelev_arr = np.full(s.size, 5.0)
+    eng._chwidth_arr, eng._chwidth_state_n = np.full(s.size, 147.0), s.size
+    eng.cal_curv()
+    return eng.thalweg, eng.length - 888.0
+
+
+@pytest.mark.parametrize("lag", [False, True])
+def test_thalweg_lag_keeps_the_pool_where_the_channel_erodes(lag):
+    """The migration model moves the channel by the curvature upstream (its memory),
+    so just past an inflection the channel still erodes toward the previous bend's
+    outer bank. With ``thalweg_lag=True`` the deep side follows the same memory and
+    stays there; by default it flips at the inflection, leaving the point bar next
+    to the pool. Well into the next bend both agree."""
+    a, past = _s_bend_thalweg(thalweg_max=0.8, **({"thalweg_lag": True} if lag else {}))
+    just_past = (past > 20.0) & (past < 110.0)
+    far = (past > 700.0) & (past < 1000.0)
+    assert np.all(a[just_past] > 0.5) == lag
+    assert np.all(a[just_past] < 0.5) == (not lag)
+    assert np.all(a[far] < 0.5)

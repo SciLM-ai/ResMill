@@ -4,6 +4,18 @@
 
 ### Added
 
+- `thalweg_lag=True` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): place the thalweg (its side and strength) by the curvature
+  the migration model feels, the same exponentially weighted mean over 30
+  upstream nodes as the bank-velocity integral, instead of the local
+  curvature. The migration responds to the curvature upstream, so just past
+  an inflection the channel still erodes toward the previous bend's outer
+  bank while the local-curvature thalweg has already switched banks: the
+  point bar forms next to the pool. That was 25 % of all migration in a
+  deepwater complex (74 % within one width of an inflection); with the lag
+  it is 7 % (6 %). In nature the pool and the point bar lag the bend on
+  opposite banks (Palm et al. 2021; Fisk 1952). Off by default: outputs are
+  bit-identical to before.
 - `unwrap_azimuth=True` (`ChannelLayer`, and `DeltaLayer` through its
   fluvial passthrough): unwrap the channel's compass heading before
   smoothing it. Smoothing across the 360 -> 0 jump fakes a full turn
