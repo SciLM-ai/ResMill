@@ -180,3 +180,46 @@ def test_scaled_event_cap_fills_field_size_layer():
     sand = layer.active > 0
     assert sand.mean() > 0.9 * SH_DISTAL["NTGtarget"]
     assert sand[:, :, sand.shape[2] // 2:].mean() > 0.5 * SH_DISTAL["NTGtarget"]
+
+
+def test_level_inherit_continues_the_previous_path(monkeypatch):
+    """``level_inherit=1`` keeps each level on the previous channel's path, so with
+    avulsion off the engine draws a path from its pool only once; by default it
+    draws a fresh one at every level."""
+    from resmill.layers import _fluvial
+    draws = []
+    original = _fluvial.fluvial._draw_from_pool
+
+    def counting(self):
+        draws.append(1)
+        return original(self)
+
+    monkeypatch.setattr(_fluvial.fluvial, "_draw_from_pool", counting)
+    grid = dict(nx=24, ny=24, nz=8, x_len=480.0, y_len=480.0, z_len=8.0, top_depth=0.0)
+    kw = dict(PV_SHOESTRING, seed=3, nlevel=4, ntime=2, ntime_per_level=True,
+              probAvulOutside=0.0, probAvulInside=0.0)
+    ChannelLayer(**grid).create_geology(**kw)
+    redrawn = len(draws)
+    draws.clear()
+    ChannelLayer(**grid).create_geology(**kw, level_inherit=1.0)
+    assert redrawn == 4
+    assert len(draws) == 1
+
+
+def test_ntime_can_be_given_per_level():
+    """A list gives one event cap per level (with ``ntime_per_level``), scaled
+    element-wise by ``scale_ntime``; a wrong length or a global cap is refused."""
+    import math
+    grid = dict(nx=20, ny=20, nz=6, x_len=3200.0, y_len=1600.0, z_len=6.0, top_depth=0.0)
+    kw = dict(PV_SHOESTRING, seed=3, nlevel=3, ntime_per_level=True)
+    layer = ChannelLayer(**grid)
+    layer.create_geology(**{**kw, "ntime": [5, 2, 1]})
+    assert layer._engine.ntime == [5, 2, 1]
+    scaled = ChannelLayer(**grid)
+    scaled.create_geology(**{**kw, "ntime": [5, 2, 1]}, scale_ntime=True)
+    factor = math.sqrt(3200.0 * 1600.0 / 800.0 ** 2)
+    assert scaled._engine.ntime == [math.ceil(n * factor) for n in (5, 2, 1)]
+    with pytest.raises(ValueError):
+        ChannelLayer(**grid).create_geology(**{**kw, "ntime": [5, 2]})
+    with pytest.raises(ValueError):
+        ChannelLayer(**grid).create_geology(**{**kw, "ntime": [5, 2, 1], "ntime_per_level": False})

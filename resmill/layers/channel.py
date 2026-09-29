@@ -209,14 +209,18 @@ class ChannelLayer(Layer):
         nlevel: int = 8,
         level_z: list[float] | None = None,
         NTGtarget: float = 0.10,
-        ntime: int = 240,
+        ntime: int | list[int] = 240,
         # ``True`` ⇒ ``ntime`` is interpreted per-level (counter resets
         # at every level); ``False`` ⇒ ``ntime`` is the total event cap
         # across all levels (Alluvsim default). Either way it is sized for
         # an 800 x 800 m grid; ``scale_ntime=True`` scales it by
-        # sqrt(area / 800²) on larger grids (off by default).
+        # sqrt(area / 800²) on larger grids (off by default). With
+        # ``ntime_per_level`` a list gives one cap per level.
         ntime_per_level: bool = False,
         scale_ntime: bool = False,
+        # Probability that a level continues the previous level's channel
+        # path (organized stacking); 0 draws a fresh path every level.
+        level_inherit: float = 0.0,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -325,6 +329,7 @@ class ChannelLayer(Layer):
             mFFCHprop=mFFCHprop, stdevFFCHprop=stdevFFCHprop,
             mNeckFFCHprop=mNeckFFCHprop,
             ntime_per_level=ntime_per_level, scale_ntime=scale_ntime,
+            level_inherit=level_inherit,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

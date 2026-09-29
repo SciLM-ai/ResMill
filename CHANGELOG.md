@@ -4,6 +4,14 @@
 
 ### Added
 
+- `level_inherit` (`ChannelLayer`): the probability that a new level
+  continues the previous level's channel path instead of drawing a fresh one
+  from the pool. With 1 the levels stack into an organized complex; with
+  `ntime` given as a list (one event cap per level, with
+  `ntime_per_level=True`) many events in the first levels and few later give
+  the laterally-migrating-then-aggrading stacking of submarine channel belts
+  (Jobe et al. 2016; Covault et al. 2016). Both off by default: outputs are
+  bit-identical to before.
 - `scale_ntime=True` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): the event cap `ntime`, which the presets size for an
   800 x 800 m grid, is scaled by sqrt(area / 800²) on larger grids. A

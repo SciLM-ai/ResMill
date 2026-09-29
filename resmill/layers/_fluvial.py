@@ -355,6 +355,10 @@ class fluvial:
         # the 800 x 800 m the presets are sized for; off by default, so the
         # published dataset is unchanged.
         scale_ntime: bool = False,
+        # Probability that a new level continues the previous level's channel
+        # path instead of drawing a fresh one from the pool: 0 (default) gives
+        # independent levels, 1 an organized, vertically stacked complex.
+        level_inherit: float = 0.0,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -389,10 +393,15 @@ class fluvial:
             raise ValueError(
                 f"len(level_z)={len(self.level_z)} != nlevel={self.nlevel}")
         self.NTGtarget = float(NTGtarget)
-        self.ntime = int(ntime)
+        caps = np.atleast_1d(ntime).astype(int)          # one cap, or one per level
+        if caps.size > 1 and (not ntime_per_level or caps.size != self.nlevel):
+            raise ValueError(
+                f"{caps.size} per-level ntime caps need ntime_per_level=True and "
+                f"one cap per level (nlevel={self.nlevel})")
         if scale_ntime:
-            self.ntime = int(np.ceil(self.ntime * max(
-                1.0, np.sqrt(nx * xsiz * ny * ysiz / _NTIME_REFERENCE_AREA))))
+            caps = np.ceil(caps * max(
+                1.0, np.sqrt(nx * xsiz * ny * ysiz / _NTIME_REFERENCE_AREA))).astype(int)
+        self.ntime = [int(c) for c in caps] if caps.size > 1 else int(caps[0])
 
         # Avulsion
         self.probAvulOutside = float(probAvulOutside)
@@ -427,6 +436,7 @@ class fluvial:
         self.mFFCHprop, self.stdevFFCHprop = float(mFFCHprop), float(stdevFFCHprop)
         self.mNeckFFCHprop = float(mNeckFFCHprop)
         self.ntime_per_level = bool(ntime_per_level)
+        self.level_inherit = float(level_inherit)
 
         # Hydraulic
         g = 9.8
@@ -1650,9 +1660,11 @@ class fluvial:
                 if new_offset != self._entry_x_offset:
                     self._entry_x_offset = new_offset
                     self._build_streamline_pool()
-            # Always reseed at level top (item 2.20 — matches AL:727-731)
+            # Reseed at level top (item 2.20 — matches AL:727-731) unless the
+            # level continues the previous channel's path (``level_inherit``).
             if ilevel > 0:
-                if not self._draw_from_pool():
+                inherit = self.level_inherit > 0.0 and np.random.uniform() < self.level_inherit
+                if not inherit and not self._draw_from_pool():
                     return
                 self.cal_curv()
 
@@ -1668,9 +1680,10 @@ class fluvial:
                     self._simulate_tree(old=itree < self.n_trees - 1)
                 continue
 
+            level_cap = self.ntime[ilevel] if isinstance(self.ntime, list) else self.ntime
             while ((self.ntg_counter[0] - ntg_at_level_start)
                    - (self.ffch_counter[0] - ffch_at_level_start)) < level_target[ilevel]:
-                if ev_counter >= self.ntime:
+                if ev_counter >= level_cap:
                     # ntime cap exit (AL:988-991 — no extra abandon; the
                     # end-of-level path below handles abandonment).
                     break
