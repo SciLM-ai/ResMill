@@ -283,3 +283,22 @@ def test_cutoff_loop_ratio_keeps_bends_and_cuts_loops(ratio, bend_cut):
     assert make_cutoff(cx, cy, dl, ctol, loop_ratio=ratio) < dl.size
     cx, cy, dl = _arc(60.0, 330.0)                    # a small loop whose neck has closed
     assert make_cutoff(cx, cy, dl, ctol, loop_ratio=ratio) < dl.size
+
+
+@pytest.mark.parametrize("extend", [False, True])
+def test_extend_to_boundary_keeps_channels_flowing_out(extend):
+    """A channel whose downstream end lies inside the grid after a migration step
+    (here a path that stops mid-grid) is walked on until it leaves the grid with
+    ``extend_to_boundary=True``; by default it keeps its dead end."""
+    layer = ChannelLayer(nx=100, ny=50, nz=10, x_len=2000.0, y_len=1000.0, z_len=10.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=1, probAvulOutside=0.0, probAvulInside=0.0,
+                         **({"extend_to_boundary": True} if extend else {}))
+    eng = layer._engine
+    x = np.linspace(0.0, 1000.0, 200)                 # a gently sinuous path ending mid-grid
+    eng.cx, eng.cy = x, 500.0 + 20.0 * np.sin(x / 150.0)
+    eng.chelev_arr = np.full(200, 5.0)
+    eng._chwidth_arr, eng._chwidth_state_n = np.full(200, 20.0), 200
+    eng.cal_curv()
+    assert eng._migrate_one_step(5.0) == 1
+    to_edge = min(eng.cx[-1], 2000.0 - eng.cx[-1], eng.cy[-1], 1000.0 - eng.cy[-1])
+    assert (to_edge < 2 * eng.step) == extend

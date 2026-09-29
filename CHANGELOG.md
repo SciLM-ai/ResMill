@@ -4,6 +4,15 @@
 
 ### Added
 
+- `extend_to_boundary=True` (`ChannelLayer`, and `DeltaLayer` through its
+  fluvial passthrough): whenever migration or a cutoff leaves a channel's
+  downstream end inside the grid, the channel is walked on (the pool's AR(2)
+  walk, launched along its last heading) until it leaves the grid. Without
+  it the free end drifts back into the volume and channels stop in the
+  middle of it: 15 % of the channels of a deepwater complex and 32 % of
+  meander_oxbow's. Leave it off for distributaries meant to end in the
+  volume (delta mouth bars). Off by default: outputs are bit-identical to
+  before.
 - `cutoff_loop_ratio` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): a neck cutoff also needs the channel between the two points
   that meet to be at least this many times longer than the gap between them.

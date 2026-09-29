@@ -227,6 +227,9 @@ class ChannelLayer(Layer):
         # Neck cutoffs only for loops at least this many times longer than the
         # neck they close; 1 keeps Alluvsim's rule, which also shaves bends.
         cutoff_loop_ratio: float = 1.0,
+        # Keep every channel flowing out of the volume: walk it on whenever its
+        # downstream end drifts back inside (False keeps Alluvsim's dead ends).
+        extend_to_boundary: bool = False,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -336,7 +339,7 @@ class ChannelLayer(Layer):
             mNeckFFCHprop=mNeckFFCHprop,
             ntime_per_level=ntime_per_level, scale_ntime=scale_ntime,
             level_inherit=level_inherit, cutbank_outer=cutbank_outer,
-            cutoff_loop_ratio=cutoff_loop_ratio,
+            cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

@@ -368,6 +368,10 @@ class fluvial:
         # 1 (no check) also removes gently curved stretches every step; 3 cuts
         # only real loops.
         cutoff_loop_ratio: float = 1.0,
+        # Walk a channel on until it leaves the grid whenever migration or a
+        # cutoff leaves its downstream end inside the volume; False keeps
+        # Alluvsim's paths, whose ends can drift back into the grid.
+        extend_to_boundary: bool = False,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -448,6 +452,7 @@ class fluvial:
         self.level_inherit = float(level_inherit)
         self.cutbank_outer = bool(cutbank_outer)
         self.cutoff_loop_ratio = float(cutoff_loop_ratio)
+        self.extend_to_boundary = bool(extend_to_boundary)
 
         # Hydraulic
         g = 9.8
@@ -629,7 +634,8 @@ class fluvial:
         return t1 + (t2 - t1) * (x - s1) / (s2 - s1)
 
     def _ar2_walk(self, x0: float, y0: float, chazi: float, chsinu: float,
-                  ndis_max: int, max_attempts: int = 1000, azi0: float | None = None):
+                  ndis_max: int, max_attempts: int = 1000, azi0: float | None = None,
+                  min_nodes: int | None = None):
         """Disturbed-periodic (Pyrcz/Sun) AR(2) walk in **compass degrees**.
 
         Faithful port of Alluvsim ``buildCHtable.for:70-128``:
@@ -643,7 +649,8 @@ class fluvial:
           ``x += step*cosd(ang); y += step*sind(ang)``
 
         Restarts noise if the walk leaves the grid in the first ``ndis_min``
-        nodes (matches AL's ``goto 512`` regen-on-short-failure).
+        nodes (matches AL's ``goto 512`` regen-on-short-failure); ``min_nodes``
+        overrides that minimum (extending a path may take a single step).
 
         Returns ``(cx, cy)`` arrays of length ``>= ndis_min`` on success, or
         (None, None) after ``max_attempts`` failed regenerations.
@@ -685,7 +692,7 @@ class fluvial:
                 # its own rotation least at 45).
                 xr, yr = self._rot_xy(x, y)
                 if xr > self.xmax or xr < self.xmin or yr > self.ymax or yr < self.ymin:
-                    if i < self.ndis_min:
+                    if i < (self.ndis_min if min_nodes is None else min_nodes):
                         short = True
                         break
                     n_ok = i  # nodes 0..i-1 are in-grid; AL: ``ndis = i-1`` then exit
@@ -1117,8 +1124,37 @@ class fluvial:
             self._chwidth_state_n = self.ndis
         if self.chelev_arr is not None and self.chelev_arr.size > self.ndis:
             self.chelev_arr = self.chelev_arr[:self.ndis].copy()
+        if self.extend_to_boundary:
+            self._extend_to_boundary()
         self.cal_curv()
         return 1
+
+    def _extend_to_boundary(self):
+        """Walk the channel on from a downstream end that lies inside the grid.
+
+        Migration moves the free end and cutoffs shorten the path, so the end
+        can drift back into the volume, leaving a channel that stops in the
+        middle of it. Continue it with the pool's AR(2) walk, launched along
+        the channel's last heading, until it leaves the grid.
+        """
+        xr, yr = self._rot_xy(self.cx[-1], self.cy[-1])
+        m = 2.0 * self.step
+        if not (self.xmin + m < xr < self.xmax - m and self.ymin + m < yr < self.ymax - m):
+            return
+        heading = (90.0 - np.degrees(np.arctan2(self.cy[-1] - self.cy[-2],
+                                                self.cx[-1] - self.cx[-2]))) % 360.0
+        ex, ey = self._ar2_walk(self.cx[-1], self.cy[-1], self._chazi, self._chsinu,
+                                self.ndis_cap, azi0=heading, min_nodes=1)
+        if ex is None or ex.size < 2:
+            return
+        self.cx = np.concatenate([self.cx, ex[1:]])
+        self.cy = np.concatenate([self.cy, ey[1:]])
+        self.ndis = self.cx.size
+        if self._chwidth_arr is not None:
+            self._chwidth_arr = np.pad(self._chwidth_arr, (0, ex.size - 1), mode="edge")
+            self._chwidth_state_n = self.ndis
+        if self.chelev_arr is not None:
+            self.chelev_arr = np.pad(self.chelev_arr, (0, ex.size - 1), mode="edge")
 
     # ----------------------------------------------------------------- avulsion
 
