@@ -377,6 +377,11 @@ class fluvial:
         # its own asymmetry from its tightness. None keeps Alluvsim's rule, which
         # scales every bend by the sharpest point of the channel (max 0.75).
         thalweg_max: float | None = None,
+        # Unwrap the compass heading before smoothing it. Smoothing across the
+        # 360 -> 0 jump fakes a full turn wherever a channel heads due north:
+        # curvature there is 2-40x too large with the wrong sign (it drives the
+        # migration, the thalweg and the levee side) and so are the tangents.
+        unwrap_azimuth: bool = False,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -459,6 +464,7 @@ class fluvial:
         self.cutoff_loop_ratio = float(cutoff_loop_ratio)
         self.extend_to_boundary = bool(extend_to_boundary)
         self.thalweg_max = None if thalweg_max is None else float(thalweg_max)
+        self.unwrap_azimuth = bool(unwrap_azimuth)
 
         # Hydraulic
         g = 9.8
@@ -958,7 +964,8 @@ class fluvial:
         Direct port of Alluvsim ``curvature2.for``:
 
         1. Per-segment azimuth via ``azimuth(x1,x2,y1,y2)`` (compass deg).
-        2. ``movwinsmooth(spline_i, nwin=10)`` — smooth azimuth.
+        2. ``movwinsmooth(spline_i, nwin=10)`` — smooth azimuth (unwrapped first
+           with ``unwrap_azimuth``).
         3. Curvature ``c = dazi/ds`` (with 360° wrap fix).
         4. ``movwinsmooth(spline_c, nwin=10)`` — smooth curvature.
         5. ``d = dc/ds`` (finite difference) → ``movwinsmooth(spline_d, nwin=10)``.
@@ -976,7 +983,10 @@ class fluvial:
         cy64 = np.ascontiguousarray(self.cy, dtype=np.float64)
         # Per-segment compass azimuth, curvature with the 360-degree wrap
         # fix, dCsi/ds: Numba kernels with the former loops' arithmetic.
-        azi = _movwinsmooth(_curv_azimuth(cx64, cy64), 10)
+        azi = _curv_azimuth(cx64, cy64)
+        if self.unwrap_azimuth:        # smooth the heading, not its 360 -> 0 jump (due north)
+            azi = np.degrees(np.unwrap(np.radians(azi)))
+        azi = _movwinsmooth(azi, 10)
         c = _movwinsmooth(_curv_from_azimuth(azi, s_seg), 10)
         d = _movwinsmooth(_dcds(c, s_seg), 10)
 

@@ -233,6 +233,9 @@ class ChannelLayer(Layer):
         # Thalweg position at a tight bend (0.9 rivers, 0.8 submarine); each bend
         # gets its asymmetry from its own tightness. None: Alluvsim's rule.
         thalweg_max: float | None = None,
+        # Unwrap the compass heading before smoothing it (False: Alluvsim's
+        # curvature spikes wherever a channel heads due north).
+        unwrap_azimuth: bool = False,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -343,7 +346,7 @@ class ChannelLayer(Layer):
             ntime_per_level=ntime_per_level, scale_ntime=scale_ntime,
             level_inherit=level_inherit, cutbank_outer=cutbank_outer,
             cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
-            thalweg_max=thalweg_max,
+            thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

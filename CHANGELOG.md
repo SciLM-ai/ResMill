@@ -4,6 +4,16 @@
 
 ### Added
 
+- `unwrap_azimuth=True` (`ChannelLayer`, and `DeltaLayer` through its
+  fluvial passthrough): unwrap the channel's compass heading before
+  smoothing it. Smoothing across the 360 -> 0 jump fakes a full turn
+  wherever a channel heads due north: on a circle of radius 500 m the
+  curvature there reads +5.4 deg/m instead of -0.115, and the tangents are
+  wrong too. Curvature drives the migration (scaled by its largest bank
+  velocity), the thalweg and levee sides and splay placement; channels head
+  through north in 71 % (deepwater) and 82 % (meander) of migration steps,
+  leaving zig-zag kinks there. Off by default: outputs are bit-identical to
+  before.
 - `thalweg_max` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): the thalweg position (fraction of the width from the inner
   bank) at a tight bend. Each bend then gets its asymmetry from its own

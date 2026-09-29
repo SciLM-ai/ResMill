@@ -335,3 +335,22 @@ def test_thalweg_max_follows_each_bends_own_tightness():
     assert np.allclose(_bend_thalweg(1.5 * w, thalweg_max=0.9), 0.4, atol=0.01)
     assert np.allclose(_bend_thalweg(10.0 * w, thalweg_max=0.9), 0.4 * 0.15, atol=0.01)
     assert np.allclose(_bend_thalweg(10.0 * w), 0.25, atol=0.01)
+
+
+def test_unwrap_azimuth_keeps_curvature_through_due_north():
+    """On a circular bend whose heading passes due north, smoothing the compass
+    heading across its 360 -> 0 jump fakes a curvature spike of the wrong sign;
+    with ``unwrap_azimuth=True`` the curvature stays constant, as on any circle."""
+    def curvature(**kw):
+        layer = ChannelLayer(nx=200, ny=150, nz=10, x_len=4000.0, y_len=3000.0, z_len=10.0, top_depth=0.0)
+        layer.create_geology(seed=1, nlevel=1, ntime=1, probAvulOutside=0.0, probAvulInside=0.0, **kw)
+        eng = layer._engine
+        th = np.linspace(0.0, np.pi, 400)                 # east, through north, to west: a left turn
+        eng.cx, eng.cy = 2000.0 + 500.0 * np.sin(th), 500.0 + 500.0 * (1.0 - np.cos(th))
+        eng.chelev_arr = np.full(400, 5.0)
+        eng._chwidth_arr, eng._chwidth_state_n = np.full(400, 147.0), 400
+        eng.cal_curv()
+        return eng.curv[eng.ndis // 4:3 * eng.ndis // 4]
+    true = -np.degrees(1.0 / 500.0)                       # deg/m; negative: a left turn
+    assert np.allclose(curvature(unwrap_azimuth=True), true, rtol=0.02)
+    assert np.abs(curvature()).max() > 5 * abs(true)
