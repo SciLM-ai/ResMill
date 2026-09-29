@@ -41,10 +41,12 @@ def _paint_levee_kernel(
         cdd = close_distance - chwidth[idis]
         chelev = chelev_arr[idis]
 
-        # Cutbank vs pointbar test — compass-CW positive curv (right turn)
-        # → cutbank on LEFT of flow. AL ``calc_levee.for:200-208``:
+        # Cutbank vs pointbar test, AL ``calc_levee.for:200-208``:
         # ``if (dazi<=0 .and. curv<=0) .or. (dazi>0 .and. curv>0): cutbank``.
-        # Cross-product equivalent: side > 0 ↔ dazi > 0 (right of flow).
+        # Cross-product equivalent: side > 0 ↔ dazi > 0 (right of flow). With
+        # compass-CW positive curv (right turn) this labels the RIGHT of flow,
+        # the inner bank, as cutbank; ``side_sign = -1`` (``cutbank_outer``)
+        # mirrors it to the outer bank, where the channel migrates to.
         dx2 = x[idx] - cx[idis]
         dy2 = y[idy] - cy[idis]
         if idis > 0:
