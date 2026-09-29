@@ -1,6 +1,10 @@
 """The Numba kernels that replaced Python loops in the fluvial engine must
 reproduce the former arithmetic bit for bit (reference implementations below
-are the former code, verbatim)."""
+are the former code, verbatim, except that they call the C library's exp and
+atan through ``math``, as the kernels do: NumPy 2's own vectorised exp and
+arctan can differ from it in the last bit)."""
+import math
+
 import numpy as np
 
 from resmill.layers._genchannel import nearest_refined
@@ -61,9 +65,9 @@ def test_curvature_and_bank_velocity_match_python_loops():
         for i in range(1, n):
             di = cx[i] - cx[i - 1]; dj = cy[i] - cy[i - 1]
             if di == 0.0: azi[i] = 0.0 if dj > 0 else 180.0
-            elif di > 0.0 and dj >= 0.0: azi[i] = 90.0 - np.degrees(np.arctan(dj / di))
-            elif di < 0.0: azi[i] = 270.0 - np.degrees(np.arctan(dj / di))
-            else: azi[i] = 90.0 - np.degrees(np.arctan(dj / di))
+            elif di > 0.0 and dj >= 0.0: azi[i] = 90.0 - math.degrees(math.atan(dj / di))
+            elif di < 0.0: azi[i] = 270.0 - math.degrees(math.atan(dj / di))
+            else: azi[i] = 90.0 - math.degrees(math.atan(dj / di))
         azi[0] = azi[1]
         assert np.array_equal(_curv_azimuth(cx, cy), azi)
         c = np.zeros(n)
@@ -83,6 +87,6 @@ def test_curvature_and_bank_velocity_match_python_loops():
         for idis in range(1, n):
             start = max(0, idis - 30); ds_cum = 0.0; inte = 0.0
             for j in range(idis, start - 1, -1):
-                ds_cum += dl[j]; inte += np.exp(-2.0 * Cf * ds_cum / h0) * c[j]
+                ds_cum += dl[j]; inte += math.exp(-2.0 * Cf * ds_cum / h0) * c[j]
             usb[idis] = -us0 * c[idis] + part2 * (part3 + part4) * inte
         assert np.array_equal(_bank_velocity(n, dl, c, us0, Cf, h0, part2, part3, part4), usb)
