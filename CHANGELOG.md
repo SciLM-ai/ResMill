@@ -4,6 +4,14 @@
 
 ### Added
 
+- `cutoff_loop_ratio` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): a neck cutoff also needs the channel between the two points
+  that meet to be at least this many times longer than the gap between them.
+  Alluvsim's rule (1, the default, no such check) also removes gently curved
+  stretches whose shortcut stays inside the channel, 2-3 per migration step
+  in the presets, so bends are straightened every step and a collapsed path
+  is occasionally replaced by a random new one; with 3 only real loops are
+  cut off, however short. Default 1: outputs are bit-identical to before.
 - `cutbank_outer=True` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): puts each bend's cut bank on the outer bank, the side the
   channel migrates to and where crevasse splays form: the channel's deepest

@@ -363,6 +363,11 @@ class fluvial:
         # levee) on the outer bank, where the channel migrates to and splays form.
         # False keeps Alluvsim's rules as written, which put both on the inner bank.
         cutbank_outer: bool = False,
+        # A neck cutoff also needs the channel between the two points that meet to
+        # be at least this many times longer than the gap between them. Alluvsim's
+        # 1 (no check) also removes gently curved stretches every step; 3 cuts
+        # only real loops.
+        cutoff_loop_ratio: float = 1.0,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -442,6 +447,7 @@ class fluvial:
         self.ntime_per_level = bool(ntime_per_level)
         self.level_inherit = float(level_inherit)
         self.cutbank_outer = bool(cutbank_outer)
+        self.cutoff_loop_ratio = float(cutoff_loop_ratio)
 
         # Hydraulic
         g = 9.8
@@ -1088,7 +1094,7 @@ class fluvial:
                        if (self.mNeckFFCHprop > 0.0 and self.chelev_arr is not None
                            and self.chelev_arr.size == n_pre) else None)
         idx_map = np.arange(n_pre, dtype=np.int64)
-        new_n = make_cutoff(self.cx, self.cy, self.dlength, thresh, idx_map)
+        new_n = make_cutoff(self.cx, self.cy, self.dlength, thresh, idx_map, self.cutoff_loop_ratio)
         if (self.mNeckFFCHprop > 0.0 and new_n < n_pre
                 and cx_pre is not None and vx_pre is not None
                 and thalweg_pre is not None and chwidth_pre is not None

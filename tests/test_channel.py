@@ -261,3 +261,25 @@ def test_cutbank_side_of_a_bend(outer):
     levee_wider_north = reach.max() - 1500.0 > 1500.0 - reach.min()
     assert deepest_north == outer
     assert levee_wider_north == outer
+
+
+def _arc(radius, degrees, spacing=10.0):
+    """Points every ``spacing`` m along a circular arc, with their segment lengths."""
+    th = np.arange(0.0, np.radians(degrees), spacing / radius)
+    cx, cy = radius * np.sin(th), radius * (1.0 - np.cos(th))
+    return cx, cy, np.r_[0.0, np.hypot(np.diff(cx), np.diff(cy))]
+
+
+@pytest.mark.parametrize("ratio, bend_cut", [(1.0, True), (3.0, False)])
+def test_cutoff_loop_ratio_keeps_bends_and_cuts_loops(ratio, bend_cut):
+    """Alluvsim's neck-cutoff rule (loop ratio 1) also removes a plain 120-degree bend
+    whose shortcut stays inside a 200 m wide channel; with a loop ratio of 3 only a
+    real loop, several times longer than its neck, is cut off, however short it is."""
+    from resmill.layers._make_cutoff import make_cutoff
+    ctol = 300.0                                      # the engine's 3 half-widths
+    cx, cy, dl = _arc(200.0, 120.0)
+    assert (make_cutoff(cx, cy, dl, ctol, loop_ratio=ratio) < dl.size) == bend_cut
+    cx, cy, dl = _arc(200.0, 330.0)
+    assert make_cutoff(cx, cy, dl, ctol, loop_ratio=ratio) < dl.size
+    cx, cy, dl = _arc(60.0, 330.0)                    # a small loop whose neck has closed
+    assert make_cutoff(cx, cy, dl, ctol, loop_ratio=ratio) < dl.size

@@ -1,7 +1,12 @@
 """Geometric neck-cutoff — port of Alluvsim ``neckcutoff.for``.
 
 Scans every (idis, jdis) pair where ``jdis - idis >= dis_thresh`` to find
-two non-adjacent nodes whose Euclidean separation is below ``ctol``. When
+two non-adjacent nodes whose Euclidean separation is below ``ctol``. With
+nodes a few metres apart, Alluvsim's rule also takes a gently curved stretch
+just longer than ``ctol``, whose shortcut stays inside the channel;
+``loop_ratio > 1`` also asks the channel between the two nodes to be at least
+that many times longer than the gap between them, which only a real loop is
+(a neck cutoff removes a loop many times its neck). When
 found, deletes nodes (idis, jdis] (the oxbow loop) by shifting the tail
 left and reducing ``ndis``. Restarts the scan from the top after every
 cut (matches AL's ``goto 435``).
@@ -18,7 +23,7 @@ from numba import jit
 
 
 @jit(nopython=True)
-def _make_cutoff_core(cx, cy, dlength, ctol, idx_map):
+def _make_cutoff_core(cx, cy, dlength, ctol, idx_map, loop_ratio):
     ndis = cx.size
     if ndis < 4:
         return ndis
@@ -32,7 +37,11 @@ def _make_cutoff_core(cx, cy, dlength, ctol, idx_map):
     if dis_thresh < 2:
         dis_thresh = 2
 
+    arc = np.zeros(ndis)                    # channel length from node 0 (loop_ratio > 1)
     while True:
+        if loop_ratio > 1.0:
+            for k in range(1, ndis):
+                arc[k] = arc[k - 1] + np.sqrt((cx[k] - cx[k - 1]) ** 2 + (cy[k] - cy[k - 1]) ** 2)
         cut_found = False
         for idis in range(ndis):
             for jdis in range(idis + dis_thresh, ndis):
@@ -42,6 +51,8 @@ def _make_cutoff_core(cx, cy, dlength, ctol, idx_map):
                 yj = cy[jdis]
                 cdist = (xi - xj) * (xi - xj) + (yi - yj) * (yi - yj)
                 if cdist < thresh:
+                    if loop_ratio > 1.0 and arc[jdis] - arc[idis] < loop_ratio * np.sqrt(cdist):
+                        continue                    # a bend, not a loop
                     # Shift-left compaction: keep [0..idis], drop (idis..jdis], keep [jdis+1..]
                     count = 1
                     for j in range(jdis + 1, ndis):
@@ -59,13 +70,15 @@ def _make_cutoff_core(cx, cy, dlength, ctol, idx_map):
     return ndis
 
 
-def make_cutoff(cx, cy, dlength, ctol, idx_map=None):
+def make_cutoff(cx, cy, dlength, ctol, idx_map=None, loop_ratio=1.0):
     """Modify cx/cy in place; return new ndis.
 
     If ``idx_map`` is provided (an int64 ndarray of size cx.size), it is
     compacted alongside cx/cy so its leading ``new_n`` entries identify
-    which **original** indices survived the cutoff(s).
+    which **original** indices survived the cutoff(s). With ``loop_ratio > 1``
+    a cut also needs the channel between the two nodes to be at least
+    ``loop_ratio`` times longer than the gap between them (Alluvsim: 1, no check).
     """
     if idx_map is None:
         idx_map = np.arange(cx.size, dtype=np.int64)
-    return _make_cutoff_core(cx, cy, dlength, ctol, idx_map)
+    return _make_cutoff_core(cx, cy, dlength, ctol, idx_map, float(loop_ratio))

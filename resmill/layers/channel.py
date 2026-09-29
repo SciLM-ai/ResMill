@@ -224,6 +224,9 @@ class ChannelLayer(Layer):
         # Deep, steep side of the channel and the wider levee on the outer bank
         # of each bend (where it migrates to); False keeps Alluvsim's inner bank.
         cutbank_outer: bool = False,
+        # Neck cutoffs only for loops at least this many times longer than the
+        # neck they close; 1 keeps Alluvsim's rule, which also shaves bends.
+        cutoff_loop_ratio: float = 1.0,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -333,6 +336,7 @@ class ChannelLayer(Layer):
             mNeckFFCHprop=mNeckFFCHprop,
             ntime_per_level=ntime_per_level, scale_ntime=scale_ntime,
             level_inherit=level_inherit, cutbank_outer=cutbank_outer,
+            cutoff_loop_ratio=cutoff_loop_ratio,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,
