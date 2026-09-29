@@ -4,6 +4,23 @@
 
 ### Added
 
+- `path_buffer` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): metres every fresh channel path is drawn beyond the grid at
+  both ends. It starts that far upstream of its entry and goes on that far
+  past the edge where it leaves, with path nodes added in proportion so
+  their spacing stays the same; the parts outside are never painted.
+  Alluvsim's paths start and stop at the edge, where they pin the channel:
+  the first point never migrates and the last one only slides along the
+  edge. So every position of the channel passes through one entry point,
+  and its belt pinches there; the stretches next to both ends stay straight;
+  and when a neck cutoff pairs the last point with one upstream, it deletes
+  everything in between, the end included, so the channel stops inside the
+  volume. In a deepwater complex (16 seeds) 8 % of channels ended inside;
+  100 m inside the entry the belt was 0.58 of its mid-grid width; the first
+  and last km had sinuosity 1.39 and 1.28 against 1.75 mid-grid. With 1 km
+  no channel ends inside, the belt at the entry is 0.94 of mid-grid, and
+  the first, middle and last km read 1.51, 1.65 and 1.52. Default 0:
+  outputs are bit-identical to before.
 - `thalweg_lag=True` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): place the thalweg (its side and strength) by the curvature
   the migration model feels, the same exponentially weighted mean over 30

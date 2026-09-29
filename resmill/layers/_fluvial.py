@@ -408,6 +408,14 @@ class fluvial:
         # inflection the channel still erodes toward the previous outer bank, and
         # the point bar forms on the shallow side. False: local curvature.
         thalweg_lag: bool = False,
+        # Draw every channel path this many metres beyond the grid at both ends: it
+        # starts that far upstream of its entry and goes on that far past its exit
+        # (never painted). A path's first point never moves and its last one only
+        # slides along the edge, so on the grid they pin the channel: its belt
+        # pinches to one point at the entry, the stretches next to both ends stay
+        # straight, and a neck cutoff through the last point deletes the tail (a
+        # dead end). 0: Alluvsim's paths, which start and stop at the edge.
+        path_buffer: float = 0.0,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -492,6 +500,7 @@ class fluvial:
         self.thalweg_max = None if thalweg_max is None else float(thalweg_max)
         self.unwrap_azimuth = bool(unwrap_azimuth)
         self.thalweg_lag = bool(thalweg_lag)
+        self.path_buffer = float(path_buffer)
 
         # Hydraulic
         g = 9.8
@@ -582,6 +591,11 @@ class fluvial:
         self.ndis_cap = int(diag / self.step * _MAX_SINUOSITY) * 2
         # "Walk died immediately, redraw it" threshold (Alluvsim: ndis0/10).
         self.ndis_min = max(2, self.ndis0 // 10)
+        # A path walked ``path_buffer`` beyond the grid at both ends is that much
+        # longer: add nodes in proportion so their spacing, and every per-node
+        # rule, stays the same.
+        if self.path_buffer > 0.0:
+            self.ndis0 = int(round(self.ndis0 * (1.0 + 2.0 * self.path_buffer / (self.xmax - self.xmin))))
 
         # Counters mutable from numba kernels
         self.ntg_counter = np.zeros(1, dtype=np.int64)
@@ -674,7 +688,7 @@ class fluvial:
 
     def _ar2_walk(self, x0: float, y0: float, chazi: float, chsinu: float,
                   ndis_max: int, max_attempts: int = 1000, azi0: float | None = None,
-                  min_nodes: int | None = None):
+                  min_nodes: int | None = None, lead: float = 0.0, tail: float = 0.0):
         """Disturbed-periodic (Pyrcz/Sun) AR(2) walk in **compass degrees**.
 
         Faithful port of Alluvsim ``buildCHtable.for:70-128``:
@@ -690,6 +704,10 @@ class fluvial:
         Restarts noise if the walk leaves the grid in the first ``ndis_min``
         nodes (matches AL's ``goto 512`` regen-on-short-failure); ``min_nodes``
         overrides that minimum (extending a path may take a single step).
+        ``lead``: metres walked before the grid, starting that far upstream of
+        ``(x0, y0)`` along the launch heading (the walk counts as started where
+        it enters the grid); ``tail``: metres walked on past the point where it
+        first leaves the grid (both ``path_buffer``). 0, 0: Alluvsim's walk.
 
         Returns ``(cx, cy)`` arrays of length ``>= ndis_min`` on success, or
         (None, None) after ``max_attempts`` failed regenerations.
@@ -707,17 +725,20 @@ class fluvial:
         # steps (a distributary leaving its parent at an angle and easing
         # back toward the regional slope).
         ang_init = 450.0 - (chazi if azi0 is None else azi0)
+        n_lead, n_tail = int(round(lead / self.step)), int(round(tail / self.step))
 
         for _ in range(max_attempts):
             noise = np.random.normal(0.0, 1.0, ndis_max) * s + m
             cx = np.empty(ndis_max + 1, dtype=np.float64)
             cy = np.empty(ndis_max + 1, dtype=np.float64)
-            cx[0] = x0
-            cy[0] = y0
+            cx[0] = x0 - n_lead * self.step * np.cos(np.radians(ang_init))
+            cy[0] = y0 - n_lead * self.step * np.sin(np.radians(ang_init))
             ang1 = ang_init
             ang2 = ang_init
             short = False
             n_ok = 1
+            exit_at = None
+            entered, entry_i = n_lead == 0, 0
             for i in range(ndis_max):
                 ang = b1 * ang1 + b2 * ang2 + noise[i]
                 x = cx[i] + self.step * np.cos(np.radians(ang))
@@ -730,17 +751,28 @@ class fluvial:
                 # (0.564 at 0 and 90 deg, 0.534 at 45 -- a square overlaps
                 # its own rotation least at 45).
                 xr, yr = self._rot_xy(x, y)
-                if xr > self.xmax or xr < self.xmin or yr > self.ymax or yr < self.ymin:
-                    if i < (self.ndis_min if min_nodes is None else min_nodes):
+                out = xr > self.xmax or xr < self.xmin or yr > self.ymax or yr < self.ymin
+                if not entered:
+                    if not out:
+                        entered, entry_i = True, i
+                    elif i > 3 * n_lead:          # wandered off without reaching the grid
                         short = True
                         break
-                    n_ok = i  # nodes 0..i-1 are in-grid; AL: ``ndis = i-1`` then exit
-                    break
+                elif exit_at is None and out:
+                    if i - entry_i < (self.ndis_min if min_nodes is None else min_nodes):
+                        short = True
+                        break
+                    if n_tail == 0:
+                        n_ok = i  # nodes 0..i-1 are in-grid; AL: ``ndis = i-1`` then exit
+                        break
+                    exit_at = i
                 cx[i + 1] = x
                 cy[i + 1] = y
                 ang2 = ang1
                 ang1 = ang
                 n_ok = i + 2
+                if exit_at is not None and i - exit_at >= n_tail:
+                    break
             if short:
                 continue
             return cx[:n_ok].copy(), cy[:n_ok].copy()
@@ -843,7 +875,8 @@ class fluvial:
             if y0 is None: y0 = y0_
             if chazi is None: chazi = chazi_
             if chsinu is None: chsinu = chsinu_
-        cx0, cy0 = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis_cap)
+        cx0, cy0 = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis_cap,
+                                  lead=self.path_buffer, tail=self.path_buffer)
         if cx0 is None or cx0.size < 20:
             return 0
 
@@ -887,7 +920,8 @@ class fluvial:
         pool = []
         for _ in range(self.CHndraw):
             x0, y0, chazi, chsinu = self._sample_streamline()
-            cx, cy = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis_cap)
+            cx, cy = self._ar2_walk(x0, y0, chazi, chsinu, self.ndis_cap,
+                                    lead=self.path_buffer, tail=self.path_buffer)
             if cx is None or cx.size < 20:
                 continue
             length = np.zeros(cx.size)
@@ -1197,7 +1231,7 @@ class fluvial:
         heading = (90.0 - np.degrees(np.arctan2(self.cy[-1] - self.cy[-2],
                                                 self.cx[-1] - self.cx[-2]))) % 360.0
         ex, ey = self._ar2_walk(self.cx[-1], self.cy[-1], self._chazi, self._chsinu,
-                                self.ndis_cap, azi0=heading, min_nodes=1)
+                                self.ndis_cap, azi0=heading, min_nodes=1, tail=self.path_buffer)
         if ex is None or ex.size < 2:
             return
         self.cx = np.concatenate([self.cx, ex[1:]])
@@ -1257,7 +1291,7 @@ class fluvial:
         cx_tail, cy_tail = self._ar2_walk(
             float(self.cx[ianode]), float(self.cy[ianode]),
             chazi=local_azi, chsinu=chsinu,
-            ndis_max=self.ndis_cap,
+            ndis_max=self.ndis_cap, tail=self.path_buffer,
         )
         if cx_tail is None or cx_tail.size < 5:
             return False

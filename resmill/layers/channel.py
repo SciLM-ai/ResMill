@@ -239,6 +239,11 @@ class ChannelLayer(Layer):
         # Thalweg by the migration model's upstream-weighted curvature, so the pool
         # lags the bend as the bank erosion does (False: local curvature).
         thalweg_lag: bool = False,
+        # Metres every channel path is drawn beyond the grid at both ends (never
+        # painted), so neither end pins the channel inside the grid: no belt
+        # pinched at the entry, no straight end stretches, no dead ends from tail
+        # cutoffs. 0: Alluvsim's paths, which start and stop at the edge.
+        path_buffer: float = 0.0,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -350,6 +355,7 @@ class ChannelLayer(Layer):
             level_inherit=level_inherit, cutbank_outer=cutbank_outer,
             cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
             thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth, thalweg_lag=thalweg_lag,
+            path_buffer=path_buffer,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

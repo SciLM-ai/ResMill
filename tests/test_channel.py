@@ -304,6 +304,39 @@ def test_extend_to_boundary_keeps_channels_flowing_out(extend):
     assert (to_edge < 2 * eng.step) == extend
 
 
+@pytest.mark.parametrize("buffer", [0.0, 600.0])
+def test_path_buffer_draws_the_path_beyond_the_grid_at_both_ends(buffer):
+    """With ``path_buffer`` a fresh channel path starts that many metres upstream
+    of its entry and keeps going that far past the edge where it leaves the grid,
+    with nodes added in proportion so their spacing stays the same; by default it
+    starts and stops at the edge."""
+    layer = ChannelLayer(nx=100, ny=50, nz=10, x_len=2000.0, y_len=1000.0, z_len=10.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=1, probAvulOutside=0.0, probAvulInside=0.0,
+                         **({"path_buffer": buffer} if buffer else {}))
+    eng = layer._engine
+    assert eng.ndis0 == round(200 * (1.0 + 2.0 * buffer / 2000.0))
+    np.random.seed(3)
+    assert eng.generate_streamline(x0=0.0, y0=500.0, chazi=90.0, chsinu=1.2) == 1
+    assert eng.cx[0] == pytest.approx(-buffer)
+    seg = np.hypot(np.diff(eng.cx), np.diff(eng.cy))
+    outside = (eng.cx < 0.0) | (eng.cx > 2000.0) | (eng.cy < 0.0) | (eng.cy > 1000.0)
+    first_in = int(np.argmin(outside))
+    first_out = first_in + int(np.argmax(outside[first_in:])) if outside[first_in:].any() else eng.cx.size
+    assert seg[:first_in].sum() == pytest.approx(buffer, abs=3 * eng.step)
+    assert seg[first_out - 1:].sum() == pytest.approx(buffer, abs=2 * eng.step)
+
+
+def test_path_buffer_keeps_both_ends_outside():
+    """Migrating a path drawn beyond the grid leaves both its ends outside, so the
+    channel neither starts nor stops inside the volume."""
+    layer = ChannelLayer(nx=100, ny=50, nz=10, x_len=2000.0, y_len=1000.0, z_len=10.0, top_depth=0.0)
+    layer.create_geology(seed=2, nlevel=1, ntime=30, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=5.0, mCHwdratio=15.0, mdistMigrate=15.0, NTGtarget=0.99, path_buffer=400.0)
+    eng = layer._engine
+    for x, y in [(eng.cx[0], eng.cy[0]), (eng.cx[-1], eng.cy[-1])]:
+        assert x < 0.0 or x > 2000.0 or y < 0.0 or y > 1000.0
+
+
 def _bend_thalweg(radius, **kw):
     """How far the deepest point sits from the channel's centre (fraction of its
     width) along the middle of a 1.5 km right-hand bend of ``radius`` m (None:
