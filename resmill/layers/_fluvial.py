@@ -430,6 +430,10 @@ class fluvial:
         # spacing in metres (e.g. a fraction of the channel width) gives the same
         # channel on any grid. None: one grid cell.
         path_step: float | None = None,
+        # Spread of each flow event's rock: relative porosity and log10-permeability
+        # standard deviations of the per-event draw (today's values by default).
+        event_poro_sd: float = 0.04,
+        event_log_perm_sd: float = 0.12,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -642,8 +646,8 @@ class fluvial:
         # DeltaLayer ``poro_realization_mult`` / ``perm_realization_mult``).
         # Per-event mult is the wiggle WITHIN a realization, e.g. one
         # channel slightly cleaner than another in the same reservoir.
-        self.poro_mult_std = 0.04
-        self.log_perm_offset_std = 0.12
+        self.poro_mult_std = float(event_poro_sd)
+        self.log_perm_offset_std = float(event_log_perm_sd)
 
         # Cache for the current channel event's K-C-coupled poro/perm pair.
         # ``_stamp_channel`` redraws and refreshes this; ``_stamp_levee``

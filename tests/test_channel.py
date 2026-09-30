@@ -430,6 +430,55 @@ def test_facies_props_apply_to_their_layer_only():
     assert channel_module.FACIES_PROPS == before
 
 
+def test_rock_spread_slope_and_cap_are_opt_in():
+    """``facies_props`` may give a facies a permeability spread at a given porosity
+    (``log10_perm_sd``) and a relative porosity spread (``poro_sd``); ``perm_poro_slope`` ties
+    sand permeability to porosity in decades per porosity unit around each facies' average;
+    ``poro_max`` caps porosity softly."""
+    layer = ChannelLayer(nx=60, ny=40, nz=12, x_len=1200.0, y_len=800.0, z_len=12.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=10.0, NTGtarget=0.9, perm_poro_slope=0.19, poro_max=0.40,
+                         facies_props={4: {"log10_perm_sd": 0.4},
+                                       -1: {"poro": 0.12, "log10_perm": -4.0, "log10_perm_sd": 0.5, "poro_sd": 0.25}})
+    fac, poro = np.asarray(layer.facies), np.asarray(layer.poro_mat)
+    log_k = np.log10(np.asarray(layer.perm_mat))
+    ch = fac == 4
+    slope, intercept = np.polyfit(100.0 * poro[ch], log_k[ch], 1)
+    assert slope == pytest.approx(0.19, abs=0.03)
+    assert np.std(log_k[ch] - (100.0 * slope * poro[ch] + intercept)) == pytest.approx(0.4, abs=0.08)
+    assert np.mean(poro[ch]) == pytest.approx(0.30, abs=0.005)   # the facies value is its average porosity
+    event_offset = np.asarray(layer._engine.log_perm_offset_field)[ch].mean()   # each body keeps its quality
+    assert np.mean(log_k[ch]) == pytest.approx(3.3 + event_offset, abs=0.1)   # the facies value is its average
+    mud = fac == -1
+    assert np.std(log_k[mud]) == pytest.approx(0.5, abs=0.1)
+    assert np.std(poro[mud]) == pytest.approx(0.03, abs=0.01) and poro[mud].min() > 0.0
+    assert poro.max() < 0.40 and np.mean(poro > 0.399) < 0.001      # soft cap: no pile-up
+
+
+def test_perm_max_bends_permeability_below_the_cap():
+    """``perm_max`` (mD) bends log-permeability within half a decade of it smoothly towards
+    it: nothing reaches the cap and nothing piles up just below it."""
+    layer = ChannelLayer(nx=60, ny=40, nz=12, x_len=1200.0, y_len=800.0, z_len=12.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=10.0, NTGtarget=0.9, perm_max=1000.0)
+    log_k = np.log10(np.asarray(layer.perm_mat))
+    assert log_k.max() < 3.0
+    assert np.mean(log_k > 2.99) < 0.001
+
+
+def test_fining_amplitude_and_event_spreads_are_settings():
+    """``fining_amplitude`` sets the fining-upward ramp (1 -+ it; Alluvsim's 0.3 by default) and
+    ``event_poro_sd`` / ``event_log_perm_sd`` the spread of each flow event's rock."""
+    stds = []
+    for kw in ({}, {"fining_amplitude": 0.1, "event_poro_sd": 0.02, "event_log_perm_sd": 0.25}):
+        layer = ChannelLayer(nx=60, ny=40, nz=12, x_len=1200.0, y_len=800.0, z_len=12.0, top_depth=0.0)
+        layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                             mCHdepth=4.0, mCHwdratio=10.0, NTGtarget=0.9, **kw)
+        stds.append(np.std(np.asarray(layer.poro_mat)[np.asarray(layer.facies) == 4]))
+    assert stds[1] < 0.5 * stds[0]
+    assert (layer._engine.poro_mult_std, layer._engine.log_perm_offset_std) == (0.02, 0.25)
+
+
 def _bend_thalweg(radius, **kw):
     """How far the deepest point sits from the channel's centre (fraction of its
     width) along the middle of a 1.5 km right-hand bend of ``radius`` m (None:
@@ -514,3 +563,85 @@ def test_thalweg_lag_keeps_the_pool_where_the_channel_erodes(lag):
     assert np.all(a[just_past] > 0.5) == lag
     assert np.all(a[just_past] < 0.5) == (not lag)
     assert np.all(a[far] < 0.5)
+
+
+def _fining_layer(**kw):
+    layer = ChannelLayer(nx=60, ny=40, nz=16, x_len=1200.0, y_len=800.0, z_len=16.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=6.0, mCHwdratio=10.0, NTGtarget=0.9, perm_poro_slope=0.05, **kw)
+    fac = np.asarray(layer.facies)
+    return layer, fac, (fac == 3) | (fac == 4), np.asarray(layer._engine.depth_norm)
+
+
+def test_fining_upward_is_a_permeability_drop_above_the_clean_base():
+    """``fining_perm_decades`` lowers channel-fill (CH, LA) permeability linearly from the top of
+    the fill's clean lower part (``fining_clean_fraction`` of its depth) to its top, where the
+    drop is the full ``fining_perm_decades``; porosity follows by ``fining_poro_per_decade``
+    units per decade, and each facies keeps its value as its average."""
+    layer, fac, fill, dn = _fining_layer(fining_perm_decades=1.5, fining_clean_fraction=0.5)
+    log_k, poro = np.log10(np.asarray(layer.perm_mat)), np.asarray(layer.poro_mat)
+    offset = np.asarray(layer._engine.log_perm_offset_field)
+    k = log_k - offset                                   # each body's own quality aside
+    clean, top = fill & (dn >= 0.6), fill & (dn < 0.1)
+    assert np.mean(k[clean & (fac == 3)]) - np.mean(k[top & (fac == 3)]) == pytest.approx(1.35, abs=0.15)
+    lower = fill & (fac == 3) & (dn >= 0.5)             # flat in the clean part
+    assert abs(np.polyfit(dn[lower], k[lower], 1)[0]) < 0.15
+    for code, value in ((3, 2.7), (4, 3.3)):
+        assert np.mean(k[fac == code]) == pytest.approx(value, abs=0.1)   # the facies value is its average
+    assert np.mean(poro[clean & (fac == 3)]) - np.mean(poro[top & (fac == 3)]) == pytest.approx(0.0, abs=0.005)
+    layer, fac, fill, dn = _fining_layer(fining_perm_decades=1.5, fining_clean_fraction=0.5,
+                                         fining_poro_per_decade=4.0)
+    poro = np.asarray(layer.poro_mat)
+    clean, top = fill & (fac == 3) & (dn >= 0.6), fill & (fac == 3) & (dn < 0.1)
+    assert np.mean(poro[clean]) - np.mean(poro[top]) == pytest.approx(0.04 * 1.5 * 0.9, abs=0.01)
+    assert np.mean(poro[fac == 3]) == pytest.approx(0.25, abs=0.005)
+    log_k = np.log10(np.asarray(layer.perm_mat)) - np.asarray(layer._engine.log_perm_offset_field)
+    assert np.mean(log_k[clean]) - np.mean(log_k[top]) == pytest.approx(1.35, abs=0.15)   # the total drop
+
+
+def test_fining_probability_picks_whole_flow_events():
+    """With ``fining_probability`` p, each flow event (the cells sharing one event's rock
+    draw) fines upward or stays blocky as a whole, about p of them fining."""
+    layer, fac, fill, dn = _fining_layer(fining_perm_decades=1.5, fining_clean_fraction=0.5,
+                                         fining_probability=0.5)
+    log_k = np.log10(np.asarray(layer.perm_mat))
+    eng = layer._engine
+    pairs = np.stack([np.asarray(eng.poro_mult_field)[fill],
+                      np.asarray(eng.log_perm_offset_field)[fill]], axis=1)
+    _, event = np.unique(pairs, axis=0, return_inverse=True)
+    event = event.ravel()
+    k, d = log_k[fill], dn[fill]
+    drops = []
+    for e in np.unique(event):
+        sel = event == e
+        if (d[sel] >= 0.5).sum() >= 3 and (d[sel] < 0.2).sum() >= 3:
+            drops.append(k[sel][d[sel] >= 0.5].mean() - k[sel][d[sel] < 0.2].mean())
+    drops = np.array(drops)
+    assert len(drops) >= 8
+    assert np.all((np.abs(drops) < 0.3) | (drops > 0.8))          # blocky or fining, nothing between
+    assert 0.2 < np.mean(drops > 0.8) < 0.8
+
+
+def test_noise_ranges_in_metres_keep_the_same_texture_on_any_grid():
+    """``noise_range_m`` gives the rock noise's horizontal and vertical correlation lengths in
+    metres, so a finer grid shows the same texture: the correlation at a fixed distance does
+    not depend on the cell size."""
+    from resmill.layers.channel import _correlated_noise
+    corr = []
+    for dx in (10.0, 20.0):
+        np.random.seed(0)
+        noise = _correlated_noise((int(4000 / dx), 40, 8), 3.0, sigma=(120.0 / 3.46 / dx, 0.5, 0.2))
+        lag = int(60 / dx)
+        corr.append(np.corrcoef(noise[:-lag].ravel(), noise[lag:].ravel())[0, 1])
+    assert corr[0] == pytest.approx(corr[1], abs=0.05)
+    layer = ChannelLayer(nx=60, ny=40, nz=12, x_len=1200.0, y_len=800.0, z_len=12.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=10.0, NTGtarget=0.9, perm_poro_slope=0.05,
+                         noise_range_m=(200.0, 0.5), facies_props={4: {"log10_perm_sd": 0.3}})
+    log_k = np.log10(np.asarray(layer.perm_mat))
+    fac = np.asarray(layer.facies)
+    both = (fac[:-1] == 4) & (fac[1:] == 4)
+    lateral = np.corrcoef(log_k[:-1][both], log_k[1:][both])[0, 1]
+    both_z = (fac[:, :, :-1] == 4) & (fac[:, :, 1:] == 4)
+    vertical = np.corrcoef(log_k[:, :, :-1][both_z], log_k[:, :, 1:][both_z])[0, 1]
+    assert lateral > vertical + 0.2                                  # long thin beds

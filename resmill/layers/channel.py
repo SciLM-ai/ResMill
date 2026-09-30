@@ -52,14 +52,22 @@ FACIES_PROPS: dict[int, dict[str, float]] = {
 }
 
 
-def _correlated_noise(shape: tuple, range_xy: float) -> np.ndarray:
+# White noise smoothed by a Gaussian of s.d. s has correlation exp(-h^2 / 4 s^2), which falls to
+# 5 % (the practical range) at h = 2 sqrt(3) s.
+_RANGE_PER_SIGMA = 2.0 * float(np.sqrt(3.0))
+
+
+def _correlated_noise(shape: tuple, range_xy: float, sigma: tuple | None = None) -> np.ndarray:
     """Unit-variance Gaussian field with lateral correlation ``range_xy``
     cells and a third of that vertically (smoothed white noise), drawn from
-    the global numpy state so it follows the layer's seed."""
+    the global numpy state so it follows the layer's seed. ``sigma`` gives the
+    smoothing per axis in cells instead."""
     from scipy.ndimage import gaussian_filter
     white = np.random.normal(0.0, 1.0, shape).astype(np.float32)
-    r = max(float(range_xy), 1e-3)
-    field = gaussian_filter(white, sigma=(r, r, max(r / 3.0, 0.5)), mode="reflect")
+    if sigma is None:
+        r = max(float(range_xy), 1e-3)
+        sigma = (r, r, max(r / 3.0, 0.5))
+    field = gaussian_filter(white, sigma=sigma, mode="reflect")
     sd = float(field.std())
     return (field / sd if sd > 0 else field).astype(np.float32)
 
@@ -81,7 +89,16 @@ class ChannelLayer(Layer):
                                poro_realization_mult: float = 1.0,
                                perm_realization_mult: float = 1.0,
                                poro_noise_std: float = 0.0,
-                               poro_noise_range: float = 3.0):
+                               poro_noise_range: float = 3.0,
+                               perm_poro_slope: float | None = None,
+                               poro_max: float | None = None,
+                               perm_max: float | None = None,
+                               fining_amplitude: float | None = None,
+                               fining_perm_decades: float | None = None,
+                               fining_clean_fraction: float = 0.5,
+                               fining_poro_per_decade: float = 0.0,
+                               fining_probability: float = 1.0,
+                               noise_range_m: tuple | None = None):
         """Build ``self.facies / active / poro_mat / perm_mat`` from engine outputs.
 
         Inputs:
@@ -108,6 +125,40 @@ class ChannelLayer(Layer):
         * ``perm_realization_mult`` — single scalar (linear) applied
           uniformly. log10(perm_realization_mult) is added to log_perm
           for every cell. Sobol-sampled log-uniformly, default 1.0.
+        * ``facies_props`` entries may also carry ``poro_sd`` (log-normal
+          relative porosity spread) and
+          ``log10_perm_sd`` (permeability spread at a given porosity, in
+          decades): correlated fields (range ``poro_noise_range``) applied
+          to that facies' porosity and log-permeability, mud included.
+          Measured rock has 0.2-0.56 decades of spread by facies (Corbett &
+          Jensen 1992); without these keys a facies has none beyond the
+          ramp and the event draws.
+        * ``perm_poro_slope`` — decades of permeability per porosity unit
+          (0.01) for sand facies, replacing the K-C terms below: log_perm
+          = facies value + realization shift + the event's offset + slope
+          x (poro - the facies' mean porosity); each facies' porosity is
+          rescaled so its average is its facies value, so a facies' values
+          are its averages and each flow event keeps its own quality.
+          Within formations the slope is 0.10-0.31 (median 0.19; Nelson &
+          Kibler 2003), steeper than K-C's ~0.05. None keeps the K-C terms.
+        * ``poro_max`` — a soft porosity cap: porosity above 90 % of it
+          bends smoothly towards it, with no pile-up at the cap. Applied
+          before the slope. None keeps the hard 0.5 clip.
+        * ``perm_max`` — a soft permeability cap (mD): log-permeability
+          within half a decade of it bends smoothly towards it. None: no cap.
+        * ``fining_amplitude`` — the fining-upward ramp is 1 -+ this
+          (base to top of each event); None keeps Alluvsim's 0.7-1.3 (0.3).
+        * ``fining_perm_decades`` — grain-size fining upward inside each
+          channel fill (CH, LA), in place of the porosity ramp: permeability
+          is flat in the fill's clean lower part (``fining_clean_fraction`` of
+          its depth) and falls linearly above it, by this many decades at the
+          top; porosity falls ``fining_poro_per_decade`` units per decade
+          (clay-rich tops). A fraction ``fining_probability`` of the flow
+          events fine upward, the others stay blocky. Each facies keeps its
+          value as its average. None: off.
+        * ``noise_range_m`` — (horizontal, vertical) correlation lengths in
+          metres of the ``poro_sd`` / ``log10_perm_sd`` noise, so its texture
+          is the same on any grid. None keeps ``poro_noise_range`` cells.
 
         Combined formula per cell::
 
@@ -153,14 +204,24 @@ class ChannelLayer(Layer):
         # Base poro / log_perm by facies code from FACIES_PROPS lookup.
         base_poro = np.zeros(self.facies.shape, dtype=np.float32)
         base_log_perm = np.zeros(self.facies.shape, dtype=np.float32)
+        poro_sd = np.zeros(self.facies.shape, dtype=np.float32)
+        log_perm_sd = np.zeros(self.facies.shape, dtype=np.float32)
         for code, vals in props.items():
             mask = (self.facies == code)
             if mask.any():
                 base_poro[mask] = vals["poro"]
                 base_log_perm[mask] = vals["log10_perm"]
+                poro_sd[mask] = vals.get("poro_sd", 0.0)
+                log_perm_sd[mask] = vals.get("log10_perm_sd", 0.0)
 
         # Per-event Walker-1992 upward-fining ramp.
-        ramp = (0.7 + 0.6 * depth_norm).astype(np.float32)
+        if fining_perm_decades is not None:
+            ramp = np.ones(self.facies.shape, dtype=np.float32)
+        elif fining_amplitude is None:
+            ramp = (0.7 + 0.6 * depth_norm).astype(np.float32)
+        else:
+            a = float(fining_amplitude)
+            ramp = ((1.0 - a) + 2.0 * a * depth_norm).astype(np.float32)
 
         # Compute poro and log_perm across the full cube. Per-realization
         # mults are constants applied uniformly. KC_SLOPE amplifies the
@@ -176,6 +237,28 @@ class ChannelLayer(Layer):
                     + KC_SLOPE * np.log10(np.maximum(ramp, 1e-6))
                     + log_perm_offset_field
                     + log_perm_realization_offset_f32)
+
+        # Grain-size fining upward in the fills' upper parts (decades), per flow event;
+        # an event is the set of cells sharing its (poro_mult, log_perm_offset) draw.
+        fining = None
+        if fining_perm_decades is not None:
+            fill = (self.facies == 3) | (self.facies == 4)
+            clean = float(fining_clean_fraction)
+            fining = np.where(fill, float(fining_perm_decades) * np.clip(
+                (1.0 - clean - depth_norm) / max(1.0 - clean, 1e-6), 0.0, 1.0), 0.0).astype(np.float32)
+            if float(fining_probability) < 1.0 and fill.any():
+                pairs = np.stack([poro_mult_field[fill], log_perm_offset_field[fill]], axis=1)
+                _, event = np.unique(pairs, axis=0, return_inverse=True)
+                event = event.ravel()
+                fines = np.random.random(int(event.max()) + 1) < float(fining_probability)
+                fining[fill] *= fines[event]
+            poro_drop = 0.01 * float(fining_poro_per_decade) * fining
+            if perm_poro_slope is not None:   # calibrated: each facies' value stays its average
+                for code in (3, 4):
+                    mask = self.facies == code
+                    if mask.any():
+                        poro_drop[mask] -= poro_drop[mask].mean()
+            poro_mat = poro_mat - poro_drop
 
         # Mud cells (FF, FFCH) get base FACIES_PROPS values — no ramp,
         # no per-event mult, no per-realization shift (mud is not the
@@ -193,6 +276,54 @@ class ChannelLayer(Layer):
             sand_mask = self.facies >= 1
             poro_mat = np.where(sand_mask, poro_mat * mult, poro_mat)
             log_perm = np.where(sand_mask, log_perm + KC_SLOPE * np.log10(mult), log_perm)
+
+        # Opt-in rock spread (per-facies poro_sd / log10_perm_sd), the porosity
+        # cap and a porosity-permeability slope in decades per porosity unit.
+        # With none of them given nothing is drawn and the cap is the 0.5 clip.
+        sigma = None
+        if noise_range_m is not None:
+            horizontal, vertical = (float(v) / _RANGE_PER_SIGMA for v in noise_range_m)
+            sigma = (horizontal / self.dx, horizontal / self.dy, vertical / self.dz)
+        if poro_sd.any():
+            poro_mat = poro_mat * np.exp(poro_sd * _correlated_noise(self.facies.shape, poro_noise_range, sigma))
+        if perm_poro_slope is not None:
+            # Calibrated rock: each facies' average porosity is its facies value (the
+            # ramp, the cap and erosion otherwise shift the preserved cells' mean).
+            sand_mask = self.facies >= 1
+            for code in np.unique(self.facies):
+                mask = self.facies == code
+                target = float(base_poro[mask][0]) * (float(poro_realization_mult) if code >= 1 else 1.0)
+                mean = float(poro_mat[mask].mean())
+                if mean > 0.0:
+                    poro_mat[mask] = poro_mat[mask] * (target / mean)
+        if poro_max is not None:
+            knee = 0.9 * float(poro_max)
+            span = float(poro_max) - knee
+            poro_mat = np.where(poro_mat > knee, knee + span * np.tanh((poro_mat - knee) / span), poro_mat)
+        if perm_poro_slope is not None:
+            sand_mask = self.facies >= 1
+            pivot = np.zeros(self.facies.shape, dtype=np.float32)
+            for code in np.unique(self.facies[sand_mask]):
+                mask = self.facies == code
+                pivot[mask] = poro_mat[mask].mean()
+            log_perm = np.where(sand_mask, base_log_perm + log_perm_realization_offset_f32
+                                + log_perm_offset_field
+                                + 100.0 * float(perm_poro_slope) * (poro_mat - pivot), log_perm)
+        if fining is not None:
+            # The slope already turns the porosity drop into part of the permeability drop.
+            coupled = float(perm_poro_slope) * float(fining_poro_per_decade) if perm_poro_slope is not None else 0.0
+            drop = fining * (1.0 - coupled)
+            if perm_poro_slope is not None:   # calibrated: each facies' value stays its average
+                for code in (3, 4):
+                    mask = self.facies == code
+                    if mask.any():
+                        drop[mask] -= drop[mask].mean()
+            log_perm = log_perm - drop
+        if log_perm_sd.any():
+            log_perm = log_perm + log_perm_sd * _correlated_noise(self.facies.shape, poro_noise_range, sigma)
+        if perm_max is not None:
+            knee = np.log10(float(perm_max)) - 0.5
+            log_perm = np.where(log_perm > knee, knee + 0.5 * np.tanh((log_perm - knee) / 0.5), log_perm)
 
         # Inactive cells (FF=-1) get poro = base FF value; perm tracks.
         # Clip poro to a physical range to avoid float16 overflow / negatives.
@@ -305,6 +436,21 @@ class ChannelLayer(Layer):
         # Cell-scale porosity texture inside sand bodies (0 = smooth ramp)
         poro_noise_std: float = 0.0,
         poro_noise_range: float = 3.0,
+        # Permeability per porosity unit for sands (None: K-C); soft porosity and permeability caps
+        perm_poro_slope: float | None = None,
+        poro_max: float | None = None,
+        perm_max: float | None = None,
+        # Fining-upward ramp 1 -+ this (None: Alluvsim's 0.3); per-event rock spreads
+        fining_amplitude: float | None = None,
+        event_poro_sd: float = 0.04,
+        event_log_perm_sd: float = 0.12,
+        # Permeability fining upward in channel fills and noise ranges in metres (see
+        # _finalize_facies_table; None: off)
+        fining_perm_decades: float | None = None,
+        fining_clean_fraction: float = 0.5,
+        fining_poro_per_decade: float = 0.0,
+        fining_probability: float = 1.0,
+        noise_range_m: tuple | None = None,
         seed: int | None = None,
     ):
         """Generate channel geology with Alluvsim-faithful semantics.
@@ -363,6 +509,7 @@ class ChannelLayer(Layer):
             cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
             thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth, thalweg_lag=thalweg_lag,
             path_buffer=path_buffer, continuous_banks=continuous_banks, path_step=path_step,
+            event_poro_sd=event_poro_sd, event_log_perm_sd=event_log_perm_sd,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,
@@ -377,6 +524,15 @@ class ChannelLayer(Layer):
             perm_realization_mult=perm_realization_mult,
             poro_noise_std=poro_noise_std,
             poro_noise_range=poro_noise_range,
+            perm_poro_slope=perm_poro_slope,
+            poro_max=poro_max,
+            perm_max=perm_max,
+            fining_amplitude=fining_amplitude,
+            fining_perm_decades=fining_perm_decades,
+            fining_clean_fraction=fining_clean_fraction,
+            fining_poro_per_decade=fining_poro_per_decade,
+            fining_probability=fining_probability,
+            noise_range_m=noise_range_m,
         )
         # Stash for downstream tooling (parquet writers can record the
         # engine-level multiplier std values, generate.py uses these to

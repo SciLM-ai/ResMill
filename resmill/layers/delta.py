@@ -212,6 +212,15 @@ class DeltaLayer(ChannelLayer):
                        perm_realization_mult: float = 1.0,
                        poro_noise_std: float = 0.0,
                        poro_noise_range: float = 3.0,
+                       perm_poro_slope: float | None = None,
+                       poro_max: float | None = None,
+                       perm_max: float | None = None,
+                       fining_amplitude: float | None = None,
+                       fining_perm_decades: float | None = None,
+                       fining_clean_fraction: float = 0.5,
+                       fining_poro_per_decade: float = 0.0,
+                       fining_probability: float = 1.0,
+                       noise_range_m: tuple | None = None,
                        seed: int | None = None,
                        **kwargs):
         """Generate a prograding distributary-fan delta.
@@ -406,6 +415,15 @@ class DeltaLayer(ChannelLayer):
             perm_realization_mult=perm_realization_mult,
             poro_noise_std=poro_noise_std,
             poro_noise_range=poro_noise_range,
+            perm_poro_slope=perm_poro_slope,
+            poro_max=poro_max,
+            perm_max=perm_max,
+            fining_amplitude=fining_amplitude,
+            fining_perm_decades=fining_perm_decades,
+            fining_clean_fraction=fining_clean_fraction,
+            fining_poro_per_decade=fining_poro_per_decade,
+            fining_probability=fining_probability,
+            noise_range_m=noise_range_m,
         )
         # Expose final engine + accumulated distal tips for tutorial / debug
         self._engine = last_engine
