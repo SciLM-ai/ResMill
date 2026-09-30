@@ -417,6 +417,19 @@ def test_path_step_gives_the_same_channel_on_any_grid():
     np.testing.assert_allclose(eng[20.0, True].cy, eng[40.0, True].cy)
 
 
+def test_facies_props_apply_to_their_layer_only():
+    """A layer's ``facies_props`` override ResMill's table for that layer only: the module
+    table, and so the next layer built without them, keep the defaults."""
+    import copy
+    from resmill.layers import channel as channel_module
+    before = copy.deepcopy(channel_module.FACIES_PROPS)
+    layer = ChannelLayer(nx=20, ny=15, nz=10, x_len=2000.0, y_len=1500.0, z_len=10.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=2, probAvulOutside=0.0, probAvulInside=0.0,
+                         facies_props={-1: {"log10_perm": -5.0}})
+    assert np.allclose(np.asarray(layer.perm_mat)[np.asarray(layer.facies) == -1], 1e-5)
+    assert channel_module.FACIES_PROPS == before
+
+
 def _bend_thalweg(radius, **kw):
     """How far the deepest point sits from the channel's centre (fraction of its
     width) along the middle of a 1.5 km right-hand bend of ``radius`` m (None:

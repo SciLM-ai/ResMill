@@ -132,7 +132,7 @@ class ChannelLayer(Layer):
         # K-C slope for within-event ramp (matches per-event slope:
         # log_perm_offset_std / poro_mult_std = 0.12 / 0.04 = 3.0).
         KC_SLOPE = 3.0
-        props = dict(FACIES_PROPS)
+        props = {code: dict(values) for code, values in FACIES_PROPS.items()}   # never edit the module table
         if facies_props:
             for k, v in facies_props.items():
                 props.setdefault(int(k), {}).update(v)

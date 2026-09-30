@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- `facies_props` given to one `ChannelLayer` or `DeltaLayer` no longer
+  rewrite the module's `FACIES_PROPS`. The table was copied one level deep
+  and its inner dicts updated in place, so every later layer built without
+  `facies_props` in the same process got the first layer's values (one
+  call with mud at 10^-5 mD left the default mud at 10^-5 mD). Layers that
+  never pass `facies_props` are unchanged.
+
 ### Added
 
 - `path_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
