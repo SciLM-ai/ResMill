@@ -609,7 +609,8 @@ def plot_section(model, prop='poro_mat', axis='y', index=None,
     ax.set_ylabel('Depth (m)')
     if title:
         ax.set_title(title)
-    plt.colorbar(pc, ax=ax, label=_continuous_label(model, shown,
-                                                    float(shown.min()),
-                                                    float(shown.max())))
+    label = {'poro_mat': 'porosity', 'perm_mat': 'permeability (mD)', 'facies': 'facies code'}.get(prop)
+    plt.colorbar(pc, ax=ax, label=label or _continuous_label(model, shown,
+                                                             float(shown.min()),
+                                                             float(shown.max())))
     return None

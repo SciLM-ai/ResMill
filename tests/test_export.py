@@ -289,3 +289,16 @@ def test_sliver_cell_is_written_inactive(tmp_path):
 def test_plot_section_refuses_a_fully_eroded_model():
     with pytest.raises(ValueError, match="no active cells"):
         plot_section(make_layer(), erode_above=TOP + NZ * DZ + 1.0)
+
+
+@pytest.mark.parametrize("prop, label", [("facies", "facies code"), ("poro_mat", "porosity"),
+                                         ("perm_mat", "permeability (mD)")])
+def test_plot_section_labels_its_colour_bar_by_the_property(prop, label):
+    """The colour bar names the property shown: facies codes up to 4 are not permeability."""
+    import matplotlib.pyplot as plt
+    layer = make_layer()
+    layer.facies = np.full(layer.poro_mat.shape, 4, dtype=np.int8)
+    fig, ax = plt.subplots()
+    plot_section(layer, prop=prop, ax=ax)
+    assert fig.axes[-1].get_ylabel() == label
+    plt.close(fig)
