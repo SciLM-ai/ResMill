@@ -423,6 +423,13 @@ class fluvial:
         # levee rises at a slope of its own (crest a sixth of LVwidth out) and the
         # channel clears a vertical column, cutting older levees straight down.
         continuous_banks: bool = False,
+        # Metres between a channel path's points. The bend rules count points
+        # (migration looks 30 points upstream, curvature is smoothed over 10), so
+        # with Alluvsim's spacing of one grid cell the same river bends differently
+        # on another grid: meander loops on 10 m cells, nearly straight on 50 m. A
+        # spacing in metres (e.g. a fraction of the channel width) gives the same
+        # channel on any grid. None: one grid cell.
+        path_step: float | None = None,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -576,8 +583,9 @@ class fluvial:
         self._pivot_y = 0.5 * (self.ymin + self.ymax)
 
         # Streamline discretisation step. Match Alluvsim ``streamsim.for:593``:
-        # ``step = (xsiz + ysiz) / 2``. ndis0 multiplier matches AL's *2.
-        self.step = (self.xsiz + self.ysiz) / 2
+        # ``step = (xsiz + ysiz) / 2``, unless ``path_step`` is given. ndis0
+        # multiplier matches AL's *2.
+        self.step = (self.xsiz + self.ysiz) / 2 if path_step is None else float(path_step)
         self.step0 = self.step
         # Every streamline is resampled to ``ndis0`` nodes, so ``ndis0`` sets
         # the node density and with it every per-node rule (cutoff necks,

@@ -248,6 +248,9 @@ class ChannelLayer(Layer):
         # wall's slope and the channel clears the space above it along its walls.
         # False: Alluvsim's rules (a slope break at the bank, vertical cuts).
         continuous_banks: bool = False,
+        # Metres between a channel path's points, so the channel is the same on any
+        # grid (the bend rules count points). None: one grid cell, as in Alluvsim.
+        path_step: float | None = None,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -359,7 +362,7 @@ class ChannelLayer(Layer):
             level_inherit=level_inherit, cutbank_outer=cutbank_outer,
             cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
             thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth, thalweg_lag=thalweg_lag,
-            path_buffer=path_buffer, continuous_banks=continuous_banks,
+            path_buffer=path_buffer, continuous_banks=continuous_banks, path_step=path_step,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

@@ -394,6 +394,29 @@ def test_path_buffer_keeps_both_ends_outside():
         assert x < 0.0 or x > 2000.0 or y < 0.0 or y > 1000.0
 
 
+def test_path_step_gives_the_same_channel_on_any_grid():
+    """Alluvsim spaces a channel path's points one grid cell apart, and its bend rules
+    count points (migration looks 30 upstream, curvature is smoothed over 10), so the same
+    river bends differently on another grid. With ``path_step`` the points are that many
+    metres apart whatever the cells, and one seed gives one channel on 20 m and 40 m cells
+    (without splays, whose walk still takes one step per cell and so draws other numbers)."""
+    eng = {}
+    for cell in (20.0, 40.0):
+        for kw in ({}, {"path_step": 10.0}):
+            layer = ChannelLayer(nx=int(2000.0 / cell), ny=int(1000.0 / cell), nz=10, x_len=2000.0,
+                                 y_len=1000.0, z_len=10.0, top_depth=0.0)
+            layer.create_geology(seed=1, nlevel=1, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                                 NTGtarget=0.99, mCHdepth=5.0, mCHwdratio=15.0, mdistMigrate=15.0,
+                                 mCSnum=0.0, stdevCSnum=0.0, **kw)
+            eng[cell, bool(kw)] = layer._engine
+    assert (eng[20.0, False].step, eng[40.0, False].step) == (20.0, 40.0)
+    assert eng[20.0, False].ndis0 != eng[40.0, False].ndis0
+    assert eng[20.0, True].step == eng[40.0, True].step == 10.0
+    assert eng[20.0, True].ndis0 == eng[40.0, True].ndis0 == 400
+    np.testing.assert_allclose(eng[20.0, True].cx, eng[40.0, True].cx)
+    np.testing.assert_allclose(eng[20.0, True].cy, eng[40.0, True].cy)
+
+
 def _bend_thalweg(radius, **kw):
     """How far the deepest point sits from the channel's centre (fraction of its
     width) along the middle of a 1.5 km right-hand bend of ``radius`` m (None:

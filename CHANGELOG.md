@@ -4,6 +4,18 @@
 
 ### Added
 
+- `path_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): metres between a channel path's points. Alluvsim spaces
+  them one grid cell apart, and its bend rules count points: migration
+  looks 30 points upstream and curvature is smoothed over 10. So the same
+  river bends differently on another grid. A 76 m wide meandering river
+  (seed 1, 1536 events) had loops on 10 m cells (bend radius 2 channel
+  widths, 16 cutoffs), gentle bends on 25 m (3.8, 1) and was nearly
+  straight on 50 m (9, none). With `path_step` the points are that many
+  metres apart on any grid, and one seed gives one channel on every grid
+  (splays still walk one cell per step). The spacing then sets the bend
+  size, so give it as a fraction of the channel width. Default `None`
+  (one grid cell): outputs are bit-identical to before.
 - `continuous_banks=True` (`ChannelLayer`, and `DeltaLayer` through its
   fluvial passthrough): carry each channel's wall up into its levees.
   A levee's top starts at the bank with the wall's own mean slope on that
