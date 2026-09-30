@@ -22,7 +22,10 @@ same convention as ``LobeLayer``/``ChannelLayer``): the structure's long
 axis (fold hinge, fault trace) runs along ``(cos az, -sin az)``.
 """
 
+import heapq
+
 import numpy as np
+from scipy import ndimage
 from scipy.interpolate import RegularGridInterpolator
 
 
@@ -198,3 +201,129 @@ def surface(arr, x_len, y_len):
         return interp(pts)
 
     return Structure(fn)
+
+
+def closure_stats(depth, dx, dy, crest=None):
+    """The trap around ``crest`` on a top-surface depth map (m, positive down, shape ``(nx, ny)``).
+
+    Hydrocarbons fill a structural high down to its spill point: the deepest point of the
+    shallowest path from the crest to the map's edge. A priority flood from the edge gives that
+    depth for every cell (4-connected). Returns ``area`` (m2: the cells shallower than the spill
+    depth connected to the crest), ``height`` (m: spill depth minus crest depth),
+    ``spill_depth``, ``crest`` (i, j; the shallowest cell unless given) and ``mask``.
+    """
+    depth = np.asarray(depth, dtype=float)
+    nx, ny = depth.shape
+    spill = np.full(depth.shape, np.inf)
+    heap = []
+    for i in range(nx):
+        for j in range(ny):
+            if i in (0, nx - 1) or j in (0, ny - 1):
+                spill[i, j] = depth[i, j]
+                heap.append((depth[i, j], i, j))
+    heapq.heapify(heap)
+    while heap:
+        level, i, j = heapq.heappop(heap)
+        for a, b in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
+            if 0 <= a < nx and 0 <= b < ny and spill[a, b] == np.inf:
+                spill[a, b] = max(depth[a, b], level)
+                heapq.heappush(heap, (spill[a, b], a, b))
+    if crest is None:
+        crest = np.unravel_index(int(np.argmin(depth)), depth.shape)
+    crest = (int(crest[0]), int(crest[1]))
+    spill_depth = float(spill[crest])
+    labels, _ = ndimage.label(depth < spill_depth)
+    mask = (labels == labels[crest]) if labels[crest] else np.zeros(depth.shape, dtype=bool)
+    return {"area": float(mask.sum() * dx * dy), "height": spill_depth - float(depth[crest]),
+            "spill_depth": spill_depth, "crest": crest, "mask": mask}
+
+
+def closure(area, height, aspect=1.0, azimuth=0.0, center=None, limb_ratio=1.0, tilt=0.0,
+            satellites=0, warp=0.0, seed=None):
+    """A four-way dip closure over ``area`` (m2) with ``height`` (m) of relief, lobate and asymmetric.
+
+    After Wu et al. (2020, Geophysics 85(4)), culminations plus a planar tilt, with smooth
+    culminations of finite footprint, (1 - rho^2)^2, instead of Gaussians so that a trap without
+    tilt closes where its flanks meet the flat regional level. The main culmination is elliptical,
+    ``aspect`` times longer along the ``azimuth`` axis than across it, its forelimb (the side the
+    azimuth normal points to) ``limb_ratio`` times steeper than its backlimb. ``satellites``
+    smaller culminations drawn from ``seed`` sit along the axis (amplitude 0.3-0.8 and size
+    0.3-0.7 of the main one, 0.6-1.4 of its half-lengths from the crest), merging into it as noses
+    and saddles; ``warp`` displaces the culminations' coordinates by smooth random waves
+    (wavelengths of 1.8-4.2 half-widths) of that RMS amplitude, as a fraction of the half-width, so
+    the outline is lobate. ``tilt`` (0 to below 1) is a regional dip deepening toward the forelimb,
+    as a fraction of the backlimb's steepest slope; the spill point then lies up-dip. The shape is
+    measured once on its own grid (:func:`closure_stats`) and scaled so that its trap closes over
+    ``area`` with ``height`` of relief exactly; the regional tilt continues beyond it. The
+    returned Structure carries ``crest_offset``, the crest's ``(dx, dy)`` (m) from ``center``: with
+    a tilt the map's shallowest point may lie up-dip, not on the crest.
+    """
+    q = float(limb_ratio)
+    w_fore, w_back = 2.0 / (1.0 + q), 2.0 * q / (1.0 + q)
+    rng = np.random.default_rng(seed)
+    sats = [(float(rng.choice((-1.0, 1.0)) * rng.uniform(0.6, 1.4) * aspect), float(rng.normal(0.0, 0.3)),
+             float(rng.uniform(0.3, 0.8)), float(rng.uniform(0.3, 0.7))) for _ in range(int(satellites))]
+    waves = [(rng.uniform(1.5, 3.5, 6), rng.uniform(0.0, 2.0 * np.pi, 6), rng.uniform(0.0, 2.0 * np.pi, 6))
+             for _ in range(2)] if warp else []
+    slope = float(tilt) * 8.0 / (3.0 * np.sqrt(3.0)) / w_back       # the bump's steepest slope, 8/(3 sqrt 3) / w
+
+    def bump(rho2):
+        return np.where(rho2 < 1.0, (1.0 - np.minimum(rho2, 1.0)) ** 2, 0.0)
+
+    def uplift(u, v):
+        tilted = -slope * v
+        if waves:
+            du, dv = (np.sqrt(2.0 / 6.0) * sum(np.cos(k * (np.cos(a) * u / aspect + np.sin(a) * v) + ph)
+                                            for k, a, ph in zip(*wave)) for wave in waves)
+            u, v = u + warp * aspect * du, v + warp * dv
+        w = np.where(v > 0.0, w_fore, w_back)
+        out = bump((u / aspect) ** 2 + (v / w) ** 2) + tilted
+        for u0, v0, a0, s0 in sats:
+            out = out + a0 * bump(((u - u0) / (s0 * aspect)) ** 2 + ((v - v0) / s0) ** 2)
+        return out
+
+    uu = np.linspace(-3.5 * aspect, 3.5 * aspect, 401)
+    vv = np.linspace(-3.5, 3.5, 401)
+    U, V = np.meshgrid(uu, vv, indexing="ij")
+    unit = -uplift(U, V)
+    core = np.where(bump((U / aspect) ** 2 + (V / w_back) ** 2) > 0.5, unit, np.inf)
+    stats = closure_stats(unit, uu[1] - uu[0], vv[1] - vv[0],
+                          crest=np.unravel_index(int(np.argmin(core)), core.shape))
+    length, amplitude = np.sqrt(float(area) / stats["area"]), float(height) / stats["height"]
+    nx_, ny_ = _axes(azimuth)
+    az = np.radians(azimuth)
+    sx_, sy_ = np.cos(az), -np.sin(az)
+    uc, vc = uu[stats["crest"][0]] * length, vv[stats["crest"][1]] * length
+
+    def fn(x, y):
+        cx, cy = center if center is not None else (_mid(x), _mid(y))
+        dx = np.asarray(x, dtype=float) - cx
+        dy = np.asarray(y, dtype=float) - cy
+        return -amplitude * uplift((dx * sx_ + dy * sy_) / length, (dx * nx_ + dy * ny_) / length)
+
+    out = Structure(fn)
+    out.crest_offset = (uc * sx_ + vc * nx_, uc * sy_ + vc * ny_)
+    return out
+
+
+def roughness(sd, range_m, x_len, y_len, seed=None):
+    """A smooth random surface (m) with standard deviation ``sd`` over ``[0, x_len] x [0, y_len]``.
+
+    Gaussian covariance exp(-3 (r / range_m)^2), the horizon residual of stochastic depth
+    conversion (Abrahamsen 1993; COHIBA; IGEMS: SD 5-13 m, ranges 1.4-7 km). It is generated once
+    by FFT on a grid of about range/8 spacing, padded by one range against wrap-around, and
+    interpolated (:func:`surface`), so it is one surface wherever it is evaluated.
+    """
+    rng = np.random.default_rng(seed)
+    step = float(range_m) / 8.0
+    nxs, nys = int(np.ceil(x_len / step)) + 1, int(np.ceil(y_len / step)) + 1
+    sx, sy = x_len / (nxs - 1), y_len / (nys - 1)
+    px, py = int(np.ceil(range_m / sx)), int(np.ceil(range_m / sy))
+    shape = (nxs + 2 * px, nys + 2 * py)
+    kx = 2.0 * np.pi * np.fft.fftfreq(shape[0], sx)
+    ky = 2.0 * np.pi * np.fft.fftfreq(shape[1], sy)
+    k2 = kx[:, None] ** 2 + ky[None, :] ** 2
+    field = np.real(np.fft.ifft2(np.fft.fft2(rng.standard_normal(shape))
+                                 * np.exp(-k2 * float(range_m) ** 2 / 24.0)))[px:px + nxs, py:py + nys]
+    return surface(float(sd) * (field - field.mean()) / field.std(), x_len, y_len)
+

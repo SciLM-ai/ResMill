@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import ndimage
 import pytest
 
 from resmill import structure as st
@@ -97,3 +98,91 @@ def test_lazy_center_defaults_to_grid_middle():
     vals = f(X, Y)
     assert vals.min() == pytest.approx(-60)
     assert np.argmin(vals[0]) == 8        # crest at the middle y row
+
+
+def _depth_map(fld, half=9000.0, n=361):
+    """Depth shift of ``fld`` on a regular map grid centred on the origin: (x, y, depth, spacing)."""
+    x = np.linspace(-half, half, n)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    return X, Y, fld(X, Y), x[1] - x[0]
+
+
+def test_closure_stats_measures_a_paraboloid_dome():
+    """A paraboloid of radius R and relief H on a flat surround closes over pi R^2 with height H."""
+    x = np.linspace(-3000.0, 3000.0, 301)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    r = np.hypot(X, Y)
+    depth = 2000.0 - np.where(r < 2000.0, 80.0 * (1.0 - (r / 2000.0) ** 2), 0.0)
+    stats = st.closure_stats(depth, x[1] - x[0], x[1] - x[0])
+    assert stats["area"] == pytest.approx(np.pi * 2000.0 ** 2, rel=0.02)
+    assert stats["height"] == pytest.approx(80.0, rel=0.01)
+    assert stats["spill_depth"] == pytest.approx(2000.0)
+    assert stats["mask"][150, 150] and not stats["mask"][0, 0]
+
+
+@pytest.mark.parametrize("kw", [dict(), dict(aspect=3.0, azimuth=30.0), dict(limb_ratio=2.5, tilt=0.4),
+                                dict(aspect=2.0, satellites=2, seed=4, tilt=0.2)])
+def test_closure_has_the_requested_area_and_height(kw):
+    """``closure`` scales its shape so the trap it makes closes over ``area`` with relief ``height``,
+    whatever its aspect, asymmetry, tilt and satellite culminations."""
+    fld = st.closure(area=8e6, height=120.0, center=(0.0, 0.0), **kw)
+    X, Y, depth, d = _depth_map(fld)
+    crest = np.unravel_index(np.argmin(np.hypot(X - fld.crest_offset[0], Y - fld.crest_offset[1])), X.shape)
+    stats = st.closure_stats(depth, d, d, crest=crest)
+    assert depth[crest] == pytest.approx(depth[np.hypot(X, Y) < 1500.0].min(), abs=0.5)   # it is the crest
+    assert stats["area"] == pytest.approx(8e6, rel=0.03)
+    assert stats["height"] == pytest.approx(120.0, rel=0.02)
+
+
+def test_closure_limbs_follow_the_limb_ratio():
+    """The forelimb (the side the azimuth normal points to) is ``limb_ratio`` times steeper than the backlimb."""
+    fld = st.closure(area=8e6, height=120.0, center=(0.0, 0.0), limb_ratio=2.5)
+    t = np.linspace(0.0, 3000.0, 601)
+    fore, back = fld(0.0 * t, t), fld(0.0 * t, -t)             # azimuth 0: the dip direction is +y
+    slope = lambda prof: np.abs(np.diff(prof)).max()
+    assert slope(fore) / slope(back) == pytest.approx(2.5, rel=0.1)
+
+
+def test_closure_is_reproducible_and_lifts_its_crest():
+    a = st.closure(area=4e6, height=60.0, satellites=2, seed=7, center=(0.0, 0.0))
+    b = st.closure(area=4e6, height=60.0, satellites=2, seed=7, center=(0.0, 0.0))
+    X, Y, depth, _ = _depth_map(a)
+    assert np.array_equal(depth, b(X, Y))
+    assert depth.min() < 0.0                                     # the crest is lifted (positive down)
+
+
+def test_roughness_has_its_sd_and_range_and_is_a_function_of_position():
+    """``roughness`` is a Gaussian-covariance random surface, exp(-3 (r/R)^2): its SD is ``sd``, and
+    at lag R the correlation has fallen to about 5 %. It is fixed by its seed and its footprint, so
+    evaluating it at corners and at nodes gives one surface."""
+    rough = st.roughness(sd=9.0, range_m=1500.0, x_len=30000.0, y_len=30000.0, seed=3)
+    x = np.arange(0.0, 30000.0, 100.0)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    z = rough(X, Y)
+    assert np.std(z) == pytest.approx(9.0, rel=0.15)
+    lag = 15                                                     # 1,500 m
+    corr = np.corrcoef(z[:-lag].ravel(), z[lag:].ravel())[0, 1]
+    assert corr < 0.15
+    corr_short = np.corrcoef(z[:-2].ravel(), z[2:].ravel())[0, 1]   # 200 m: exp(-3 (200/1500)^2) = 0.95
+    assert corr_short == pytest.approx(0.95, abs=0.04)
+    again = st.roughness(sd=9.0, range_m=1500.0, x_len=30000.0, y_len=30000.0, seed=3)
+    assert np.array_equal(again(X, Y), z)
+    assert rough(np.array([1234.5]), np.array([678.9]))[0] == pytest.approx(
+        again(np.array([[1234.5]]), np.array([[678.9]]))[0, 0])
+
+
+def test_closure_warp_makes_the_outline_lobate():
+    """``warp`` distorts the culmination's coordinates with smooth random waves, so the trap's outline
+    departs from an ellipse (a longer perimeter for its area) while its area and relief stay as asked."""
+    def outline_ratio(fld):
+        X, Y, depth, d = _depth_map(fld)
+        crest = np.unravel_index(np.argmin(np.hypot(X - fld.crest_offset[0], Y - fld.crest_offset[1])), X.shape)
+        stats = st.closure_stats(depth, d, d, crest=crest)
+        mask = stats["mask"]
+        edge = mask & ~ndimage.binary_erosion(mask)
+        return edge.sum() * d / np.sqrt(4.0 * np.pi * stats["area"]), stats
+    plain, _ = outline_ratio(st.closure(area=8e6, height=120.0, aspect=1.5, center=(0.0, 0.0)))
+    lobate, stats = outline_ratio(st.closure(area=8e6, height=120.0, aspect=1.5, warp=0.4, seed=2,
+                                             center=(0.0, 0.0)))
+    assert lobate > 1.1 * plain
+    assert stats["area"] == pytest.approx(8e6, rel=0.03) and stats["height"] == pytest.approx(120.0, rel=0.02)
