@@ -327,3 +327,28 @@ def roughness(sd, range_m, x_len, y_len, seed=None):
                                  * np.exp(-k2 * float(range_m) ** 2 / 24.0)))[px:px + nxs, py:py + nys]
     return surface(float(sd) * (field - field.mean()) / field.std(), x_len, y_len)
 
+
+def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):
+    """A zone-thickness factor field with mean 1 over ``[0, x_len] x [0, y_len]``: 1 + a l + e.
+
+    ``l`` is a unit-SD planar ramp over the footprint, thickening along ``azimuth``
+    (the package convention: its normal points that way), with a = cv sqrt(trend_share);
+    ``e`` is correlated noise (:func:`roughness`, Gaussian covariance of range ``range_m``)
+    of SD cv sqrt(1 - trend_share). So its coefficient of variation is ``cv``, of which the
+    planar trend explains ``trend_share`` (Norne and Volve isochores: CV 0.10-0.55, trend
+    0.05-0.95). Pass it to ``to_grdecl(isochore=[...])``; values below 0 pinch the zone out.
+    """
+    share = float(trend_share)
+    nx_, ny_ = _axes(azimuth)
+    corners = np.array([[0.0, 0.0], [x_len, 0.0], [0.0, y_len], [x_len, y_len]])
+    t = corners @ np.array([nx_, ny_])
+    t_mid, t_sd = 0.5 * (t.min() + t.max()), (t.max() - t.min()) / np.sqrt(12.0)
+    noise = roughness(float(cv) * np.sqrt(max(1.0 - share, 0.0)), range_m, x_len, y_len, seed=seed)
+    a = float(cv) * np.sqrt(share)
+
+    def fn(x, y):
+        ramp = ((np.asarray(x, dtype=float) * nx_ + np.asarray(y, dtype=float) * ny_) - t_mid) / t_sd
+        return 1.0 + a * ramp + noise(x, y)
+
+    return Structure(fn)
+

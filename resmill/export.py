@@ -59,12 +59,16 @@ def _corner_axis(n, d):
 
 
 def _build_geometry(layers, structure=None, top=None, base=None,
-                    erode_above=None, erode_below=None):
+                    erode_above=None, erode_below=None, isochore=None, onlap=False):
     """Assemble deformed interface depths on the doubled corner grid.
 
     Returns ``(Xc, Yc, Zc, actnum)``: corner coordinates ``(2nx, 2ny)``,
     interface depths ``(2nx, 2ny, nz+1)`` ordered top-down, and the
     ``(nx, ny, nz)`` activity mask in the same top-down k order.
+    ``isochore`` (one thickness-factor field per layer, None to keep one)
+    scales each layer's cells and carries every contact below with it;
+    ``onlap`` lets an older (deeper) interface win where layers collide,
+    so younger layers end against it, instead of the default incision.
     """
     L0 = layers[0]
     nx, ny = L0.nx, L0.ny
@@ -90,6 +94,19 @@ def _build_geometry(layers, structure=None, top=None, base=None,
         Fn = _dbl(_dbl(fld(Xn, Yn), 0), 1)
         return np.where(np.abs(Fc - Fn) < _SNAP_TOL, Fn, Fc)
 
+    # 0. Isochores: each layer's spacing scaled by its thickness factor
+    # (clipped at 0, a pinch-out), every contact below carried with it.
+    if isochore is not None:
+        if len(isochore) != len(layers):
+            raise ValueError(f"isochore list needs one entry per layer ({len(layers)}), got {len(isochore)}")
+        steps, m = np.diff(Zc, axis=2), 0
+        for L, f in zip(layers, isochore):
+            fac = ev(f)
+            if fac is not None:
+                steps[:, :, m:m + L.nz] *= np.maximum(fac, 0.0)[:, :, None]
+            m += L.nz
+        Zc = Zc[:, :, :1] + np.concatenate([np.zeros_like(Zc[:, :, :1]), np.cumsum(steps, axis=2)], axis=2)
+
     # 1. Conform to absolute surfaces, in the stratigraphic frame: both
     # given squeezes proportionally; one given drapes with thickness kept.
     T, B = ev(top), ev(base)
@@ -113,21 +130,31 @@ def _build_geometry(layers, structure=None, top=None, base=None,
                     f"structure list needs one entry per layer "
                     f"({len(layers)}), got {len(structure)}")
             shifts = [ev(s) for s in structure]
-            s0 = shifts[0]
-            if s0 is not None:
-                Zc[:, :, 0] += s0
-            m = 1
+            # A shared contact carries the shift of the layer above it (the
+            # younger base, which incises), or with onlap of the layer below
+            # it (the older top, which the younger layers end against).
+            lo = 0 if onlap else 1
+            if not onlap and shifts[0] is not None:
+                Zc[:, :, 0] += shifts[0]
+            m = 0
             for L, s in zip(layers, shifts):
                 if s is not None:
-                    Zc[:, :, m:m + L.nz] += s[:, :, None]
+                    Zc[:, :, m + lo:m + lo + L.nz] += s[:, :, None]
                 m += L.nz
+            if onlap and shifts[-1] is not None:
+                Zc[:, :, m] += shifts[-1]
         else:
             Zc = Zc + ev(structure)[:, :, None]
 
     # 3. Stitch: younger truncates older. A no-op for a shared shift;
     # with per-layer shifts it clamps older interfaces down to any
     # younger base that cuts them (angular unconformities, incision).
-    Zc = np.maximum.accumulate(Zc, axis=2)
+    # With onlap the older interface wins: younger interfaces are lifted
+    # to it, so their cells end against the older surface.
+    if onlap:
+        Zc = np.minimum.accumulate(Zc[:, :, ::-1], axis=2)[:, :, ::-1]
+    else:
+        Zc = np.maximum.accumulate(Zc, axis=2)
 
     # 4. Erosion clips (present-day surfaces), applied last.
     E = ev(erode_above)
@@ -210,7 +237,7 @@ def _write_rle(f, keyword, values, per_line=12):
 
 
 def to_grdecl(model, path, structure=None, top=None, base=None,
-              erode_above=None, erode_below=None, facies=False,
+              erode_above=None, erode_below=None, facies=False, isochore=None, onlap=False,
               poro_floor=None, perm_floor=None,
               fmt_z="%.2f", fmt_prop="%.6g"):
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
@@ -240,6 +267,14 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     erode_above, erode_below : Structure-like, optional
         Absolute erosion surfaces applied last; cells entirely outside
         them collapse to zero thickness and get ACTNUM = 0.
+    isochore : list of Structure-like, optional
+        One thickness factor per layer (None keeps a layer as built):
+        its cells thicken or thin by the factor (clipped at 0, a
+        pinch-out) and every contact below moves with its base.
+    onlap : bool
+        Where per-layer structures make layers collide, the older (deeper)
+        surface wins and the younger layers end against it (onlap onto a
+        growing high), instead of the younger base cutting the older layers.
     facies : bool
         Also write the layers' facies codes as a FACIES keyword
         (non-standard; Petrel imports it as a generic property).
@@ -256,7 +291,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     nz = sum(L.nz for L in layers)
 
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap)
 
     fac = _stack_prop(layers, "facies").astype(int) if facies else None
     poro = _stack_prop(layers, "poro_mat").astype(float)
@@ -306,7 +341,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
 
 
 def to_pyvista(model, structure=None, top=None, base=None,
-               erode_above=None, erode_below=None):
+               erode_above=None, erode_below=None, isochore=None, onlap=False):
     """Build a ``pyvista.ExplicitStructuredGrid`` of the deformed model.
 
     Cell data carries PORO, PERMX (and PERMY where the layers' kx/ky makes it
@@ -323,7 +358,7 @@ def to_pyvista(model, structure=None, top=None, base=None,
     layers = list(getattr(model, "layers", [model]))
     nx, ny = layers[0].nx, layers[0].ny
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap)
 
     # pyvista wants the corners as a global F-order ravel of the doubled
     # corner arrays (the same layout as ZCORN). The grid's k axis points

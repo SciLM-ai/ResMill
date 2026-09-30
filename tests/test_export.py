@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pytest
 
 from resmill import structure as st
-from resmill.export import to_grdecl
+from resmill.export import _build_geometry, to_grdecl
 from resmill.layers.base import Layer
 from resmill.layers.gaussian import GaussianLayer
 from resmill.plotting import plot_section
@@ -302,3 +302,58 @@ def test_plot_section_labels_its_colour_bar_by_the_property(prop, label):
     plot_section(layer, prop=prop, ax=ax)
     assert fig.axes[-1].get_ylabel() == label
     plt.close(fig)
+
+
+def _stack_of_two():
+    """A thin top layer on a thicker bottom layer, same footprint (the Reservoir lists top first)."""
+    from resmill.reservoir import Reservoir
+    upper = make_layer(nz=4, top=TOP)
+    lower = make_layer(nz=4, top=TOP + 4 * DZ)
+    return Reservoir([upper, lower])
+
+
+def test_isochore_scales_each_layers_spacing_and_carries_the_contacts_down():
+    """``isochore`` gives each layer a thickness factor field: its cells thicken or thin by it, and every
+    layer below moves with its base, so contacts stay closed. ``None`` entries leave a layer as it was."""
+    model = _stack_of_two()
+    _, _, z0, _ = _build_geometry(model.layers)
+    half = lambda x, y: np.where(np.asarray(x) < 30.0, 2.0, 1.0)          # twice as thick on the west half
+    _, _, z1, _ = _build_geometry(model.layers, isochore=[half, None])
+    thick0, thick1 = np.diff(z0, axis=2), np.diff(z1, axis=2)
+    west = (slice(0, 2 * 3), slice(None))                                   # doubled-corner columns with x < 30 m
+    assert np.allclose(thick1[west][..., :4], 2.0 * thick0[west][..., :4])  # the upper layer doubles there
+    assert np.allclose(thick1[..., 4:], thick0[..., 4:])                    # the lower layer keeps its cells
+    assert np.allclose(z1[west][..., 4], z0[west][..., 4] + 4 * DZ)        # ... and moves down with the contact
+    _, _, zd, _ = _build_geometry(model.layers, isochore=[None, None])
+    assert np.array_equal(zd, z0)
+
+
+def test_onlap_lets_the_older_surface_win_where_layers_collide():
+    """Today a younger layer's base cuts into an older layer where they collide (incision). With ``onlap``
+    the older, more folded surface wins instead: the younger layer's lower cells end against it and
+    collapse over the crest, and the older layer stays whole."""
+    model = _stack_of_two()
+    young = st.dome(amplitude=4.0, radius=15.0, center=(30.0, 25.0))           # the younger layer folds less
+    old = st.dome(amplitude=12.0, radius=15.0, center=(30.0, 25.0))            # than the older one
+    _, _, z_inc, a_inc = _build_geometry(model.layers, structure=[young, old])
+    _, _, z_on, a_on = _build_geometry(model.layers, structure=[young, old], onlap=True)
+    crest = (2, 2)                                                             # the cell over the crest
+    assert a_on[crest][:4].sum() < 4 and a_on[crest][4:].all()                 # onlap: the young layer thins, old whole
+    assert a_inc[crest][:4].all() and a_inc[crest][4:].sum() < 4               # today: the old layer is cut instead
+    assert np.all(np.diff(z_on, axis=2) >= -1e-9)                              # depths still increase downward
+
+
+def test_structure_isochore_is_a_unit_mean_factor_with_its_cv_and_trend_share():
+    """``isochore`` = 1 + a l + e: a unit-SD planar ramp l along ``azimuth`` with a = cv sqrt(share) and
+    correlated noise e of SD cv sqrt(1 - share) (S6); fixed by its seed."""
+    f = st.isochore(cv=0.3, trend_share=0.6, range_m=1500.0, x_len=20000.0, y_len=20000.0, azimuth=0.0, seed=4)
+    x = np.arange(0.0, 20000.0, 100.0)
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    v = f(X, Y)
+    assert v.mean() == pytest.approx(1.0, abs=0.03) and v.std() == pytest.approx(0.3, rel=0.15)
+    design = np.column_stack([np.ones(v.size), X.ravel(), Y.ravel()])
+    fit = np.linalg.lstsq(design, v.ravel(), rcond=None)[0]
+    share = 1.0 - np.var(v.ravel() - design @ fit) / np.var(v)
+    assert share == pytest.approx(0.6, abs=0.12)
+    assert np.array_equal(st.isochore(cv=0.3, trend_share=0.6, range_m=1500.0, x_len=20000.0, y_len=20000.0,
+                                      azimuth=0.0, seed=4)(X, Y), v)
