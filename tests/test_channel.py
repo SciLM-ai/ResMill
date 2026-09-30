@@ -696,3 +696,107 @@ def test_kvkh_is_off_by_default():
     layer.create_geology(seed=3, nlevel=2, ntime=10, probAvulOutside=0.0, probAvulInside=0.0,
                          mCHdepth=3.0, mCHwdratio=10.0, NTGtarget=0.9)
     assert layer.kvkh_mat is None
+
+
+def _levee_layer(**kw):
+    props = {-1: {"poro": 0.12, "log10_perm": -4.0},
+             2: {"poro": 0.15 * 0.27 + 0.85 * 0.12, "log10_perm": float(np.log10(0.15 * 100.0 + 0.85 * 1e-4)),
+                 "ntg": 0.15, "bed_poro": 0.27, "bed_log10_perm": 2.0}}
+    layer = ChannelLayer(nx=80, ny=60, nz=12, x_len=2400.0, y_len=1800.0, z_len=12.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=15.0, NTGtarget=0.9, mLVwidth=600.0, facies_props=props, **kw)
+    from scipy.ndimage import distance_transform_edt
+    fac = np.asarray(layer.facies)
+    belt = ((fac == 3) | (fac == 4)).any(axis=2)
+    d = np.broadcast_to(distance_transform_edt(~belt, sampling=(layer.dx, layer.dy))[:, :, None], fac.shape)
+    return layer, fac, d, props
+
+
+def test_levee_sand_fraction_fades_away_from_the_channels():
+    """With ``levee_ntg_decay_m``, a levee cell's sub-cell sand fraction (``facies_props[2]`` "ntg",
+    its sand beds "bed_poro" / "bed_log10_perm", and the FF mud) falls exponentially with plan
+    distance from the channel belt, scaled so the levee average stays "ntg"; the cell's porosity and
+    permeability are the arithmetic mix of beds and mud. The facies stay LV."""
+    layer, fac, d, props = _levee_layer(levee_ntg_decay_m=150.0)
+    poro, log_k = np.asarray(layer.poro_mat), np.log10(np.asarray(layer.perm_mat))
+    lv = fac == 2
+    near, far = lv & (d < 60.0), lv & (d > 300.0)
+    assert near.sum() > 20 and far.sum() > 20
+    assert poro[near].mean() > poro[far].mean() + 0.03
+    assert log_k[near].mean() > log_k[far].mean() + 0.5
+    assert poro[lv].mean() == pytest.approx(props[2]["poro"], abs=0.01)     # the approved average stays
+    assert poro[lv].min() >= 0.12 * 0.9 and poro[lv].max() <= 0.27 * 1.1  # between mud and sand beds
+
+
+def test_levee_fading_is_off_by_default():
+    """Without ``levee_ntg_decay_m`` every levee cell keeps the facies value (times its flow
+    event's multiplier), whatever the distance."""
+    layer, fac, d, props = _levee_layer()
+    poro = np.asarray(layer.poro_mat)
+    pm = np.asarray(layer._engine.poro_mult_field)
+    lv = fac == 2
+    assert np.allclose(poro[lv] / pm[lv], props[2]["poro"], rtol=1e-4)
+
+
+def test_levee_crest_sand_fraction_is_a_setting():
+    """``facies_props[2]`` may give the sand fraction at the channel (``ntg_crest``) and a floor
+    (``ntg_floor``) instead of an average: the fraction is then ntg_crest x exp(-d / decay), never
+    below the floor, with no rescaling."""
+    props = {-1: {"poro": 0.12, "log10_perm": -4.0},
+             2: {"poro": 0.2, "log10_perm": 1.0, "ntg_crest": 0.55, "ntg_floor": 0.05,
+                 "bed_poro": 0.27, "bed_log10_perm": 2.0}}
+    layer = ChannelLayer(nx=80, ny=60, nz=12, x_len=2400.0, y_len=1800.0, z_len=12.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=15.0, NTGtarget=0.9, mLVwidth=600.0,
+                         facies_props=props, levee_ntg_decay_m=150.0)
+    from scipy.ndimage import distance_transform_edt
+    fac = np.asarray(layer.facies)
+    belt = ((fac == 3) | (fac == 4)).any(axis=2)
+    d = np.broadcast_to(distance_transform_edt(~belt, sampling=(layer.dx, layer.dy))[:, :, None], fac.shape)
+    poro, pm = np.asarray(layer.poro_mat), np.asarray(layer._engine.poro_mult_field)
+    lv = fac == 2
+    ntg = np.clip(0.55 * np.exp(-d[lv] / 150.0), 0.05, 1.0)
+    assert np.allclose(poro[lv] / pm[lv], ntg * 0.27 + (1 - ntg) * 0.12, rtol=1e-4)
+
+
+def test_calibrated_mode_keeps_a_faded_levees_own_average():
+    """In the calibrated mode (``perm_poro_slope``) a faded levee's average porosity is the average
+    of its own mix, not the facies value, so the crest setting is not scaled back."""
+    props = {-1: {"poro": 0.12, "log10_perm": -4.0},
+             2: {"poro": 0.15, "log10_perm": 1.0, "ntg_crest": 0.55, "ntg_floor": 0.05,
+                 "bed_poro": 0.27, "bed_log10_perm": 2.0}}
+    layer = ChannelLayer(nx=80, ny=60, nz=12, x_len=2400.0, y_len=1800.0, z_len=12.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=20, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=15.0, NTGtarget=0.9, mLVwidth=600.0, perm_poro_slope=0.05,
+                         facies_props=props, levee_ntg_decay_m=150.0)
+    fac, poro = np.asarray(layer.facies), np.asarray(layer.poro_mat)
+    assert poro[fac == 2].mean() > 0.16          # the crest mix, not the facies value 0.15
+
+
+def test_levee_distance_is_measured_from_the_levees_own_storey():
+    """A levee cell's distance is measured from the channel fill of its own storey (the level of the flow
+    event that built it), not from channels of other storeys above or below it."""
+    props = {-1: {"poro": 0.12, "log10_perm": -4.0},
+             2: {"poro": 0.2, "log10_perm": 1.0, "ntg_crest": 0.55, "ntg_floor": 0.05,
+                 "bed_poro": 0.27, "bed_log10_perm": 2.0}}
+    layer = ChannelLayer(nx=80, ny=60, nz=24, x_len=2400.0, y_len=1800.0, z_len=24.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=4, ntime=8, ntime_per_level=True, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=15.0, NTGtarget=0.9, mLVwidth=600.0,
+                         facies_props=props, levee_ntg_decay_m=150.0)
+    from scipy.ndimage import distance_transform_edt
+    fac, eng = np.asarray(layer.facies), layer._engine
+    pm, po = np.asarray(eng.poro_mult_field), np.asarray(eng.log_perm_offset_field)
+    level = np.full(fac.shape, -1)
+    known = (fac >= 1)
+    idx = np.nonzero(known)
+    level[idx] = [eng.event_levels.get((a, b), -1) for a, b in zip(pm[idx], po[idx])]
+    fill, lv = (fac == 3) | (fac == 4), fac == 2
+    d = np.zeros(fac.shape)
+    for lev in np.unique(level[lv]):
+        belt = (fill & (level == lev)).any(axis=2)
+        plan = distance_transform_edt(~belt, sampling=(layer.dx, layer.dy)) if belt.any() else np.full(belt.shape, 1e9)
+        own = lv & (level == lev)
+        d[own] = np.broadcast_to(plan[:, :, None], fac.shape)[own]
+    poro = np.asarray(layer.poro_mat)
+    ntg = np.clip(0.55 * np.exp(-d[lv] / 150.0), 0.05, 1.0)
+    assert np.allclose(poro[lv] / pm[lv], ntg * 0.27 + (1 - ntg) * 0.12, rtol=1e-4)

@@ -100,7 +100,8 @@ class ChannelLayer(Layer):
                                fining_probability: float = 1.0,
                                noise_range_m: tuple | None = None,
                                fining_top_kvkh: float | None = None,
-                               event_group: dict | None = None):
+                               event_group: dict | None = None,
+                               levee_ntg_decay_m: float | None = None):
         """Build ``self.facies / active / poro_mat / perm_mat`` from engine outputs.
 
         Inputs:
@@ -169,6 +170,16 @@ class ChannelLayer(Layer):
           ``fining_top_kvkh`` lowers it log-linearly inside the fining part of
           the fills that fine upward, to this value at their top (thin shales).
           Neither given: no ``kvkh_mat`` and PERMZ stays ``kzkx`` x PERMX.
+        * ``levee_ntg_decay_m`` — levee fading: when ``facies_props[2]`` gives
+          the levee's sub-cell sand fraction ``ntg`` and its sand beds
+          ``bed_poro`` / ``bed_log10_perm``, each levee cell's fraction falls
+          as exp(-d / this) with its plan distance d (m) from the channel belt
+          of its own storey (every column holding CH or LA of the same level,
+          from ``event_group``; all channels without it), scaled so the levee average stays
+          ``ntg``; or, with ``ntg_crest`` (and ``ntg_floor``) instead of
+          ``ntg``, it is ntg_crest x exp(-d / this), never below the floor. Its
+          porosity and permeability are the arithmetic mix of the beds and the
+          FF mud. The facies stay LV. None: off.
 
         Combined formula per cell::
 
@@ -223,6 +234,38 @@ class ChannelLayer(Layer):
                 base_log_perm[mask] = vals["log10_perm"]
                 poro_sd[mask] = vals.get("poro_sd", 0.0)
                 log_perm_sd[mask] = vals.get("log10_perm_sd", 0.0)
+
+        # Opt-in levee fading: sandier levee cells near the channel belt, muddier away from it.
+        levee = props.get(2, {})
+        faded_levee = False
+        if levee_ntg_decay_m is not None and ("ntg" in levee or "ntg_crest" in levee) and (self.facies == 2).any():
+            from scipy.ndimage import distance_transform_edt
+            lv = self.facies == 2
+            fill = (self.facies == 3) | (self.facies == 4)
+            # Each levee cell is measured from the channels of its own storey (the level of the flow
+            # event that built it, from ``event_group``), not from channels above or below it.
+            storey = np.full(self.facies.shape, -1, dtype=np.int64)
+            if event_group:
+                idx = np.nonzero(lv | fill)
+                storey[idx] = [event_group.get((a, b), -1)
+                               for a, b in zip(poro_mult_field[idx], log_perm_offset_field[idx])]
+            dist = np.zeros(self.facies.shape)
+            for level in np.unique(storey[lv]):
+                belt = (fill & ((storey == level) if level >= 0 else True)).any(axis=2)
+                plan = (distance_transform_edt(~belt, sampling=(self.dx, self.dy)) if belt.any()
+                        else np.zeros(belt.shape))
+                own = lv & (storey == level)
+                dist[own] = np.broadcast_to(plan[:, :, None], self.facies.shape)[own]
+            fade = np.exp(-dist[lv] / float(levee_ntg_decay_m))
+            if "ntg_crest" in levee:   # the fraction at the channel, down to a floor
+                ntg = np.clip(float(levee["ntg_crest"]) * fade, float(levee.get("ntg_floor", 0.0)), 1.0)
+            else:                      # the fraction's average kept
+                ntg = np.clip(float(levee["ntg"]) * fade / fade.mean(), 0.0, 1.0)
+            mud = props[-1]
+            base_poro[lv] = ntg * float(levee["bed_poro"]) + (1.0 - ntg) * float(mud["poro"])
+            base_log_perm[lv] = np.log10(ntg * 10.0 ** float(levee["bed_log10_perm"])
+                                         + (1.0 - ntg) * 10.0 ** float(mud["log10_perm"]))
+            faded_levee = True
 
         # Per-event Walker-1992 upward-fining ramp.
         if fining_perm_decades is not None:
@@ -306,7 +349,9 @@ class ChannelLayer(Layer):
             sand_mask = self.facies >= 1
             for code in np.unique(self.facies):
                 mask = self.facies == code
-                target = float(base_poro[mask][0]) * (float(poro_realization_mult) if code >= 1 else 1.0)
+                value = (base_poro[mask].mean() if code == 2 and faded_levee   # a faded levee keeps its own mean
+                         else np.float32(props[int(code)]["poro"]))
+                target = float(value) * (float(poro_realization_mult) if code >= 1 else 1.0)
                 mean = float(poro_mat[mask].mean())
                 if mean > 0.0:
                     poro_mat[mask] = poro_mat[mask] * (target / mean)
@@ -479,6 +524,8 @@ class ChannelLayer(Layer):
         noise_range_m: tuple | None = None,
         # kv/kh at the top of the fills that fine upward (facies values: facies_props "kvkh")
         fining_top_kvkh: float | None = None,
+        # Levee fading: decay length (m) of the levee cells' sand fraction away from the channel belt
+        levee_ntg_decay_m: float | None = None,
         seed: int | None = None,
     ):
         """Generate channel geology with Alluvsim-faithful semantics.
@@ -563,6 +610,7 @@ class ChannelLayer(Layer):
             noise_range_m=noise_range_m,
             fining_top_kvkh=fining_top_kvkh,
             event_group=engine.event_levels,
+            levee_ntg_decay_m=levee_ntg_decay_m,
         )
         # Stash for downstream tooling (parquet writers can record the
         # engine-level multiplier std values, generate.py uses these to
