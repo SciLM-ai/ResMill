@@ -537,7 +537,7 @@ def plot_reservoir(reservoir, prop='poro_mat', **kwargs):
 
 def plot_section(model, prop='poro_mat', axis='y', index=None,
                  structure=None, top=None, base=None,
-                 erode_above=None, erode_below=None, isochore=None, onlap=False,
+                 erode_above=None, erode_below=None, isochore=None, onlap=False, faults=None,
                  cmap=None, vmin=None, vmax=None, ax=None, title=None):
     """True-depth vertical cross-section of a (possibly deformed) model.
 
@@ -554,14 +554,14 @@ def plot_section(model, prop='poro_mat', axis='y', index=None,
     axis : 'y' | 'x'
         ``'y'``: an XZ section at cell row ``index`` (default the middle
         row); ``'x'``: a YZ section at cell column ``index``.
-    structure, top, base, erode_above, erode_below, isochore, onlap :
+    structure, top, base, erode_above, erode_below, isochore, onlap, faults :
         Same shaping arguments as :func:`resmill.export.to_grdecl`.
     """
     from .export import _build_geometry, _stack_prop
 
     layers = list(getattr(model, 'layers', [model]))
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults)
     vals = _stack_prop(layers, prop).astype(float)
     nz = vals.shape[2]
 

@@ -59,7 +59,8 @@ def _corner_axis(n, d):
 
 
 def _build_geometry(layers, structure=None, top=None, base=None,
-                    erode_above=None, erode_below=None, isochore=None, onlap=False):
+                    erode_above=None, erode_below=None, isochore=None, onlap=False,
+                    faults=None, _faces=None):
     """Assemble deformed interface depths on the doubled corner grid.
 
     Returns ``(Xc, Yc, Zc, actnum)``: corner coordinates ``(2nx, 2ny)``,
@@ -69,6 +70,9 @@ def _build_geometry(layers, structure=None, top=None, base=None,
     scales each layer's cells and carries every contact below with it;
     ``onlap`` lets an older (deeper) interface win where layers collide,
     so younger layers end against it, instead of the default incision.
+    ``faults`` (:class:`resmill.faults.Fault`) displace the stack in 3-D
+    after the structure and before erosion; ``_faces``, when a list, gets
+    one ``(fault, side)`` pair per fault for the FAULTS export.
     """
     L0 = layers[0]
     nx, ny = L0.nx, L0.ny
@@ -156,6 +160,14 @@ def _build_geometry(layers, structure=None, top=None, base=None,
     else:
         Zc = np.maximum.accumulate(Zc, axis=2)
 
+    # 3b. Faults, in order, after the folding and before the erosion.
+    if faults:
+        from .faults import apply_fault
+        for fault in faults:
+            Zc, side = apply_fault(fault, Xc, Yc, Zc)
+            if _faces is not None:
+                _faces.append((fault, side))
+
     # 4. Erosion clips (present-day surfaces), applied last.
     E = ev(erode_above)
     if E is not None:
@@ -238,6 +250,7 @@ def _write_rle(f, keyword, values, per_line=12):
 
 def to_grdecl(model, path, structure=None, top=None, base=None,
               erode_above=None, erode_below=None, facies=False, isochore=None, onlap=False,
+              faults=None,
               poro_floor=None, perm_floor=None,
               fmt_z="%.2f", fmt_prop="%.6g"):
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
@@ -275,6 +288,10 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         Where per-layer structures make layers collide, the older (deeper)
         surface wins and the younger layers end against it (onlap onto a
         growing high), instead of the younger base cutting the older layers.
+    faults : list of resmill.faults.Fault, optional
+        Finite faults displacing the stack in 3-D (after the structure,
+        before erosion); written as FAULTS (the stair-stepped cell faces
+        between hanging wall and footwall) and MULTFLT (each fault's mult).
     facies : bool
         Also write the layers' facies codes as a FACIES keyword
         (non-standard; Petrel imports it as a generic property).
@@ -290,8 +307,9 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     nx, ny = L0.nx, L0.ny
     nz = sum(L.nz for L in layers)
 
+    faces = []
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, faces)
 
     fac = _stack_prop(layers, "facies").astype(int) if facies else None
     poro = _stack_prop(layers, "poro_mat").astype(float)
@@ -337,11 +355,22 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         _write_array(f, "PERMZ", permz.ravel(order="F"), fmt_prop, per_line=10)
         if fac is not None:
             _write_rle(f, "FACIES", fac.ravel(order="F"))
+        if faces:
+            from .faults import face_records
+            names = [fault.name or f"F{n + 1:02d}" for n, (fault, _) in enumerate(faces)]
+            f.write("\nFAULTS\n")
+            for name, (_, side) in zip(names, faces):
+                for rec in face_records(name, side):
+                    f.write(" '{}' {} {} {} {} {} {} '{}' /\n".format(*rec))
+            f.write("/\n\nMULTFLT\n")
+            for name, (fault, _) in zip(names, faces):
+                f.write(f" '{name}' {fault.mult:g} /\n")
+            f.write("/\n")
     return path
 
 
 def to_pyvista(model, structure=None, top=None, base=None,
-               erode_above=None, erode_below=None, isochore=None, onlap=False):
+               erode_above=None, erode_below=None, isochore=None, onlap=False, faults=None):
     """Build a ``pyvista.ExplicitStructuredGrid`` of the deformed model.
 
     Cell data carries PORO, PERMX (and PERMY where the layers' kx/ky makes it
@@ -358,7 +387,7 @@ def to_pyvista(model, structure=None, top=None, base=None,
     layers = list(getattr(model, "layers", [model]))
     nx, ny = layers[0].nx, layers[0].ny
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults)
 
     # pyvista wants the corners as a global F-order ravel of the doubled
     # corner arrays (the same layout as ZCORN). The grid's k axis points
