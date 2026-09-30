@@ -849,3 +849,30 @@ def test_kxky_is_refused_where_no_channel_direction_is_recorded():
     """Only channel-fill facies (3, 4) know the direction of the channel that laid them down."""
     with pytest.raises(ValueError, match="kxky"):
         _kxky_layer(facies_props={2: {"kxky": 2.0}})
+
+
+def test_every_writer_gets_permx_and_permy_from_one_place(tmp_path):
+    """In a stack where only one layer has kx/ky, ``horizontal_permeability`` gives each layer its own
+    PERMX and PERMY in Eclipse K-down order (the other layer keeps PERMY = PERMX), and the GRDECL
+    writes exactly those arrays: PERMY is never a copy of PERMX where the two differ."""
+    from resmill.export import horizontal_permeability, to_grdecl
+    from resmill.layers.gaussian import GaussianLayer
+    from resmill.reservoir import Reservoir
+    g = GaussianLayer(nx=60, ny=40, nz=4, x_len=2400.0, y_len=1600.0, z_len=4.0, top_depth=0.0)
+    g.create_geology(poro_ave=0.2, perm_ave=1.5, poro_std=0.03, perm_std=0.5, ntg=0.7)
+    c = ChannelLayer(nx=60, ny=40, nz=12, x_len=2400.0, y_len=1600.0, z_len=12.0, top_depth=4.0)
+    c.create_geology(seed=3, nlevel=2, ntime=12, probAvulOutside=0.0, probAvulInside=0.0, mCHdepth=4.0,
+                     mCHwdratio=15.0, NTGtarget=0.9, facies_props={3: {"kxky": 2.0}, 4: {"kxky": 2.0}})
+    model = Reservoir([g, c])
+    permx, permy = horizontal_permeability(model)
+    flip = lambda a: np.asarray(a, dtype=float)[:, :, ::-1]
+    assert np.array_equal(permx[:, :, :4], flip(g.perm_mat)) and np.array_equal(permy[:, :, :4], flip(g.perm_mat))
+    assert np.allclose(permx[:, :, 4:], flip(c.perm_mat) * flip(c.kx_mult))
+    assert np.allclose(permy[:, :, 4:], flip(c.perm_mat) * flip(c.ky_mult))
+    fill = np.isin(flip(c.facies), (3, 4))
+    assert (np.abs(permx[:, :, 4:][fill] / permy[:, :, 4:][fill] - 1.0) > 0.1).mean() > 0.5   # they differ
+    to_grdecl(model, tmp_path / "m.grdecl")
+    for key, expected in (("PERMX", permx), ("PERMY", permy)):
+        assert np.allclose(_grdecl_array(tmp_path / "m.grdecl", key), expected.ravel(order="F"), rtol=1e-5)
+    iso_x, iso_y = horizontal_permeability(g)
+    assert iso_x is iso_y                                          # no kx/ky: PERMY is PERMX

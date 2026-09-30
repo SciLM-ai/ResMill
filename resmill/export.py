@@ -167,6 +167,23 @@ def _stack_prop(layers, name):
     return np.concatenate(mats, axis=2)
 
 
+def horizontal_permeability(model):
+    """PERMX and PERMY of ``model`` (a layer or a Reservoir) in Eclipse K-down order, before floors.
+
+    Both are the layers' ``perm_mat``, except in layers with ``kx_mult`` / ``ky_mult`` (kx/ky along
+    the channels), whose PERMX and PERMY are ``perm_mat`` times those. With no such layer the same
+    array is returned twice. Every writer takes PERMX and PERMY from here.
+    """
+    layers = list(getattr(model, "layers", [model]))
+    perm = _stack_prop(layers, "perm_mat").astype(float)
+    if all(getattr(L, "kx_mult", None) is None for L in layers):
+        return perm, perm
+    return tuple(perm * np.concatenate(
+        [np.ones((L.nx, L.ny, L.nz)) if getattr(L, name, None) is None
+         else np.asarray(getattr(L, name), dtype=float)[:, :, ::-1] for L in layers], axis=2)
+        for name in ("kx_mult", "ky_mult"))
+
+
 def _write_array(f, keyword, values, fmt, per_line):
     f.write(keyword + "\n")
     v = np.asarray(values).ravel()
@@ -227,7 +244,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         Also write the layers' facies codes as a FACIES keyword
         (non-standard; Petrel imports it as a generic property).
     poro_floor, perm_floor : float, optional
-        Lower clamps applied to the written PORO / PERMX+PERMZ arrays
+        Lower clamps applied to the written PORO / PERMX, PERMY and PERMZ arrays
         (GaussianLayer and LobeLayer zero out shale cells, which Eclipse
         would auto-deactivate as zero-pore-volume cells).
     fmt_z, fmt_prop : str
@@ -243,18 +260,12 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
 
     fac = _stack_prop(layers, "facies").astype(int) if facies else None
     poro = _stack_prop(layers, "poro_mat").astype(float)
-    permx = _stack_prop(layers, "perm_mat").astype(float)
+    permx, permy = horizontal_permeability(model)
     permz = np.concatenate(
         [np.asarray(L.perm_mat, dtype=float)[:, :, ::-1]
          * (L.kzkx if getattr(L, "kvkh_mat", None) is None else np.asarray(L.kvkh_mat, dtype=float)[:, :, ::-1])
          for L in layers],
         axis=2)
-    permy = permx
-    if any(getattr(L, "kx_mult", None) is not None for L in layers):
-        permx, permy = (permx * np.concatenate(
-            [np.ones((L.nx, L.ny, L.nz)) if getattr(L, name, None) is None
-             else np.asarray(getattr(L, name), dtype=float)[:, :, ::-1] for L in layers], axis=2)
-            for name in ("kx_mult", "ky_mult"))
     if poro_floor is not None:
         poro = np.maximum(poro, poro_floor)
     if perm_floor is not None:
@@ -298,8 +309,8 @@ def to_pyvista(model, structure=None, top=None, base=None,
                erode_above=None, erode_below=None):
     """Build a ``pyvista.ExplicitStructuredGrid`` of the deformed model.
 
-    Cell data carries PORO, PERMX, ACTNUM and (where every layer has it)
-    FACIES; elevation is ``-depth`` so structure reads the right way up.
+    Cell data carries PORO, PERMX (and PERMY where the layers' kx/ky makes it
+    differ), ACTNUM and (where every layer has it) FACIES; elevation is ``-depth`` so structure reads the right way up.
     Requires the ``viz`` extra (``pip install resmill[viz]``).
     """
     try:
@@ -329,7 +340,10 @@ def to_pyvista(model, structure=None, top=None, base=None,
         return np.ascontiguousarray(a[:, :, ::-1]).ravel(order="F")
 
     grid.cell_data["PORO"] = kup(_stack_prop(layers, "poro_mat"))
-    grid.cell_data["PERMX"] = kup(_stack_prop(layers, "perm_mat"))
+    permx, permy = horizontal_permeability(model)
+    grid.cell_data["PERMX"] = kup(permx)
+    if permy is not permx:
+        grid.cell_data["PERMY"] = kup(permy)
     grid.cell_data["ACTNUM"] = kup(actnum)
     if all(getattr(L, "facies", None) is not None for L in layers):
         grid.cell_data["FACIES"] = kup(_stack_prop(layers, "facies"))
