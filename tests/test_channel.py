@@ -645,3 +645,53 @@ def test_noise_ranges_in_metres_keep_the_same_texture_on_any_grid():
     both_z = (fac[:, :, :-1] == 4) & (fac[:, :, 1:] == 4)
     vertical = np.corrcoef(log_k[:, :, :-1][both_z], log_k[:, :, 1:][both_z])[0, 1]
     assert lateral > vertical + 0.2                                  # long thin beds
+
+
+def _grdecl_array(path, keyword):
+    """One keyword's values from a GRDECL file (plain numbers, no n* repeats)."""
+    words = open(path).read().split()
+    start = words.index(keyword) + 1
+    return np.array([float(w) for w in words[start:words.index("/", start)]])
+
+
+def test_kvkh_per_facies_sets_vertical_permeability(tmp_path):
+    """A ``kvkh`` entry in ``facies_props`` gives each facies its own vertical-to-horizontal
+    permeability ratio, which the GRDECL export writes as PERMZ = kvkh x PERMX; facies
+    without one keep the layer's ``kzkx``."""
+    from resmill.export import to_grdecl
+    layer = ChannelLayer(nx=30, ny=20, nz=8, x_len=600.0, y_len=400.0, z_len=8.0, top_depth=0.0, kzkx=0.1)
+    ratios = {4: 0.8, 3: 0.7, 2: 1e-3, -1: 0.2}
+    layer.create_geology(seed=3, nlevel=2, ntime=10, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=3.0, mCHwdratio=10.0, NTGtarget=0.9,
+                         facies_props={code: {"kvkh": r} for code, r in ratios.items()})
+    fac, kvkh = np.asarray(layer.facies), np.asarray(layer.kvkh_mat)
+    for code in np.unique(fac):
+        assert np.allclose(kvkh[fac == code], ratios.get(int(code), 0.1))
+    to_grdecl(layer, tmp_path / "m.grdecl")
+    permx, permz = _grdecl_array(tmp_path / "m.grdecl", "PERMX"), _grdecl_array(tmp_path / "m.grdecl", "PERMZ")
+    expected = kvkh[:, :, ::-1].ravel(order="F")
+    assert np.allclose(permz / permx, expected, rtol=1e-4)
+
+
+def test_fining_tops_lower_kvkh_towards_the_top():
+    """With ``fining_top_kvkh``, kv/kh in the fining part of a fill falls log-linearly from the
+    facies value at the top of the clean part to ``fining_top_kvkh`` at the fill's top; blocky
+    events and the clean parts keep the facies value."""
+    layer, fac, fill, dn = _fining_layer(fining_perm_decades=1.5, fining_clean_fraction=0.5, fining_probability=0.5,
+                                         fining_top_kvkh=0.05, facies_props={3: {"kvkh": 0.8}, 4: {"kvkh": 0.8}})
+    kvkh = np.asarray(layer.kvkh_mat)
+    assert np.allclose(kvkh[fill & (dn >= 0.5)], 0.8)
+    top = fill & (dn < 0.05)
+    lowered = kvkh[top] < 0.79
+    assert 0.2 < lowered.mean() < 0.8                                  # the fining events only
+    assert np.all(kvkh[top][lowered] < 0.8 * (0.05 / 0.8) ** 0.85)       # near 0.05 at the very top
+    assert np.allclose(kvkh[top][~lowered], 0.8)
+
+
+def test_kvkh_is_off_by_default():
+    """Without ``kvkh`` entries or ``fining_top_kvkh`` a layer has no kvkh_mat, and the export keeps
+    PERMZ = kzkx x PERMX."""
+    layer = ChannelLayer(nx=30, ny=20, nz=8, x_len=600.0, y_len=400.0, z_len=8.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=10, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=3.0, mCHwdratio=10.0, NTGtarget=0.9)
+    assert layer.kvkh_mat is None

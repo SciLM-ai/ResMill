@@ -17,6 +17,7 @@ class Layer:
         self.top_depth = top_depth
         self.dip = dip
         self.kzkx = kzkx
+        self.kvkh_mat = None   # per-cell kv/kh when a layer sets one (else kzkx)
 
         # Grid edges (nx+1, ny+1)
         x = np.linspace(0, x_len, nx + 1)

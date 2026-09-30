@@ -221,6 +221,7 @@ class DeltaLayer(ChannelLayer):
                        fining_poro_per_decade: float = 0.0,
                        fining_probability: float = 1.0,
                        noise_range_m: tuple | None = None,
+                       fining_top_kvkh: float | None = None,
                        seed: int | None = None,
                        **kwargs):
         """Generate a prograding distributary-fan delta.
@@ -424,6 +425,7 @@ class DeltaLayer(ChannelLayer):
             fining_poro_per_decade=fining_poro_per_decade,
             fining_probability=fining_probability,
             noise_range_m=noise_range_m,
+            fining_top_kvkh=fining_top_kvkh,
         )
         # Expose final engine + accumulated distal tips for tutorial / debug
         self._engine = last_engine

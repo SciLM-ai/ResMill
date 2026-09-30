@@ -98,7 +98,8 @@ class ChannelLayer(Layer):
                                fining_clean_fraction: float = 0.5,
                                fining_poro_per_decade: float = 0.0,
                                fining_probability: float = 1.0,
-                               noise_range_m: tuple | None = None):
+                               noise_range_m: tuple | None = None,
+                               fining_top_kvkh: float | None = None):
         """Build ``self.facies / active / poro_mat / perm_mat`` from engine outputs.
 
         Inputs:
@@ -159,6 +160,12 @@ class ChannelLayer(Layer):
         * ``noise_range_m`` — (horizontal, vertical) correlation lengths in
           metres of the ``poro_sd`` / ``log10_perm_sd`` noise, so its texture
           is the same on any grid. None keeps ``poro_noise_range`` cells.
+        * ``facies_props`` entries may carry ``kvkh``, the facies' vertical to
+          horizontal permeability ratio (``self.kvkh_mat``, written as PERMZ =
+          kvkh x PERMX); facies without one keep the layer's ``kzkx``.
+          ``fining_top_kvkh`` lowers it log-linearly inside the fining part of
+          the fills that fine upward, to this value at their top (thin shales).
+          Neither given: no ``kvkh_mat`` and PERMZ stays ``kzkx`` x PERMX.
 
         Combined formula per cell::
 
@@ -333,6 +340,18 @@ class ChannelLayer(Layer):
         self.poro_mat = poro_mat.astype(np.float32)
         self.perm_mat = perm_mat.astype(np.float32)
 
+        # Opt-in vertical anisotropy per facies, thinner-bedded towards fining tops.
+        self.kvkh_mat = None
+        if any("kvkh" in vals for vals in props.values()) or fining_top_kvkh is not None:
+            kvkh = np.full(self.facies.shape, float(self.kzkx), dtype=np.float32)
+            for code, vals in props.items():
+                if "kvkh" in vals:
+                    kvkh[self.facies == code] = vals["kvkh"]
+            if fining_top_kvkh is not None and fining is not None:
+                g = fining / float(fining_perm_decades)          # 0 at the clean part's top, 1 at the fill's top
+                kvkh = kvkh * (float(fining_top_kvkh) / kvkh) ** g
+            self.kvkh_mat = kvkh.astype(np.float32)
+
 
     def create_geology(
         self,
@@ -451,6 +470,8 @@ class ChannelLayer(Layer):
         fining_poro_per_decade: float = 0.0,
         fining_probability: float = 1.0,
         noise_range_m: tuple | None = None,
+        # kv/kh at the top of the fills that fine upward (facies values: facies_props "kvkh")
+        fining_top_kvkh: float | None = None,
         seed: int | None = None,
     ):
         """Generate channel geology with Alluvsim-faithful semantics.
@@ -533,6 +554,7 @@ class ChannelLayer(Layer):
             fining_poro_per_decade=fining_poro_per_decade,
             fining_probability=fining_probability,
             noise_range_m=noise_range_m,
+            fining_top_kvkh=fining_top_kvkh,
         )
         # Stash for downstream tooling (parquet writers can record the
         # engine-level multiplier std values, generate.py uses these to

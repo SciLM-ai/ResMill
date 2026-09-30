@@ -199,7 +199,8 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
 
     The file carries SPECGRID, COORD, ZCORN, ACTNUM, PORO, PERMX, PERMY
-    (= PERMX), PERMZ (= per-layer ``kzkx`` x PERMX) and optionally FACIES,
+    (= PERMX), PERMZ (= per-layer ``kzkx``, or per-cell ``kvkh_mat`` when a
+    layer has one, x PERMX) and optionally FACIES,
     and imports directly into Petrel ("ECLIPSE keywords (grid geometry and
     properties)"), ResInsight, tNavigator, or an Eclipse deck INCLUDE.
 
@@ -243,7 +244,9 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     poro = _stack_prop(layers, "poro_mat").astype(float)
     permx = _stack_prop(layers, "perm_mat").astype(float)
     permz = np.concatenate(
-        [np.asarray(L.perm_mat, dtype=float)[:, :, ::-1] * L.kzkx for L in layers],
+        [np.asarray(L.perm_mat, dtype=float)[:, :, ::-1]
+         * (L.kzkx if getattr(L, "kvkh_mat", None) is None else np.asarray(L.kvkh_mat, dtype=float)[:, :, ::-1])
+         for L in layers],
         axis=2)
     if poro_floor is not None:
         poro = np.maximum(poro, poro_floor)
