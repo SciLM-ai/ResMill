@@ -153,3 +153,16 @@ def test_channel_porosity_noise_textures_sand_only():
     # perm follows the porosity texture (K-C slope 3 in log10)
     lp = np.log10(c.perm_mat[sand]) - np.log10(a.perm_mat[sand])
     assert np.allclose(lp, 3.0 * np.log10(ratio), atol=1e-2)
+
+
+def test_facies_props_apply_to_their_layer_only():
+    """A layer's ``facies_props`` override ResMill's table for that layer only: the module
+    table, and so the next layer built without them, keep the defaults."""
+    import copy
+    from resmill.layers import channel as channel_module
+    before = copy.deepcopy(channel_module.FACIES_PROPS)
+    layer = ChannelLayer(nx=20, ny=15, nz=10, x_len=2000.0, y_len=1500.0, z_len=10.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=2, probAvulOutside=0.0, probAvulInside=0.0,
+                         facies_props={-1: {"log10_perm": -5.0}})
+    assert np.allclose(np.asarray(layer.perm_mat)[np.asarray(layer.facies) == -1], 1e-5)
+    assert channel_module.FACIES_PROPS == before
