@@ -657,6 +657,10 @@ class fluvial:
         # the channel they border, fed by the same flood pulse).
         self._event_poro_mult = 1.0
         self._event_log_perm_offset = 0.0
+        # The aggradation level (storey) of every flow event, keyed by the event's rock pair as
+        # the aux fields store it, so rock choices can be made per storey.
+        self._level = 0
+        self.event_levels: dict[tuple, int] = {}
 
         if seed is not None:
             np.random.seed(int(seed))
@@ -1466,6 +1470,7 @@ class fluvial:
             po = po_lo
         elif po > po_hi:
             po = po_hi
+        self.event_levels[(np.float32(pm), np.float32(po))] = self._level
         return pm, po
 
     def _stamp_channel(self, facies_code: int, erode_above: bool):
@@ -1796,6 +1801,7 @@ class fluvial:
         last_ffchprop = 0.0
 
         for ilevel in range(self.nlevel):
+            self._level = ilevel
             self.chelev = float(self.level_z[ilevel])
             self.chelev_arr = np.full(self.ndis, self.chelev, dtype=np.float64)
             # When ntime is per-level, reset the event counter so each level

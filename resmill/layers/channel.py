@@ -99,7 +99,8 @@ class ChannelLayer(Layer):
                                fining_poro_per_decade: float = 0.0,
                                fining_probability: float = 1.0,
                                noise_range_m: tuple | None = None,
-                               fining_top_kvkh: float | None = None):
+                               fining_top_kvkh: float | None = None,
+                               event_group: dict | None = None):
         """Build ``self.facies / active / poro_mat / perm_mat`` from engine outputs.
 
         Inputs:
@@ -154,9 +155,11 @@ class ChannelLayer(Layer):
           is flat in the fill's clean lower part (``fining_clean_fraction`` of
           its depth) and falls linearly above it, by this many decades at the
           top; porosity falls ``fining_poro_per_decade`` units per decade
-          (clay-rich tops). A fraction ``fining_probability`` of the flow
-          events fine upward, the others stay blocky. Each facies keeps its
-          value as its average. None: off.
+          (clay-rich tops). A fraction ``fining_probability`` of the channel
+          storeys fine upward, the others stay blocky: ``event_group`` maps
+          each flow event's rock pair to its storey (the engine's
+          ``event_levels``); without it each flow event decides alone. Each
+          facies keeps its value as its average. None: off.
         * ``noise_range_m`` — (horizontal, vertical) correlation lengths in
           metres of the ``poro_sd`` / ``log10_perm_sd`` noise, so its texture
           is the same on any grid. None keeps ``poro_noise_range`` cells.
@@ -255,8 +258,12 @@ class ChannelLayer(Layer):
                 (1.0 - clean - depth_norm) / max(1.0 - clean, 1e-6), 0.0, 1.0), 0.0).astype(np.float32)
             if float(fining_probability) < 1.0 and fill.any():
                 pairs = np.stack([poro_mult_field[fill], log_perm_offset_field[fill]], axis=1)
-                _, event = np.unique(pairs, axis=0, return_inverse=True)
+                unique, event = np.unique(pairs, axis=0, return_inverse=True)
                 event = event.ravel()
+                if event_group:   # one choice per storey; an unknown event is its own group
+                    group = [event_group.get((np.float32(a), np.float32(b)), -1 - i)
+                             for i, (a, b) in enumerate(unique)]
+                    event = np.unique(group, return_inverse=True)[1].ravel()[event]
                 fines = np.random.random(int(event.max()) + 1) < float(fining_probability)
                 fining[fill] *= fines[event]
             poro_drop = 0.01 * float(fining_poro_per_decade) * fining
@@ -555,6 +562,7 @@ class ChannelLayer(Layer):
             fining_probability=fining_probability,
             noise_range_m=noise_range_m,
             fining_top_kvkh=fining_top_kvkh,
+            event_group=engine.event_levels,
         )
         # Stash for downstream tooling (parquet writers can record the
         # engine-level multiplier std values, generate.py uses these to

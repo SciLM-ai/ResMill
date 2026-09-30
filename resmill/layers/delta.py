@@ -349,6 +349,7 @@ class DeltaLayer(ChannelLayer):
         accum_log_perm_offset = np.zeros((nx_, ny_, nz_), dtype=np.float32)
         accum_distal_tips: list[tuple[float, float, float, float]] = []
         last_engine = None
+        event_group = {}   # each generation is one storey
         # Every branch of every generation's distributary tree
         # (``bifurcate=True``): order, discharge share, node count, whether
         # it ended on the plain or joined another branch.
@@ -381,6 +382,7 @@ class DeltaLayer(ChannelLayer):
             accum_log_perm_offset = np.where(takeover, engine.log_perm_offset_field,
                                              accum_log_perm_offset)
             accum_distal_tips.extend(engine.distal_tips)
+            event_group.update(dict.fromkeys(engine.event_levels, igen))
             self.tree_branches.extend(dict(gen=igen, **b) for b in getattr(engine, 'tree_branches', []))
             last_engine = engine
 
@@ -426,6 +428,7 @@ class DeltaLayer(ChannelLayer):
             fining_probability=fining_probability,
             noise_range_m=noise_range_m,
             fining_top_kvkh=fining_top_kvkh,
+            event_group=event_group,
         )
         # Expose final engine + accumulated distal tips for tutorial / debug
         self._engine = last_engine

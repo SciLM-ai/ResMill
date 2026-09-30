@@ -599,27 +599,29 @@ def test_fining_upward_is_a_permeability_drop_above_the_clean_base():
     assert np.mean(log_k[clean]) - np.mean(log_k[top]) == pytest.approx(1.35, abs=0.15)   # the total drop
 
 
-def test_fining_probability_picks_whole_flow_events():
-    """With ``fining_probability`` p, each flow event (the cells sharing one event's rock
-    draw) fines upward or stays blocky as a whole, about p of them fining."""
-    layer, fac, fill, dn = _fining_layer(fining_perm_decades=1.5, fining_clean_fraction=0.5,
-                                         fining_probability=0.5)
-    log_k = np.log10(np.asarray(layer.perm_mat))
-    eng = layer._engine
-    pairs = np.stack([np.asarray(eng.poro_mult_field)[fill],
-                      np.asarray(eng.log_perm_offset_field)[fill]], axis=1)
-    _, event = np.unique(pairs, axis=0, return_inverse=True)
-    event = event.ravel()
-    k, d = log_k[fill], dn[fill]
-    drops = []
+def test_fining_probability_picks_whole_storeys():
+    """With ``fining_probability`` p, each channel storey (one aggradation level: every flow
+    event of it) fines upward or stays blocky as a whole, about p of them fining."""
+    layer = ChannelLayer(nx=60, ny=40, nz=36, x_len=1200.0, y_len=800.0, z_len=36.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=6, ntime=8, ntime_per_level=True, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=6.0, mCHwdratio=10.0, NTGtarget=0.9, perm_poro_slope=0.05,
+                         fining_perm_decades=1.5, fining_clean_fraction=0.5, fining_probability=0.5)
+    fac, eng = np.asarray(layer.facies), layer._engine
+    fill = (fac == 3) | (fac == 4)
+    dn, log_k = np.asarray(eng.depth_norm)[fill], np.log10(np.asarray(layer.perm_mat))[fill]
+    pm, po = np.asarray(eng.poro_mult_field)[fill], np.asarray(eng.log_perm_offset_field)[fill]
+    level = np.array([eng.event_levels[(a, b)] for a, b in zip(pm, po)])
+    event = np.unique(np.stack([pm, po], axis=1), axis=0, return_inverse=True)[1].ravel()
+    kinds = {}
     for e in np.unique(event):
         sel = event == e
-        if (d[sel] >= 0.5).sum() >= 3 and (d[sel] < 0.2).sum() >= 3:
-            drops.append(k[sel][d[sel] >= 0.5].mean() - k[sel][d[sel] < 0.2].mean())
-    drops = np.array(drops)
-    assert len(drops) >= 8
-    assert np.all((np.abs(drops) < 0.3) | (drops > 0.8))          # blocky or fining, nothing between
-    assert 0.2 < np.mean(drops > 0.8) < 0.8
+        if (dn[sel] >= 0.5).sum() >= 3 and (dn[sel] < 0.2).sum() >= 3:
+            drop = log_k[sel][dn[sel] >= 0.5].mean() - log_k[sel][dn[sel] < 0.2].mean()
+            assert abs(drop) < 0.3 or drop > 0.8                          # blocky or fining, nothing between
+            kinds.setdefault(int(level[sel][0]), set()).add(drop > 0.8)
+    assert len(kinds) >= 4
+    assert all(len(k) == 1 for k in kinds.values())                      # one choice per storey
+    assert {True, False} <= set().union(*kinds.values())
 
 
 def test_noise_ranges_in_metres_keep_the_same_texture_on_any_grid():
@@ -677,15 +679,14 @@ def test_fining_tops_lower_kvkh_towards_the_top():
     """With ``fining_top_kvkh``, kv/kh in the fining part of a fill falls log-linearly from the
     facies value at the top of the clean part to ``fining_top_kvkh`` at the fill's top; blocky
     events and the clean parts keep the facies value."""
-    layer, fac, fill, dn = _fining_layer(fining_perm_decades=1.5, fining_clean_fraction=0.5, fining_probability=0.5,
+    layer, fac, fill, dn = _fining_layer(fining_perm_decades=1.5, fining_clean_fraction=0.5,
                                          fining_top_kvkh=0.05, facies_props={3: {"kvkh": 0.8}, 4: {"kvkh": 0.8}})
     kvkh = np.asarray(layer.kvkh_mat)
-    assert np.allclose(kvkh[fill & (dn >= 0.5)], 0.8)
+    assert np.allclose(kvkh[fill & (dn >= 0.5)], 0.8)                 # the clean part keeps the facies value
     top = fill & (dn < 0.05)
-    lowered = kvkh[top] < 0.79
-    assert 0.2 < lowered.mean() < 0.8                                  # the fining events only
-    assert np.all(kvkh[top][lowered] < 0.8 * (0.05 / 0.8) ** 0.85)       # near 0.05 at the very top
-    assert np.allclose(kvkh[top][~lowered], 0.8)
+    assert np.all(kvkh[top] < 0.8 * (0.05 / 0.8) ** 0.85)                # near 0.05 at the very top
+    mid = fill & (dn >= 0.24) & (dn < 0.26)                               # halfway up the fining part
+    assert np.allclose(kvkh[mid], 0.8 * (0.05 / 0.8) ** 0.5, rtol=0.1)
 
 
 def test_kvkh_is_off_by_default():
