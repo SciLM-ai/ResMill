@@ -10,11 +10,19 @@ profile ``levee_top = LVheight*r*exp(-r) + chelev``,
 
 Stamp ``LV`` for cells where ``levee_bottom <= z <= levee_top`` —
 unconditionally (matches AL:235-241; item 1.8).
+
+``slope_banks`` (``continuous_banks``) carries the channel's wall up into the
+levee: its top starts at the bank with the wall's own slope on that side
+(``bank_slope``: steep on the cut bank, gentle over the point bar), rounds over
+into a crest of ``LVheight/e`` (Alluvsim's) and then follows Alluvsim's flank,
+``(1+u)*exp(-u)`` over ``LVwidth*factor/6``. The crest then sits
+``e*crest/slope`` from the bank however wide the levee, where observed crests
+sit on the channel margin (Pirmez & Flood 1995; Jobe et al. 2020).
 """
 import numpy as np
 from numba import jit
 
-from ._genchannel import find_near_grid
+from ._genchannel import bank_slope, find_near_grid
 
 
 LV = 2  # Alluvsim levee facies code
@@ -28,6 +36,7 @@ def _paint_levee_kernel(
     facies, lk_lv, ntg_counter, max_curv, s_arr, max_s,
     depth_norm, poro_mult_field, log_perm_offset_field,
     ev_poro_mult, ev_log_perm_offset, side_sign,
+    thalweg, dwratio, slope_banks,
 ):
     LV_w_scale = LV_width / 6.0
     ndis = cx.size
@@ -84,7 +93,20 @@ def _paint_levee_kernel(
             if scale < 1e-9:
                 continue
             r = cdd / scale
-            levee_top = LV_height * r * np.exp(-r) + chelev
+            if slope_banks:
+                crest = LV_height * np.exp(-1.0)
+                slope = bank_slope(thalweg[idis], dwratio * chwidth[idis], 2.0 * chwidth[idis],
+                                   dx2 * ty - dy2 * tx > 0.0)
+                dc = max(min(np.e * crest / max(slope, 1e-6), LV_width * factor), 1e-6)
+                rp = max(cdd, 0.0)
+                if rp <= dc:               # the wall's slope, rounding over into the crest
+                    q = rp / dc
+                    levee_top = crest * q * np.exp(1.0 - q) + chelev
+                else:                      # Alluvsim's flank from the crest
+                    u = (rp - dc) / scale
+                    levee_top = crest * (1.0 + u) * np.exp(-u) + chelev
+            else:
+                levee_top = LV_height * r * np.exp(-r) + chelev
             denom = max(LV_width, 1e-9)
             levee_bottom = chelev - LV_depth * ((LV_width * factor - close_distance) / denom)
 
@@ -126,9 +148,12 @@ def paint_levee(
     log_perm_offset_field: np.ndarray | None = None,
     ev_poro_mult: float = 1.0, ev_log_perm_offset: float = 0.0,
     side_sign: float = 1.0,
+    thalweg: np.ndarray | None = None, dwratio: float = 0.0, slope_banks: bool = False,
 ):
     """Public entry. No-op if LV is disabled. ``side_sign=-1`` puts the wider,
-    cut-bank levee on the outer bank of a bend instead of Alluvsim's inner bank."""
+    cut-bank levee on the outer bank of a bend instead of Alluvsim's inner bank;
+    ``slope_banks`` carries the channel's wall (``thalweg``, ``dwratio``) up into
+    the levee (module docstring)."""
     if LV_width <= 0.0 or (LV_height + LV_depth) <= 0.0:
         return
     if cx is None or cx.size < 3:
@@ -174,4 +199,6 @@ def paint_levee(
         facies, int(lk_lv), ntg_counter, max_curv, s_arr, max_s,
         depth_norm, poro_mult_field, log_perm_offset_field,
         float(ev_poro_mult), float(ev_log_perm_offset), float(side_sign),
+        thalweg if thalweg is not None and thalweg.size == cx.size else np.full(cx.size, 0.5),
+        float(dwratio), bool(slope_banks),
     )

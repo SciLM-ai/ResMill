@@ -416,6 +416,13 @@ class fluvial:
         # straight, and a neck cutoff through the last point deletes the tail (a
         # dead end). 0: Alluvsim's paths, which start and stop at the edge.
         path_buffer: float = 0.0,
+        # Carry each channel's wall up into its levees: a levee starts at the bank
+        # with the wall's own slope (steep on the cut bank, gentle over the point
+        # bar) and rounds over into its crest, and the active channel clears the
+        # space above it along those walls. False: Alluvsim's rules, where a
+        # levee rises at a slope of its own (crest a sixth of LVwidth out) and the
+        # channel clears a vertical column, cutting older levees straight down.
+        continuous_banks: bool = False,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -501,6 +508,7 @@ class fluvial:
         self.unwrap_azimuth = bool(unwrap_azimuth)
         self.thalweg_lag = bool(thalweg_lag)
         self.path_buffer = float(path_buffer)
+        self.continuous_banks = bool(continuous_banks)
 
         # Hydraulic
         g = 9.8
@@ -1485,6 +1493,7 @@ class fluvial:
             poro_mult_field=self.poro_mult_field,
             log_perm_offset_field=self.log_perm_offset_field,
             ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
+            slope_banks=self.continuous_banks,
         )
 
     def _stamp_splays(self, n_splay: int, n_lobe_per_splay: int):
@@ -1647,6 +1656,7 @@ class fluvial:
             log_perm_offset_field=self.log_perm_offset_field,
             ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
             side_sign=-1.0 if self.cutbank_outer else 1.0,
+            thalweg=self.thalweg, dwratio=float(self.gr_dwratio), slope_banks=self.continuous_banks,
         )
 
     def _stamp_neck_oxbows(self, surviving_idx, n_pre,

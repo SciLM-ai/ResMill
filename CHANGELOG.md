@@ -4,6 +4,24 @@
 
 ### Added
 
+- `continuous_banks=True` (`ChannelLayer`, and `DeltaLayer` through its
+  fluvial passthrough): carry each channel's wall up into its levees.
+  A levee's top starts at the bank with the wall's own mean slope on that
+  side, the Deutsch-Wang cross-section's slope next to the bank (steep
+  on the cut bank, gentle over the point bar). It rounds over into
+  Alluvsim's crest (`LVheight`/e) and then follows Alluvsim's flank. The
+  active channel clears the space above it along those walls, carried up
+  to one channel width past the banks, instead of a vertical column.
+  Alluvsim's rules, kept by default, give the levee a slope of its own,
+  with the crest a sixth of `LVwidth` out. That leaves a slope break at
+  the bank, and levees wider than about five channel widths are thinnest
+  beside the channel. The channel also cuts older levees vertically.
+  Observed: the channel wall rises continuously to the levee crest, and
+  crests sit on the channel margin at every levee size (Pirmez & Flood
+  1995; Jobe et al. 2020). Deepwater levees 1.5, 4 and 10 channel widths
+  wide then plot inside the observed relief and far-field aggradation
+  of 52 seismic sections. Off by default: outputs are bit-identical to
+  before.
 - `path_buffer` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): metres every fresh channel path is drawn beyond the grid at
   both ends. It starts that far upstream of its entry and goes on that far

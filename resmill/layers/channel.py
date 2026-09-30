@@ -244,6 +244,10 @@ class ChannelLayer(Layer):
         # pinched at the entry, no straight end stretches, no dead ends from tail
         # cutoffs. 0: Alluvsim's paths, which start and stop at the edge.
         path_buffer: float = 0.0,
+        # One continuous wall from channel to levee: levees start with the channel
+        # wall's slope and the channel clears the space above it along its walls.
+        # False: Alluvsim's rules (a slope break at the bank, vertical cuts).
+        continuous_banks: bool = False,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -355,7 +359,7 @@ class ChannelLayer(Layer):
             level_inherit=level_inherit, cutbank_outer=cutbank_outer,
             cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
             thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth, thalweg_lag=thalweg_lag,
-            path_buffer=path_buffer,
+            path_buffer=path_buffer, continuous_banks=continuous_banks,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,

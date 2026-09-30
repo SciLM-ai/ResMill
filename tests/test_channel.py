@@ -263,6 +263,63 @@ def test_cutbank_side_of_a_bend(outer):
     assert levee_wider_north == outer
 
 
+def _straight_channel(**kw):
+    """A straight channel (flow east along y = 1500 m, 294 m wide, 14 m deep, top at z = 20 m)
+    on an empty 4 x 3 km grid of 20 m x 1 m cells; with the columns of the section x = 2 km
+    north of its bank and their distance beyond the bank."""
+    layer = ChannelLayer(nx=200, ny=150, nz=60, x_len=4000.0, y_len=3000.0, z_len=60.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=1, mCHdepth=14.0, mCHwdratio=21.0, stdevCHdepth=0.0,
+                         stdevCHdepth2=0.0, stdevCHwdratio=0.0, probAvulOutside=0.0, probAvulInside=0.0, **kw)
+    eng = layer._engine
+    eng.cx, eng.cy = np.linspace(-500.0, 4500.0, 500), np.full(500, 1500.0)
+    eng.chelev, eng.chelev_arr = 20.0, np.full(500, 20.0)
+    eng._chwidth_arr, eng._chwidth_state_n = np.full(500, 147.0), 500
+    eng.cal_curv()
+    y = (np.arange(150) + 0.5) * 20.0
+    north = y > 1647.0
+    return eng, north, y[north] - 1647.0
+
+
+@pytest.mark.parametrize("width", [1200.0, 3000.0])
+def test_continuous_banks_carry_the_channel_wall_into_the_levee(width):
+    """With ``continuous_banks`` a levee starts at the bank with the channel wall's own slope
+    and rounds over into its crest, the same distance out however wide the levee; by default
+    its crest sits a sixth of ``LVwidth`` out, whatever the channel's wall."""
+    from resmill.layers._fluvial import FF, LV
+    from resmill.layers._genchannel import bank_slope
+    s = bank_slope(0.5, 14.0, 294.0, False)
+    dc = np.e * (25.0 / np.e) / s                          # crest distance for a crest of 25/e m
+    for kw in ({}, {"continuous_banks": True}):
+        eng, north, d = _straight_channel(**kw)
+        eng.facies[:] = FF
+        eng._stamp_levee(0.0, width, 25.0, 0.0, 0.0)
+        thick = (eng.facies[100][north] == LV).sum(axis=1).astype(float)
+        if not kw:
+            assert thick[np.argmin(abs(d - width / 6.0))] == thick.max()
+        else:
+            near = d < 0.5 * dc
+            assert np.allclose(thick[near], s * d[near] * np.exp(-d[near] / dc), atol=1.0)
+            assert thick[np.argmin(abs(d - dc))] == thick.max()
+
+
+def test_continuous_banks_trim_older_levees_along_the_wall():
+    """The active channel clears the space above it: by default straight up from its banks,
+    so an older levee beside it is cut vertically; with ``continuous_banks`` along its walls
+    carried up past the banks, so that levee is trimmed to the wall's slope."""
+    from resmill.layers._fluvial import CH, FF, LV
+    from resmill.layers._genchannel import bank_slope
+    s = bank_slope(0.5, 14.0, 294.0, False)
+    for kw in ({}, {"continuous_banks": True}):
+        eng, north, d = _straight_channel(**kw)
+        eng.facies[:] = FF
+        eng.facies[:, :, 20:30] = LV                           # an older levee, z = 20-30 m everywhere
+        eng._stamp_channel(facies_code=CH, erode_above=True)
+        lv = eng.facies[100][north] == LV
+        top = np.where(lv.any(axis=1), lv.shape[1] - np.argmax(lv[:, ::-1], axis=1), 20).astype(float)
+        want = np.minimum(30.0, 20.0 + s * d) if kw else np.full(d.size, 30.0)
+        assert np.allclose(top, want, atol=1.0)
+
+
 def _arc(radius, degrees, spacing=10.0):
     """Points every ``spacing`` m along a circular arc, with their segment lengths."""
     th = np.arange(0.0, np.radians(degrees), spacing / radius)
