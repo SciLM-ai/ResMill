@@ -74,7 +74,8 @@ def mychannel(nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx,
               dist_arr, dwratio, merge_overlap, facies_code, ntg_counter,
               compute_poro, erode_above, poro0,
               depth_norm, poro_mult_field, log_perm_offset_field,
-              ev_poro_mult, ev_log_perm_offset, slope_banks):
+              ev_poro_mult, ev_log_perm_offset, slope_banks,
+              flow_angle, record_angle):
     """Paint one streamline's U-shape into facies + per-cell auxiliary fields.
 
     Writes ``depth_norm[ix,iy,iz]`` = (chelev - z_face) / (chelev - chbot)
@@ -86,6 +87,8 @@ def mychannel(nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx,
     Per-event scalars ``ev_poro_mult`` / ``ev_log_perm_offset`` are stamped
     into ``poro_mult_field`` / ``log_perm_offset_field`` at every cell this
     event paints — last-event-wins overwrite, matching facies semantics.
+    With ``record_angle``, ``flow_angle`` gets the direction (radians from
+    the x axis) of the nearest centreline node the same way.
     """
     for myid in range(localx.size):
         idx = mynx[myid]
@@ -164,6 +167,8 @@ def mychannel(nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx,
                 if facies[idx, idy, iz] < 1 and facies_code >= 1:
                     ntg_counter[0] += 1
                 facies[idx, idy, iz] = facies_code
+                if record_angle:
+                    flow_angle[idx, idy, iz] = np.float32(math.atan2(vy[idis], vx[idis]))
 
                 # 3D radial fall-off from the thalweg-base point of THIS
                 # event's U-shape — geologically the highest-energy
@@ -324,7 +329,8 @@ def genchannel(b, xsiz, ysiz, chelev_arr, zsiz, nx, ny, nz, cx, cy, x, y,
                compute_poro=True, erode_above=False,
                depth_norm=None, poro_mult_field=None,
                log_perm_offset_field=None,
-               ev_poro_mult=1.0, ev_log_perm_offset=0.0, slope_banks=False):
+               ev_poro_mult=1.0, ev_log_perm_offset=0.0, slope_banks=False,
+               flow_angle=None):
     """Public wrapper around ``mychannel`` — Alluvsim ``genchannel.for`` entry.
 
     ``chelev_arr`` is the per-node CHelev array (item 2.11). For a flat
@@ -337,6 +343,8 @@ def genchannel(b, xsiz, ysiz, chelev_arr, zsiz, nx, ny, nz, cx, cy, x, y,
     ``_finalize_facies_table``. ``ev_poro_mult`` / ``ev_log_perm_offset``
     are the freshly-drawn per-event scalars (one pair per stamp call).
     Tests / standalone callers can omit these (None → no aux output).
+    ``flow_angle`` (float32, same shape; None: not recorded) gets each
+    painted cell's local channel direction.
     """
     if ntg_counter is None:
         ntg_counter = np.zeros(1, dtype=np.int64)
@@ -352,6 +360,9 @@ def genchannel(b, xsiz, ysiz, chelev_arr, zsiz, nx, ny, nz, cx, cy, x, y,
         poro_mult_field = np.ones((nx, ny, nz), dtype=np.float32)
     if log_perm_offset_field is None:
         log_perm_offset_field = np.zeros((nx, ny, nz), dtype=np.float32)
+    record_angle = flow_angle is not None
+    if not record_angle:
+        flow_angle = np.empty((1, 1, 1), dtype=np.float32)
     ndis = cx.size
     good = np.zeros((nx, ny))
     find_near_grid(cx, cy, good, xsiz, ysiz, xmn, ymn, b, nx, ny)
@@ -369,5 +380,6 @@ def genchannel(b, xsiz, ysiz, chelev_arr, zsiz, nx, ny, nz, cx, cy, x, y,
               dwratio, bool(merge_overlap), int(facies_code), ntg_counter,
               bool(compute_poro), bool(erode_above), float(poro0),
               depth_norm, poro_mult_field, log_perm_offset_field,
-              float(ev_poro_mult), float(ev_log_perm_offset), bool(slope_banks))
+              float(ev_poro_mult), float(ev_log_perm_offset), bool(slope_banks),
+              flow_angle, record_angle)
     return 0

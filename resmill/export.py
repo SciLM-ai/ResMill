@@ -199,8 +199,9 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
 
     The file carries SPECGRID, COORD, ZCORN, ACTNUM, PORO, PERMX, PERMY
-    (= PERMX), PERMZ (= per-layer ``kzkx``, or per-cell ``kvkh_mat`` when a
-    layer has one, x PERMX) and optionally FACIES,
+    (= PERMX, or ``kx_mult`` and ``ky_mult`` x the layer's permeability when a
+    layer has them), PERMZ (= per-layer ``kzkx``, or per-cell ``kvkh_mat`` when a
+    layer has one, x the layer's permeability) and optionally FACIES,
     and imports directly into Petrel ("ECLIPSE keywords (grid geometry and
     properties)"), ResInsight, tNavigator, or an Eclipse deck INCLUDE.
 
@@ -248,10 +249,17 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
          * (L.kzkx if getattr(L, "kvkh_mat", None) is None else np.asarray(L.kvkh_mat, dtype=float)[:, :, ::-1])
          for L in layers],
         axis=2)
+    permy = permx
+    if any(getattr(L, "kx_mult", None) is not None for L in layers):
+        permx, permy = (permx * np.concatenate(
+            [np.ones((L.nx, L.ny, L.nz)) if getattr(L, name, None) is None
+             else np.asarray(getattr(L, name), dtype=float)[:, :, ::-1] for L in layers], axis=2)
+            for name in ("kx_mult", "ky_mult"))
     if poro_floor is not None:
         poro = np.maximum(poro, poro_floor)
     if perm_floor is not None:
         permx = np.maximum(permx, perm_floor)
+        permy = np.maximum(permy, perm_floor)
         permz = np.maximum(permz, perm_floor)
 
     zcorn = _interleave(Zc)
@@ -279,7 +287,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         _write_rle(f, "ACTNUM", actnum.ravel(order="F"))
         _write_array(f, "PORO", poro.ravel(order="F"), "%.4f", per_line=14)
         _write_array(f, "PERMX", permx.ravel(order="F"), fmt_prop, per_line=10)
-        _write_array(f, "PERMY", permx.ravel(order="F"), fmt_prop, per_line=10)
+        _write_array(f, "PERMY", permy.ravel(order="F"), fmt_prop, per_line=10)
         _write_array(f, "PERMZ", permz.ravel(order="F"), fmt_prop, per_line=10)
         if fac is not None:
             _write_rle(f, "FACIES", fac.ravel(order="F"))

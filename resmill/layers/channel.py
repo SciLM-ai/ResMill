@@ -101,7 +101,8 @@ class ChannelLayer(Layer):
                                noise_range_m: tuple | None = None,
                                fining_top_kvkh: float | None = None,
                                event_group: dict | None = None,
-                               levee_ntg_decay_m: float | None = None):
+                               levee_ntg_decay_m: float | None = None,
+                               flow_angle: np.ndarray | None = None):
         """Build ``self.facies / active / poro_mat / perm_mat`` from engine outputs.
 
         Inputs:
@@ -180,6 +181,15 @@ class ChannelLayer(Layer):
           ``ntg``, it is ntg_crest x exp(-d / this), never below the floor. Its
           porosity and permeability are the arithmetic mix of the beds and the
           FF mud. The facies stay LV. None: off.
+        * ``facies_props[3]`` / ``[4]`` may carry ``kxky``, the ratio a of the
+          permeability along to across the channel that deposited the cell
+          (its direction per cell is ``flow_angle``, the engine's). The cell's
+          permeability k stays the geometric mean, k_along = k sqrt(a) and
+          k_across = k / sqrt(a), and the tensor is projected on the grid axes
+          without its off-diagonal term (OPM takes axis permeabilities only):
+          ``self.kx_mult`` = sqrt(a) cos^2 + sin^2 / sqrt(a) and ``self.ky_mult``
+          with cos and sin swapped, written as PERMX = kx_mult x k and PERMY =
+          ky_mult x k. No ``kxky``: both None and PERMY = PERMX.
 
         Combined formula per cell::
 
@@ -404,6 +414,20 @@ class ChannelLayer(Layer):
                 kvkh = kvkh * (float(fining_top_kvkh) / kvkh) ** g
             self.kvkh_mat = kvkh.astype(np.float32)
 
+        # Opt-in horizontal anisotropy along each cell's own channel, projected on the grid axes.
+        self.kx_mult = self.ky_mult = None
+        kxky = {code: float(vals["kxky"]) for code, vals in props.items() if "kxky" in vals}
+        if kxky:
+            if flow_angle is None or not set(kxky) <= {3, 4}:
+                raise ValueError("kxky needs the channel direction: facies 3 and 4 of a simulated layer only")
+            self.kx_mult = np.ones(self.facies.shape, dtype=np.float32)
+            self.ky_mult = np.ones(self.facies.shape, dtype=np.float32)
+            for code, ratio in kxky.items():
+                mask = self.facies == code
+                cos2, root = np.cos(flow_angle[mask]) ** 2, np.sqrt(ratio)
+                self.kx_mult[mask] = root * cos2 + (1.0 - cos2) / root
+                self.ky_mult[mask] = root * (1.0 - cos2) + cos2 / root
+
 
     def create_geology(
         self,
@@ -585,6 +609,7 @@ class ChannelLayer(Layer):
             thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth, thalweg_lag=thalweg_lag,
             path_buffer=path_buffer, continuous_banks=continuous_banks, path_step=path_step,
             event_poro_sd=event_poro_sd, event_log_perm_sd=event_log_perm_sd,
+            record_flow_angle=any("kxky" in dict(v) for v in (facies_props or {}).values()),
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,
@@ -611,6 +636,7 @@ class ChannelLayer(Layer):
             fining_top_kvkh=fining_top_kvkh,
             event_group=engine.event_levels,
             levee_ntg_decay_m=levee_ntg_decay_m,
+            flow_angle=engine.flow_angle,
         )
         # Stash for downstream tooling (parquet writers can record the
         # engine-level multiplier std values, generate.py uses these to

@@ -22,7 +22,7 @@ def _paint_abandoned_kernel(
     chelev_arr, zsiz, dd, facies, chwidth, dist_arr, dwratio,
     mud_prop, lk_ffch, lk_ch, ntg_counter, ffch_counter,
     depth_norm, poro_mult_field, log_perm_offset_field,
-    ev_poro_mult, ev_log_perm_offset,
+    ev_poro_mult, ev_log_perm_offset, flow_angle, record_angle,
 ):
     for myid in range(localx.size):
         idx = mynx[myid]
@@ -102,6 +102,8 @@ def _paint_abandoned_kernel(
                 # abandonment event paints (FFCH plug + CH residual).
                 poro_mult_field[idx, idy, iz] = np.float32(ev_poro_mult)
                 log_perm_offset_field[idx, idy, iz] = np.float32(ev_log_perm_offset)
+                if record_angle:
+                    flow_angle[idx, idy, iz] = np.float32(np.arctan2(vy[idis], vx[idis]))
     return 0
 
 
@@ -122,7 +124,13 @@ def paint_abandoned(
     poro_mult_field: np.ndarray | None = None,
     log_perm_offset_field: np.ndarray | None = None,
     ev_poro_mult: float = 1.0, ev_log_perm_offset: float = 0.0,
+    flow_angle: np.ndarray | None = None,
 ):
+    """Stamp an abandoned channel's mud plug over its residual CH sand.
+
+    ``flow_angle`` (float32, ``(nx, ny, nz)``; None: not recorded) gets the
+    local channel direction of every cell painted, as in ``genchannel``.
+    """
     # Reset ffch_counter unconditionally (item 1.13)
     ffch_counter[0] = 0
     if cx is None or cx.size < 3 or mud_prop <= 0.0:
@@ -149,6 +157,9 @@ def paint_abandoned(
     localx = x[mynx]
     localy = y[myny]
     dd, dist_arr = nearest_refined(cx, cy, localx, localy, 5, 2.0)
+    record_angle = flow_angle is not None
+    if not record_angle:
+        flow_angle = np.empty((1, 1, 1), dtype=np.float32)
 
     _paint_abandoned_kernel(
         nz, mynx, myny, localx, localy, x, y, vx, vy, cy, cx, thalweg,
@@ -156,5 +167,5 @@ def paint_abandoned(
         float(mud_prop), int(lk_ffch), int(lk_ch),
         ntg_counter, ffch_counter,
         depth_norm, poro_mult_field, log_perm_offset_field,
-        float(ev_poro_mult), float(ev_log_perm_offset),
+        float(ev_poro_mult), float(ev_log_perm_offset), flow_angle, record_angle,
     )

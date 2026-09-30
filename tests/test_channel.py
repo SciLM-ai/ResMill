@@ -800,3 +800,52 @@ def test_levee_distance_is_measured_from_the_levees_own_storey():
     poro = np.asarray(layer.poro_mat)
     ntg = np.clip(0.55 * np.exp(-d[lv] / 150.0), 0.05, 1.0)
     assert np.allclose(poro[lv] / pm[lv], ntg * 0.27 + (1 - ntg) * 0.12, rtol=1e-4)
+
+
+def _kxky_layer(tmp_path=None, **kw):
+    layer = ChannelLayer(nx=60, ny=40, nz=12, x_len=2400.0, y_len=1600.0, z_len=12.0, top_depth=0.0)
+    layer.create_geology(seed=3, nlevel=2, ntime=12, probAvulOutside=0.0, probAvulInside=0.0,
+                         mCHdepth=4.0, mCHwdratio=15.0, NTGtarget=0.9, **kw)
+    return layer
+
+
+def test_kxky_follows_the_local_channel_direction():
+    """A ``kxky`` entry in ``facies_props`` (permeability along / across the channel) makes each
+    cell's horizontal permeability anisotropic along the local direction of the channel that
+    deposited it, projected on the grid axes: kx = k (sqrt(r) cos^2 + sin^2 / sqrt(r)) and ky with
+    cos and sin swapped, so kx + ky is the same everywhere and the direction varies round bends."""
+    layer = _kxky_layer(facies_props={3: {"kxky": 2.0}, 4: {"kxky": 2.0}})
+    fac = np.asarray(layer.facies)
+    fill = (fac == 3) | (fac == 4)
+    kx, ky = np.asarray(layer.kx_mult), np.asarray(layer.ky_mult)
+    assert np.allclose(kx[fill] + ky[fill], np.sqrt(2.0) + 1.0 / np.sqrt(2.0), rtol=1e-5)
+    assert np.allclose(kx[~fill], 1.0) and np.allclose(ky[~fill], 1.0)
+    assert np.std(kx[fill]) > 0.05                                   # local, not one direction
+    x, y = np.nonzero(fill.any(axis=2))
+    along_x = np.ptp(x) * layer.dx > np.ptp(y) * layer.dy             # the belt's overall trend
+    assert (np.mean(kx[fill]) > np.mean(ky[fill])) == along_x
+
+
+def test_kxky_is_written_as_permx_and_permy(tmp_path):
+    """The GRDECL export writes PERMX = perm x kx and PERMY = perm x ky when a layer has them."""
+    from resmill.export import to_grdecl
+    layer = _kxky_layer(facies_props={3: {"kxky": 2.0}, 4: {"kxky": 2.0}})
+    to_grdecl(layer, tmp_path / "m.grdecl")
+    permx, permy = _grdecl_array(tmp_path / "m.grdecl", "PERMX"), _grdecl_array(tmp_path / "m.grdecl", "PERMY")
+    perm = np.asarray(layer.perm_mat, dtype=float)[:, :, ::-1].ravel(order="F")
+    kx = np.asarray(layer.kx_mult, dtype=float)[:, :, ::-1].ravel(order="F")
+    ky = np.asarray(layer.ky_mult, dtype=float)[:, :, ::-1].ravel(order="F")
+    assert np.allclose(permx, perm * kx, rtol=1e-4) and np.allclose(permy, perm * ky, rtol=1e-4)
+
+
+def test_kxky_is_off_by_default():
+    """Without ``kxky`` entries a layer has no kx/ky multipliers and records no channel direction."""
+    layer = _kxky_layer()
+    assert layer.kx_mult is None and layer.ky_mult is None
+    assert layer._engine.flow_angle is None
+
+
+def test_kxky_is_refused_where_no_channel_direction_is_recorded():
+    """Only channel-fill facies (3, 4) know the direction of the channel that laid them down."""
+    with pytest.raises(ValueError, match="kxky"):
+        _kxky_layer(facies_props={2: {"kxky": 2.0}})

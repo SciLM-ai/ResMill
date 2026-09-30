@@ -434,6 +434,8 @@ class fluvial:
         # standard deviations of the per-event draw (today's values by default).
         event_poro_sd: float = 0.04,
         event_log_perm_sd: float = 0.12,
+        # Record each CH/LA cell's local channel direction in ``flow_angle`` (for kx/ky).
+        record_flow_angle: bool = False,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -639,6 +641,9 @@ class fluvial:
         self.depth_norm = np.full((nx, ny, nz), 0.5, dtype=np.float32)
         self.poro_mult_field = np.ones((nx, ny, nz), dtype=np.float32)
         self.log_perm_offset_field = np.zeros((nx, ny, nz), dtype=np.float32)
+        # ``flow_angle`` (radians from the x axis, NaN where nothing was painted): the direction
+        # of the channel that last painted each cell, or None when not recorded.
+        self.flow_angle = np.full((nx, ny, nz), np.nan, dtype=np.float32) if record_flow_angle else None
 
         # Per-event std for the K-C-coupled multiplier draws. Small —
         # the dominant scale of variability is now the per-realization
@@ -1510,7 +1515,7 @@ class fluvial:
             poro_mult_field=self.poro_mult_field,
             log_perm_offset_field=self.log_perm_offset_field,
             ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
-            slope_banks=self.continuous_banks,
+            slope_banks=self.continuous_banks, flow_angle=self.flow_angle,
         )
 
     def _stamp_splays(self, n_splay: int, n_lobe_per_splay: int):
@@ -1742,7 +1747,7 @@ class fluvial:
                 depth_norm=self.depth_norm,
                 poro_mult_field=self.poro_mult_field,
                 log_perm_offset_field=self.log_perm_offset_field,
-                ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
+                ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po, flow_angle=self.flow_angle,
             )
 
     def _stamp_abandoned(self, mud_prop: float):
@@ -1771,7 +1776,7 @@ class fluvial:
             depth_norm=self.depth_norm,
             poro_mult_field=self.poro_mult_field,
             log_perm_offset_field=self.log_perm_offset_field,
-            ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
+            ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po, flow_angle=self.flow_angle,
         )
 
     # ----------------------------------------------------------------- main event loop
