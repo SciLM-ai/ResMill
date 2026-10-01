@@ -13,6 +13,35 @@
 
 ### Added
 
+- `drapes` (`ChannelLayer`): mud drapes on the bases of channel storeys
+  (levels), as transmissibility multipliers on cell faces. An element often
+  lies on a thin mud drape that covers part of its base (a median 60 %,
+  under 5 % to over 90 % over 17 outcrops and 154 elements, Barton et al.
+  2010), and in sector models recovery falls from 0.60 without drapes to
+  0.53 at 60 % coverage and 0.20 at 90 % (Barton 2010; Ruetten 2021). A
+  drape of 0.1-1.5 m is thinner than a cell of 0.5-5 m, so painting mud
+  cells would remove up to fifty times the sand it displaces; the drape is
+  put on the faces between a channel-fill cell and the older-storey sand
+  next to it instead, as the literature's sector models do. The multiplier
+  is the thin barrier of a mud layer `t` thick replacing `t` of the rock
+  between the two cells, [1 + (t / h)(ks / kd - 1)]^-1 (`h` the cell size,
+  `ks` the cells' harmonic mean permeability across the face, `kd` the
+  drape's, by default the FF mud's, which seals it). `drapes` is a dict:
+  `coverage`, the share of each storey's base covered; `margin_bias`, how
+  much more of the margin than of the axis is covered; `thickness`; `perm`;
+  `hole_range_m`, the range of the holes (default half a channel width).
+  Facies, porosity and permeability do not change, a later storey that cuts
+  an older base takes its drape with the cells, and the drapes have a random
+  stream of their own, so a run with and without drapes shares one geology.
+  `to_grdecl` writes `mult_x`, `mult_y` and `mult_z` as MULTX, MULTY and
+  MULTZ, times a fault seal's where both exist (OPM Flow replaces a MULTX
+  given twice for one cell, so each keyword is written once, and a later
+  BOX / MULTX over draped cells would erase their drapes). `sample_drapes` draws a
+  reservoir's settings: coverage from the Beta(1.52, 1.21) of Barton's
+  outcrop means cut to 0.05-0.92, the contrast uniform 0-0.34, thickness
+  log-uniform 0.1-1.5 m. A cell's storey (levee fading uses it too) is now
+  looked up once per flow event, not per cell: same result, faster. Off by
+  default: outputs are bit-identical to before and no random number is drawn.
 - `path_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): metres between a channel path's points. Alluvsim spaces
   them one grid cell apart, and its bend rules count points: migration
