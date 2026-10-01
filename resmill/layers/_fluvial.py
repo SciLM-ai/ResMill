@@ -430,6 +430,13 @@ class fluvial:
         # spacing in metres (e.g. a fraction of the channel width) gives the same
         # channel on any grid. None: one grid cell.
         path_step: float | None = None,
+        # Metres between the points of a splay's walk. Alluvsim walks one grid cell per
+        # step and paints a one-cell-wide sheet along the walk, so a splay's volume
+        # follows the cell (x0.65, x1, x1.5 on 12.5, 25, 50 m cells) and so do the
+        # random draws of its walk. With a step in metres the walk, its draws and the
+        # lobe are the same on any grid, and no sheet is painted: the volume is the
+        # lobe's. None: one grid cell, the sheet, Alluvsim's rules.
+        splay_step: float | None = None,
         # Spread of each flow event's rock: relative porosity and log10-permeability
         # standard deviations of the per-event draw (today's values by default).
         event_poro_sd: float = 0.04,
@@ -522,6 +529,7 @@ class fluvial:
         self.thalweg_lag = bool(thalweg_lag)
         self.path_buffer = float(path_buffer)
         self.continuous_banks = bool(continuous_banks)
+        self.splay_step = None if splay_step is None else float(splay_step)
 
         # Hydraulic
         g = 9.8
@@ -1585,19 +1593,21 @@ class fluvial:
                     ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
                 )
                 # Also paint the thin gensplay sheet (`facies = 5` → CS) at
-                # iz_chelev-1 with linear taper (item 1.10/2.26)
-                paint_splay(
-                    cx_lobe, cy_lobe, self.chelev, self.CHdepth,
-                    self.x, self.y,
-                    self.nx, self.ny, self.nz,
-                    self.xsiz, self.ysiz, self.zsiz,
-                    self.facies, self.ntg_counter,
-                    xmn=self.xmn, ymn=self.ymn, lk_cs=CS,
-                    depth_norm=self.depth_norm,
-                    poro_mult_field=self.poro_mult_field,
-                    log_perm_offset_field=self.log_perm_offset_field,
-                    ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
-                )
+                # iz_chelev-1 with linear taper (item 1.10/2.26): one cell wide,
+                # so not with a splay step in metres.
+                if self.splay_step is None:
+                    paint_splay(
+                        cx_lobe, cy_lobe, self.chelev, self.CHdepth,
+                        self.x, self.y,
+                        self.nx, self.ny, self.nz,
+                        self.xsiz, self.ysiz, self.zsiz,
+                        self.facies, self.ntg_counter,
+                        xmn=self.xmn, ymn=self.ymn, lk_cs=CS,
+                        depth_norm=self.depth_norm,
+                        poro_mult_field=self.poro_mult_field,
+                        log_perm_offset_field=self.log_perm_offset_field,
+                        ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
+                    )
 
     def _build_splay_walker(self, x0: float, y0: float, azi0: float, dist: float):
         """One splay random-walk center (port of ``gensplay.for:78-115``).
@@ -1607,7 +1617,7 @@ class fluvial:
         walker leaves the grid or completes ``nst`` steps.
         Length jitter ±10% via ``dist0 = (p-0.5)*dist*0.2 + dist``.
         """
-        st = (self.xsiz + self.ysiz) / 2.0
+        st = (self.xsiz + self.ysiz) / 2.0 if self.splay_step is None else self.splay_step
         p_jitter = float(np.random.uniform())
         dist0 = (p_jitter - 0.5) * dist * 0.2 + dist
         nst = max(int(dist0 / st), 5)

@@ -13,6 +13,23 @@
 
 ### Added
 
+- `splay_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): metres between the points of a splay's walk. Alluvsim walks a
+  splay one grid cell per step, draws as many random numbers as it takes steps,
+  and paints a one-cell-wide thin sheet along the walk, below the lobe. So a
+  splay followed the cell (roadmap item 13): on 12.5, 25 and 50 m cells the same
+  settings gave x0.76, x1 and x1.41 of the splay volume for a lobe 5 channel
+  widths long and 3 wide (six seeds), x0.63, x1 and x1.88 for one half a
+  channel width wide, where the sheet is about 90 % of the splay at 25 m; and
+  every later random draw, so the whole model, differed between grids. With a
+  step in metres the walk, its draws and the lobe are the same on any grid, and
+  the sheet is not painted: a splay is its lobe, and its volume is the lobe's
+  analytic one (the integral of the half-width squared along it,
+  `tests/test_channel.py`). On those three cell sizes the seed means then agree
+  to 0.5 % for the wide lobe (x1.00, x1.00, x1.00) and 3 % for the narrow one
+  (x0.97, x1, x1.00); between 20 m and 40 m cells (six seeds) the volume ratio
+  is 1.01, 0.98 to 1.08 per seed, against 1.50, 0.99 to 2.10, without it. `None`,
+  the default, keeps the cell and the sheet: outputs are bit-identical to before.
 - `path_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): metres between a channel path's points. Alluvsim spaces
   them one grid cell apart, and its bend rules count points: migration

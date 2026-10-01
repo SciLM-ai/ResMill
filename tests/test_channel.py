@@ -876,3 +876,101 @@ def test_every_writer_gets_permx_and_permy_from_one_place(tmp_path):
         assert np.allclose(_grdecl_array(tmp_path / "m.grdecl", key), expected.ravel(order="F"), rtol=1e-5)
     iso_x, iso_y = horizontal_permeability(g)
     assert iso_x is iso_y                                          # no kx/ky: PERMY is PERMX
+
+
+# === Splays in metres (splay_step) ===
+
+SPLAY_KW = dict(
+    nlevel=2, ntime=[12, 12], ntime_per_level=True, probAvulOutside=0.0, probAvulInside=0.0, NTGtarget=0.99,
+    mCHdepth=5.0, mCHwdratio=15.0, mdistMigrate=8.0, path_step=15.0, path_buffer=250.0, azimuth=-15.0,
+    mCSnum=1.0, stdevCSnum=0.5, mCSnumlobe=2.0,
+    mCSLOLL=375.0, mCSLOl=187.5, mCSLOWW=225.0, mCSLOw=150.0, mCSLO_hwratio=0.0067, mCSLO_dwratio=0.0044,
+    stdevCSLOLL=94.0, stdevCSLOl=47.0, stdevCSLOWW=56.0, stdevCSLOw=37.5,
+    stdevCSLO_hwratio=0.0017, stdevCSLO_dwratio=0.0011)
+"""A 75 m wide river with splay lobes 375 m long and 225 m wide, about 1.25 m thick at their middle
+(5 W x 3 W x 0.25 H, the size of a fluvial crevasse splay)."""
+
+
+def _splay_layer(cell, seed, **kw):
+    """The 2.4 x 1.6 km box of ``SPLAY_KW`` on ``cell`` m cells (2 m thick layers)."""
+    layer = ChannelLayer(nx=int(2400.0 / cell), ny=int(1600.0 / cell), nz=12, x_len=2400.0,
+                         y_len=1600.0, z_len=24.0, top_depth=0.0)
+    layer.create_geology(seed=seed, **{**SPLAY_KW, **kw})
+    return layer
+
+
+def _splay_volume(layer):
+    """Crevasse-splay cells as a fraction of the volume."""
+    return float((np.asarray(layer.facies) == 1).mean())
+
+
+def test_splay_step_gives_the_same_splays_on_any_grid():
+    """Alluvsim walks a splay one grid cell per step and paints a one-cell-wide sheet along
+    the walk, so a splay's volume followed the cell: on 12.5, 25 and 50 m cells the same
+    settings gave x0.78, x1 and x1.23 of the splay volume (four seeds, a 5 W x 3 W lobe)
+    and x0.68, x1, x1.92 for a 0.5 W wide lobe. With ``splay_step`` (metres) the walk, its
+    random draws and the lobe are the same on every grid and nothing is painted a cell wide: the volume is the
+    lobe's, within 5 % on 20 m and 40 m cells (seed means; per seed 0.98 to 1.08), against a
+    ratio of 1.5 without it (1.0 to 2.1 per seed; the test asks for more than 1.25)."""
+    base = {s: [_splay_volume(_splay_layer(cell, s)) for cell in (20.0, 40.0)] for s in (1, 2, 3)}
+    step = {s: [_splay_volume(_splay_layer(cell, s, splay_step=15.0)) for cell in (20.0, 40.0)]
+            for s in (1, 2, 3)}
+    ratio = lambda runs: np.mean([v[1] for v in runs.values()]) / np.mean([v[0] for v in runs.values()])
+    assert ratio(base) > 1.25
+    assert ratio(step) == pytest.approx(1.0, abs=0.05)
+
+
+def test_splay_step_walks_the_same_metres_on_any_grid(monkeypatch):
+    """With ``splay_step`` a splay's walk has its points that many metres apart and is the same
+    line on 20 m and 40 m cells (the walk, not only the volume)."""
+    from resmill.layers import _fluvial
+    walks = {}
+    original = _fluvial.fluvial._build_splay_walker
+
+    def record(self, x0, y0, azi0, dist):
+        cx, cy = original(self, x0, y0, azi0, dist)
+        walks.setdefault(self.xsiz, []).append(None if cx is None else (cx.copy(), cy.copy()))
+        return cx, cy
+
+    monkeypatch.setattr(_fluvial.fluvial, "_build_splay_walker", record)
+    for cell in (20.0, 40.0):
+        _splay_layer(cell, 4, splay_step=15.0)
+    assert len(walks[20.0]) == len(walks[40.0]) > 3
+    for a, b in zip(walks[20.0], walks[40.0]):
+        assert (a is None) == (b is None)
+        if a is not None:
+            np.testing.assert_allclose(a[0], b[0])
+            np.testing.assert_allclose(a[1], b[1])
+            np.testing.assert_allclose(np.hypot(np.diff(a[0]), np.diff(a[1])), 15.0)
+
+
+def test_a_splays_volume_is_its_lobes_analytic_volume_on_any_cell():
+    """``paint_lobe`` stamps ``y (hw + dw) (1 - (d / y)^2)`` thick at distance d from the walk, y
+    the lobe's half-width at that distance along it (a parabola out to ``l``, then an ellipse to
+    ``LL``): for a straight walk the volume is (4/3) (hw + dw) times the integral of y^2 along
+    the lobe, plus the half paraboloid (pi / 4) (hw + dw) y0^3 the nearest-point rule rounds
+    behind the walk's first point (y0 the half-width there), whatever the cells (here 4 m, 10 m
+    and 25 m wide, 0.1 m thick)."""
+    from scipy.integrate import quad
+    from resmill.layers._calc_lobe_splay import paint_lobe
+    LL, WW, l, w, hw, dw = 400.0, 160.0, 160.0, 100.0, 0.02, 0.01
+    half, w_half = WW / 2.0, w / 2.0
+
+    def y(s):
+        if s <= l:
+            return half - (half - w_half) * (1.0 - s / l) ** 2
+        return half * np.sqrt(max(0.0, 1.0 - ((s - l) / (LL - l)) ** 2))
+
+    expected = (4.0 / 3.0) * (hw + dw) * (quad(lambda s: y(s) ** 2, 0.0, l)[0]
+                                           + quad(lambda s: y(s) ** 2, l, LL)[0])
+    expected += np.pi / 4.0 * (hw + dw) * y(0.0) ** 3
+    for cell in (4.0, 10.0, 25.0):
+        nx, ny, dz = int(1000.0 / cell), int(400.0 / cell), 0.1
+        nz = 100
+        facies = np.full((nx, ny, nz), -1, dtype=np.int8)
+        x = (np.arange(nx) + 0.5) * cell
+        y_grid = (np.arange(ny) + 0.5) * cell
+        s = np.arange(0.0, LL + 1.0, 2.0)                       # a straight walk along x
+        paint_lobe(100.0 + s, np.full_like(s, 200.0), LL, WW, l, w, hw, dw, 5.0, x, y_grid, nx, ny, nz,
+                   cell, cell, dz, facies, np.zeros(1, dtype=np.int64), xmn=cell / 2, ymn=cell / 2)
+        assert (facies == 1).sum() * cell * cell * dz == pytest.approx(expected, rel=0.015)
