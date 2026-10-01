@@ -18,10 +18,22 @@ calibration. A fault draws in this order, so a seed reproduces a tree: one unifo
 above 0, then one log-uniform value (enhancing) or one normal (seal, with a ``scatter``); with the options off nothing
 is drawn.
 
-Juxtaposition needs nothing here: the simulator connects only the cells that touch. :func:`fault_blocks` splits the
-top surface into blocks bounded by sealing faces (multiplier below 0.01, Norne's sealing range) or by a throw beyond
-the reservoir's thickness (nothing left to touch), and reports each block's trap: crest, spill depth and point, area
-and height.
+Juxtaposition needs nothing here: the simulator connects only the cells that touch. Over geological time a fault holds
+oil back only up to the column its capillary seal supports, however low its multiplier (which sets flow in production),
+and :func:`fault_blocks` takes the contacts of the fault blocks from that. A face between two net cells (permeability
+from ``Capillary.net_perm``) holds the pressure :func:`seal_capacity` gives from its SGR and its burial below the
+mudline: the upper envelope of Bretan, Yielding & Jones (2003), :func:`bretan_pressure`, 10^(100 SGR/27 - C) bar with C
+= 0.5, 0.25 and 0 below 3, at 3-3.5 and above 3.5 km, capped at a plateau (oil: near 3 bar in their data, 6 bar or more
+in Childs et al. 2009; above 3.5 km oil is uncalibrated, so the plateau holds there), with a floor below an SGR onset
+(sand on sand, 0.15-0.25: the juxtaposition leak) or without the membrane (juxtaposition only, as Murray et al. 2019
+back-analyse). A bed against a non-net one seals whatever the SGR. That pressure is an oil column H = 1e5 P / (g
+delta_rho) m, so a face at depth z leaks once the contact lies below z + H, and an edge between two map columns below
+the lowest such level of its faces (a wall when it has none: a throw beyond the reservoir, or only sand against shale).
+A priority flood from the map's edge crosses a faulted edge at the higher of that level and the next column's depth, so
+the level it reaches at a block's crest is the block's contact, the shallower of its spill and its leak point (the
+weakest window: Bretan et al. 2003, after Gibson 1994, Skerlec 1999 and Childs et al. 2009), and blocks the flood joins
+below their common level are one accumulation with one contact. The values of :class:`Capillary` are the research's
+central values (SGR onset 0.2, floor 0.5 bar, plateau 4 bar for oil); the dataset draws them per tree.
 """
 import math
 from dataclasses import dataclass
@@ -33,7 +45,7 @@ from scipy.sparse import csgraph
 from .faults import face_records
 from .structure import _spill_levels
 
-SEALING = 0.01                      # a face this tight bounds a fault block (Norne's history-matched sealing range)
+FACE_RECORD = [("fault", int), ("axis", int), ("i", int), ("j", int), ("depth", float), ("sgr", float), ("perm", float)]
 
 
 @dataclass
@@ -60,6 +72,28 @@ class Seal:
             raise ValueError("Seal: " + "; ".join(problems))
 
 
+@dataclass
+class Capillary:
+    """The capillary seal of the fault faces (see the module docstring); defaults are the research's central values."""
+
+    delta_rho: float                # water minus hydrocarbon density at the trap (kg/m3)
+    mudline: float = 0.0            # depth of the seabed or ground (m): burial = depth - mudline
+    onset: float = 0.2              # SGR below which a face holds only the floor
+    floor: float = 0.5              # what a face holds below the onset or without the membrane (bar)
+    plateau: float = 4.0            # the most a face holds (bar)
+    membrane: bool = True           # False: juxtaposition only, every face holds the floor
+    net_perm: float = 1.0           # permeability from which a cell is net reservoir (mD)
+
+    def __post_init__(self):
+        problems = [msg for bad, msg in (
+            (not self.delta_rho > 0.0, "delta_rho must be positive"),
+            (not 0.0 <= self.onset <= 1.0, "onset must lie in [0, 1]"),
+            (not 0.0 <= self.floor <= self.plateau, "floor and plateau must satisfy 0 <= floor <= plateau"),
+        ) if bad]
+        if problems:
+            raise ValueError("Capillary: " + "; ".join(problems))
+
+
 def fault_rock_permeability(sgr, displacement):
     """Fault-rock permeability (mD) from the shale gouge ratio and the displacement (m) (Manzocchi et al. 1999)."""
     d = np.maximum(np.asarray(displacement, dtype=float), 1e-3)
@@ -71,6 +105,24 @@ def knott_seal_probability(dn):
     Sea counts averaged per class (over 0.9 and all for Dn >= 1; 1 in 2 and 82 % for 0.5-1; 1 in 3 to 1 in 2 and 66 %
     for 0.25-0.5; 1 in 3 and 14 % below 0.25)."""
     return 0.92 if dn >= 1.0 else 0.66 if dn >= 0.5 else 0.5 if dn >= 0.25 else 0.24                  # [J] (averages)
+
+
+def bretan_pressure(sgr, burial):
+    """Pressure (bar) a fault face supports by capillary seal: the upper envelope of Bretan, Yielding & Jones (2003,
+    eq. 1), 10^(100 SGR/27 - C) with SGR a fraction and burial in m, C = 0.5 below 3,000 m, 0.25 to 3,500 m and 0 deeper
+    (cementation above about 90 C, 3 km, stiffens the fault rock)."""
+    burial = np.asarray(burial, dtype=float)
+    c = np.where(burial < 3000.0, 0.5, np.where(burial <= 3500.0, 0.25, 0.0))
+    return 10.0 ** (100.0 * np.asarray(sgr, dtype=float) / 27.0 - c)
+
+
+def seal_capacity(sgr, burial, cap):
+    """Pressure (bar) a fault face between two net cells holds, from its SGR (a fraction) and burial (m): the floor of
+    ``cap`` below its onset or without the membrane, else :func:`bretan_pressure` up to the plateau, which is what a
+    face holds above 3,500 m burial, where oil is uncalibrated (the envelope's C = 0 class is gas')."""
+    sgr, burial = np.asarray(sgr, dtype=float), np.asarray(burial, dtype=float)
+    held = np.where(burial > 3500.0, cap.plateau, np.minimum(bretan_pressure(sgr, burial), cap.plateau))
+    return np.where((sgr < cap.onset) | (not cap.membrane), cap.floor, held)
 
 
 def _column_pair(zc, i, j, face):
@@ -94,7 +146,11 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
     order. Returns ``MULTX``, ``MULTY``, ``MULTZ`` (nx, ny, nz; a cell's + face, as the GRDECL keywords mean), the
     faces each fault listed (``listed``), and per fault its ``mode`` ("seal", "open" or "enhancing"), ``dn``, ``sgr``
     and ``mult`` per face and ``effective``, the faces' mean weighted by the transmissibility each would have without
-    the fault: the one multiplier for the whole fault (a MULTFLT) that passes the same flow.
+    the fault: the one multiplier for the whole fault (a MULTFLT) that passes the same flow. ``face_records`` has one
+    row per face with a multiplier, for :func:`fault_blocks`: its ``fault`` (index in ``faces``), the map edge it counts
+    for (``axis`` 0 for X, 1 for Y, and the lower-index column ``i``, ``j``; a Z face, a tread inside one column, counts
+    for the nearest lateral edge of its fault, as for its throw), its ``depth`` (m, mid), its ``sgr`` and ``perm``, the
+    lower of the two cells' permeabilities across the face's direction (mD).
     """
     nx, ny, nz = act.shape
     rng = np.random.default_rng(seal.seed)
@@ -103,8 +159,8 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
     cell = 0.25 * (zc[0::2, 0::2] + zc[1::2, 0::2] + zc[0::2, 1::2] + zc[1::2, 1::2])
     tops, bots = cell[..., :-1], cell[..., 1:]
     gross = thickness if thickness is not None else float(np.median((zc[:, :, -1] - zc[:, :, 0])))
-    info = []
-    for fault, side in faces:
+    info, rows = [], []
+    for n, (fault, side) in enumerate(faces):
         records = face_records("F", side, zc, act)
         lateral = {}                                                     # the throw across each column pair
         for _, i1, _, j1, _, _, _, face in records:
@@ -129,9 +185,9 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
             i, j = i1 - 1, j1 - 1
             if face == "Z":
                 near = min(lateral, key=lambda key: abs(key[1] - i1) + abs(key[2] - j1)) if lateral else None
-                throw = lateral[near] if near else 0.0
             else:
-                throw = lateral[(face, i1, j1)]
+                near = (face, i1, j1)
+            throw = lateral[near] if near else 0.0
             for k in range(k1 - 1, k2):
                 if face == "Z":
                     below = [kk for kk in range(k + 1, nz) if act[i, j, kk]]
@@ -169,43 +225,107 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     listed[key][i, j, k] = True
                 sgrs.append(sgr)
                 mults.append(mult)
+                rows.append((n, "XY".index(near[0]), near[1] - 1, near[2] - 1, mid, sgr, min(ki, kj)))
                 weights.append(area / (max(li, 1e-6) / ki + max(lj, 1e-6) / kj))
         info.append(dict(name=fault.name, mode=mode, dn=dn, sgr=sgrs, mult=mults,
                          effective=float(np.dot(weights, mults) / sum(weights)) if sum(weights) > 0.0 else 1.0))
     out["faults"] = info
     out["listed"] = listed
+    out["face_records"] = np.array(rows, dtype=FACE_RECORD)
     return out
 
 
-def fault_blocks(zc, act, faces, mults, dx, dy):
-    """The top surface's fault blocks and each block's trap.
+EDGES = ((np.s_[:-1], np.s_[1:]), (np.s_[:, :-1], np.s_[:, 1:]))      # the cells either side of an x edge, a y edge
 
-    Two neighbouring columns lie in different blocks where a fault separates their tops and no connection between
-    them across it, at any depth, is open (every listed face's multiplier in ``mults``, from
-    :func:`face_multipliers`, below :data:`SEALING`, or no face at all: a throw beyond the reservoir leaves nothing to
-    touch). Oil spills only between columns of one block and over the map's edge; a block sealed all round fills to
-    its deepest point.
+
+def _pass_levels(faces, k_top, mults, capillary):
+    """The depth below which oil crosses each edge between neighbouring map columns, as arrays for the x edges (nx-1,
+    ny) and the y edges (nx, ny-1). An edge nothing splits (the tops of its two columns lie on one side of every fault)
+    is free, -inf. Where a fault splits the tops it is a wall, +inf, until a face between two net cells leaks: the
+    lowest of their levels, depth + H, with H the oil column ``capillary`` says the face holds."""
+    nx, ny = k_top.shape
+    gates = [np.full((nx - 1, ny), -np.inf), np.full((nx, ny - 1), -np.inf)]
+    for _, side in faces:
+        s0 = np.take_along_axis(side, k_top[..., None], axis=2)[..., 0]
+        for gate, (lo, hi) in zip(gates, EDGES):
+            gate[s0[lo] * s0[hi] == -1] = np.inf
+    rec = mults["face_records"]
+    rec = rec[rec["perm"] >= capillary.net_perm]
+    leak = rec["depth"] + 1e5 * seal_capacity(rec["sgr"], rec["depth"] - capillary.mudline, capillary) / (
+        9.81 * capillary.delta_rho)
+    for axis, gate in enumerate(gates):
+        here = rec["axis"] == axis
+        np.minimum.at(gate, (rec["i"][here], rec["j"][here]), leak[here])
+    return gates
+
+
+def _contact_exit(trap, level, spill, depth, gates):
+    """How the contact ``level`` of ``trap`` is set: ``(spills, point)``. A flood enters the trap over a cell edge at
+    the higher of the edge's pass level and the level of the cell outside; the edges where that is ``level`` set the
+    contact. If one of them is unfaulted the block spills over its own rim (``spills``), otherwise the oil leaves across
+    a fault. ``point`` is the shallowest cell outside the trap over those edges (the unfaulted ones when there are any),
+    None when there are none: nothing reaches the trap."""
+    hits = []
+    for gate, (lo, hi) in zip(gates, EDGES):
+        outside = np.where(trap[lo] & ~trap[hi], spill[hi], np.where(trap[hi] & ~trap[lo], spill[lo], np.inf))
+        hits.append(np.maximum(outside, gate) == level)
+    free = [hit & (gate == -np.inf) for hit, gate in zip(hits, gates)]
+    spills = free[0].any() or free[1].any()
+    ring = np.zeros_like(trap)
+    for edges, (lo, hi) in zip(free if spills else hits, EDGES):
+        ring[lo] |= trap[hi] & edges
+        ring[hi] |= trap[lo] & edges
+    ring &= ~trap
+    point = np.unravel_index(int(np.argmin(np.where(ring, depth, np.inf))), depth.shape) if ring.any() else None
+    return bool(spills), point
+
+
+def _share_contacts(blocks, gates):
+    """Number the accumulations in place (``group``): blocks whose traps meet across an edge that leaks at or above both
+    their contacts are joined by the flood, so they share one contact and one number (counted from the shallowest crest;
+    ``blocks`` is sorted by it)."""
+    where = np.full(blocks[0]["mask"].shape, -1)
+    for b, blk in enumerate(blocks):
+        where[blk["mask"]] = b
+    contact = np.array([blk["contact_depth"] for blk in blocks])
+    pairs = []
+    for gate, (lo, hi) in zip(gates, EDGES):
+        a, b = where[lo], where[hi]
+        join = (a >= 0) & (b >= 0) & (a != b) & (gate <= np.minimum(contact[a], contact[b]))
+        pairs.append(np.stack([a[join], b[join]]))
+    a, b = np.concatenate(pairs, axis=1)
+    _, comp = csgraph.connected_components(sparse.coo_matrix((np.ones(a.size), (a, b)), shape=(len(blocks),) * 2),
+                                           directed=False)
+    first = {}
+    for blk, c in zip(blocks, comp):
+        blk["group"] = first.setdefault(c, len(first))
+
+
+def fault_blocks(zc, act, faces, mults, dx, dy, capillary):
+    """The top surface's fault blocks, each block's contact, and the blocks that share one (see the module docstring).
+
+    Two neighbouring columns lie in different blocks where a fault separates their tops. Each such edge leaks below the
+    lowest of its net-on-net faces' levels, depth + H (``capillary``, and ``mults["face_records"]`` from
+    :func:`face_multipliers`), a wall where it has none. The spill flood from the map's edge crosses it at the higher of
+    that level and the next column's depth; the level it reaches at a block's crest is the block's contact, and the
+    cells shallower than it that join the crest are its trap (a block nothing reaches fills to its deepest point).
     Returns one dict per block holding a trap, shallowest crest first: ``crest`` (i, j), ``crest_depth``,
-    ``spill_depth``, ``spill`` (i, j, or None when sealed all round), ``area`` (m2), ``height`` (m) and ``mask``.
+    ``contact_depth``, ``limited_by`` ("spill": the block's own rim holds the contact; "leak": the oil leaves across a
+    fault, into another block or past its weakest window; "sealed": nothing reaches the block), ``point`` (i, j: the
+    column beside the trap the oil leaves into, None when sealed), ``area`` (m2), ``height`` (m), ``mask`` and
+    ``group``: blocks whose traps meet across a fault that leaks at or above their contact are one accumulation, with
+    one contact and one group number.
     """
-    nx, ny, nz = act.shape
+    nx, ny = act.shape[:2]
     k_top = np.argmax(act, axis=2)
     alive = act.any(axis=2)
     top = 0.25 * (zc[0::2, 0::2] + zc[1::2, 0::2] + zc[0::2, 1::2] + zc[1::2, 1::2])
     depth = np.where(alive, np.take_along_axis(top, k_top[..., None], axis=2)[..., 0], np.nan)
-    open_x = np.where(mults["listed"]["MULTX"], mults["MULTX"], -np.inf).max(axis=2) >= SEALING
-    open_y = np.where(mults["listed"]["MULTY"], mults["MULTY"], -np.inf).max(axis=2) >= SEALING
-    wall_x, wall_y = np.zeros((nx, ny), dtype=bool), np.zeros((nx, ny), dtype=bool)
-    for _, side in faces:
-        s0 = np.take_along_axis(side, k_top[..., None], axis=2)[..., 0]
-        wall_x[:-1] |= (s0[:-1] * s0[1:] == -1) & ~open_x[:-1]
-        wall_y[:, :-1] |= (s0[:, :-1] * s0[:, 1:] == -1) & ~open_y[:, :-1]
-    wall_x[-1], wall_y[:, -1] = True, True
-    filled = np.where(alive, depth, np.inf)
-    spill = _spill_levels(filled, wall_x[:-1], wall_y[:, :-1])
+    gates = _pass_levels(faces, k_top, mults, capillary)
+    spill = _spill_levels(np.where(alive, depth, np.inf), *gates)
     idx = np.arange(nx * ny).reshape(nx, ny)
-    ex = ~wall_x[:-1] & alive[:-1] & alive[1:]
-    ey = ~wall_y[:, :-1] & alive[:, :-1] & alive[:, 1:]
+    ex = (gates[0] == -np.inf) & alive[:-1] & alive[1:]
+    ey = (gates[1] == -np.inf) & alive[:, :-1] & alive[:, 1:]
     rows = np.concatenate([idx[:-1][ex], idx[:, :-1][ey]])
     cols = np.concatenate([idx[1:][ex], idx[:, 1:][ey]])
     graph = sparse.coo_matrix((np.ones(rows.size), (rows, cols)), shape=(nx * ny, nx * ny)).tocsr()
@@ -224,15 +344,13 @@ def fault_blocks(zc, act, faces, mults, dx, dy):
         trap = full.reshape(nx, ny) == full.reshape(nx, ny)[crest] if below[crest] else np.zeros_like(cells)
         if not trap.any():
             continue
-        ring = np.zeros_like(trap)
-        ring[:-1] |= trap[1:] & ~wall_x[:-1]
-        ring[1:] |= trap[:-1] & ~wall_x[:-1]
-        ring[:, :-1] |= trap[:, 1:] & ~wall_y[:, :-1]
-        ring[:, 1:] |= trap[:, :-1] & ~wall_y[:, :-1]
-        ring &= ~trap & alive
-        point = (np.unravel_index(int(np.argmin(np.where(ring, depth, np.inf))), depth.shape)
-                 if np.isfinite(spill[crest]) and ring.any() else None)
+        spills, point = _contact_exit(trap, level, spill, depth, gates)
         blocks.append(dict(crest=(int(crest[0]), int(crest[1])), crest_depth=float(depth[crest]),
-                           spill_depth=float(level), spill=None if point is None else (int(point[0]), int(point[1])),
+                           contact_depth=float(level),
+                           limited_by="sealed" if not np.isfinite(spill[crest]) else "spill" if spills else "leak",
+                           point=None if point is None else (int(point[0]), int(point[1])),
                            area=float(trap.sum()) * dx * dy, height=float(level - depth[crest]), mask=trap))
-    return sorted(blocks, key=lambda blk: blk["crest_depth"])
+    blocks.sort(key=lambda blk: blk["crest_depth"])
+    if blocks:
+        _share_contacts(blocks, gates)
+    return blocks

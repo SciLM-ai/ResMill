@@ -1,12 +1,15 @@
-"""Fault seal per cell face (shale gouge ratio, Manzocchi transmissibility) and fault blocks."""
+"""Fault seal per cell face (shale gouge ratio, Manzocchi transmissibility), its spread over faults, and fault blocks
+by capillary seal capacity."""
 import math
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from resmill import structure as st
 from resmill.export import _build_geometry, to_grdecl
-from resmill.fault_seal import Seal, fault_blocks, fault_rock_permeability, face_multipliers, knott_seal_probability
+from resmill.fault_seal import (Capillary, Seal, bretan_pressure, fault_blocks, fault_rock_permeability,
+                                face_multipliers, knott_seal_probability, seal_capacity)
 from resmill.faults import Fault, face_records
 from resmill.layers.base import Layer
 
@@ -238,27 +241,234 @@ def test_to_grdecl_writes_the_spread_of_the_faults(tmp_path):
     assert np.all(multx(Seal(vsh=vsh, p_open=1.0, seed=1)) == 1.0)
 
 
-def dome_model(nx=80, ny=60, dx=50.0):
-    layer = Layer(nx, ny, 10, nx * dx, ny * dx, 30.0, top_depth=TOP, kzkx=0.1)
+def dome_model(nx=80, ny=60, dx=50.0, top=TOP):
+    layer = Layer(nx, ny, 10, nx * dx, ny * dx, 30.0, top_depth=top, kzkx=0.1)
     layer.poro_mat = np.full((nx, ny, 10), 0.2)
     layer.perm_mat = np.full((nx, ny, 10), 100.0)
     fold = st.closure(area=4e6, height=80.0, aspect=1.5, center=(0.5 * nx * dx, 0.5 * ny * dx))
     return layer, fold
 
 
-def test_a_sealing_fault_through_the_crest_splits_the_trap_into_two_blocks():
-    """A fault that seals, through the crest, makes two blocks with their own crests and spill points; an open one
-    leaves one trap, the same as without the fault."""
+CREST_FAULT = dict(center=(2000.0, 1500.0), strike=90.0, length=20000.0, dip=89.0, drag=(0.0, 0.0))
+
+
+def dome_blocks(vsh=0.9, perm=100.0, throw=8.0, faults=None, top=TOP, **capillary):
+    """``fault_blocks`` of the 30 m thick dome (``dome_model``) cut through its crest by a fault of ``throw`` m, or by
+    ``faults``, with clay fraction ``vsh`` and permeability ``perm`` (a number, or one per layer from the top) under
+    ``Capillary(delta_rho=300, **capillary)``: the ``blocks``, the multipliers ``mults``, ``cap`` and the top
+    ``depth``."""
+    layer, fold = dome_model(top=top)
+    faults = faults or [Fault(throw=throw, name="F1", **CREST_FAULT)]
+    faces = []
+    _, _, zc, act = _build_geometry([layer], structure=fold, faults=faults, _faces=faces)
+    full = lambda v: np.broadcast_to(np.asarray(v, dtype=float), act.shape)
+    mults = face_multipliers(faces, zc, act, full(vsh), (full(perm),) * 3, 50.0, 50.0, Seal())
+    cap = Capillary(**{"delta_rho": 300.0, **capillary})
+    depth = 0.25 * (zc[0::2, 0::2] + zc[1::2, 0::2] + zc[0::2, 1::2] + zc[1::2, 1::2])[..., 0]
+    blocks = fault_blocks(zc, act, faces, mults, 50.0, 50.0, cap)
+    return SimpleNamespace(blocks=blocks, mults=mults, cap=cap, depth=depth)
+
+
+def two_blocks(res):
+    """The two blocks of a fault through the crest, the upthrown (shallower crest) first."""
+    big = [b for b in res.blocks if b["area"] > 0.2e6]
+    assert len(big) == 2
+    return big
+
+
+def column(res):
+    """The oil column (m) each net face of the fault holds, from its capacity: H = 1e5 P / (g delta_rho)."""
+    rec = res.mults["face_records"]
+    rec = rec[rec["perm"] >= res.cap.net_perm]
+    return 1e5 * seal_capacity(rec["sgr"], rec["depth"] - res.cap.mudline, res.cap) / (9.81 * res.cap.delta_rho)
+
+
+def test_seal_capacity_follows_bretans_envelope():
+    """Bretan, Yielding & Jones (2003) eq. 1, 10^(100 SGR/27 - C) bar with C = 0.5 below 3 km burial and 0.25 for
+    3-3.5 km (the research's table: 1.74 bar at SGR 20 % and 4.08 at 30 %, then 3.10 at 20 % and C 0.25): at most the
+    plateau, the floor below the onset or without the membrane, and the plateau above 3.5 km, where oil is
+    uncalibrated."""
+    wide = Capillary(delta_rho=300.0, plateau=100.0)
+    plain = Capillary(delta_rho=300.0)
+    assert seal_capacity(0.20, 2000.0, wide) == pytest.approx(1.74, abs=0.005)
+    assert seal_capacity(0.30, 2000.0, wide) == pytest.approx(4.08, abs=0.005)
+    assert seal_capacity(0.20, 3200.0, wide) == pytest.approx(3.10, abs=0.005)
+    assert seal_capacity(0.30, 2000.0, plain) == plain.plateau
+    assert seal_capacity(0.19, 2000.0, wide) == wide.floor
+    assert seal_capacity(0.90, 2000.0, Capillary(delta_rho=300.0, membrane=False)) == plain.floor
+    assert seal_capacity(0.25, 4000.0, plain) == plain.plateau
+    sgr, burial = np.array([0.1, 0.2, 0.3]), np.array([2000.0, 3200.0, 4000.0])
+    assert seal_capacity(sgr, burial, wide) == pytest.approx([0.5, 3.10, 100.0], abs=0.005)
+
+
+def test_bretans_envelope_steps_up_by_burial_class():
+    """Eq. 1 at SGR 0 gives 0.32, 0.56 and 1.00 bar for burial below 3 km, at 3-3.5 km and above 3.5 km (the research's
+    table); the classes' edges belong to the shallower class."""
+    steps = bretan_pressure(0.0, [2999.0, 3000.0, 3500.0, 3501.0])
+    assert steps == pytest.approx([0.316, 0.562, 0.562, 1.0], abs=0.001)
+    assert bretan_pressure(0.0, 2000.0) == pytest.approx(0.316, abs=0.001) and bretan_pressure(0.0, 4000.0) == 1.0
+
+
+@pytest.mark.parametrize("kw", [dict(delta_rho=0.0), dict(delta_rho=-50.0), dict(onset=1.2), dict(floor=-0.1),
+                                dict(plateau=0.2)])
+def test_capillary_values_that_make_no_sense_are_refused(kw):
+    with pytest.raises(ValueError):
+        Capillary(**{"delta_rho": 300.0, **kw})
+
+
+def test_every_face_with_a_multiplier_leaves_a_record_on_a_lateral_edge():
+    """fault_blocks needs each face's depth, SGR and permeability: one record per face that got a multiplier, a Z face
+    (a tread inside one column) on the nearest lateral (X or Y) edge of its fault, as for its throw."""
+    layer, vsh = cake(beds=4)
+    f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=6.0, dip=70.0, name="F1")
+    faces = []
+    _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
+    perm = np.asarray(layer.perm_mat)[:, :, ::-1]
+    out = face_multipliers(faces, zc, act, vsh, (perm, perm, perm), DX, DX, Seal())
+    rec, info = out["face_records"], out["faults"][0]
+    raw = face_records("F1", faces[0][1], zc, act)
+    lateral = list(dict.fromkeys((face, i, j) for _, i, _, j, _, _, _, face in raw if face != "Z"))
+    expected = []                                     # the edge of every face: its own, or for a Z face the nearest
+    for _, i, _, j, _, k1, k2, face in raw:
+        edge = min(lateral, key=lambda e: abs(e[1] - i) + abs(e[2] - j)) if face == "Z" else (face, i, j)
+        expected += [("XY".index(edge[0]), edge[1] - 1, edge[2] - 1)] * (k2 - k1 + 1)
+    assert any(face == "Z" for *_, face in raw) and len(rec) == len(info["sgr"]) == len(expected)
+    assert sorted(zip(rec["axis"], rec["i"], rec["j"])) == sorted(expected)
+    assert np.array_equal(rec["sgr"], info["sgr"]) and np.all((rec["depth"] > TOP) & (rec["depth"] < TOP + 50.0))
+    assert set(np.unique(rec["perm"])) == {0.01, 100.0} and np.all(rec["fault"] == 0)
+
+
+def test_a_fault_that_holds_gives_its_blocks_their_own_contacts():
+    """Shale-rich gouge (SGR 0.9, the plateau of 4 bar: 136 m of oil at delta_rho 300, more than the trap's 80 m) holds
+    the contact difference of a fault through the crest: each block fills to its own spill point, so the contacts differ
+    by the 8 m throw, more than 0 and at most the column the weakest face holds, and the blocks are two
+    accumulations."""
+    res = dome_blocks(vsh=0.9)
+    up, down = two_blocks(res)
+    gap = down["contact_depth"] - up["contact_depth"]
+    assert column(res).min() == pytest.approx(135.9, abs=0.1)
+    assert 0.0 < gap <= column(res).min() and gap == pytest.approx(8.0, abs=0.5)
+    assert up["group"] != down["group"] and up["limited_by"] == down["limited_by"] == "spill"
+    for blk in (up, down):
+        assert blk["height"] == pytest.approx(blk["contact_depth"] - blk["crest_depth"]) and blk["height"] > 0.0
+
+
+def test_a_fault_that_does_not_hold_leaves_one_accumulation():
+    """Clean sand on sand (SGR below the onset) holds the floor, 0.5 bar = 17 m of oil at delta_rho 300: the contacts
+    differ by at most that (here not at all, the weakest window lies far above the spill point), and the blocks share
+    one contact: the upthrown block spills, the downthrown one leaks into it across the fault."""
+    res = dome_blocks(vsh=0.0)
+    up, down = two_blocks(res)
+    assert column(res).max() == pytest.approx(17.0, abs=0.1)
+    assert abs(down["contact_depth"] - up["contact_depth"]) <= column(res).max()
+    assert up["group"] == down["group"]
+    assert (up["limited_by"], down["limited_by"]) == ("spill", "leak")
+    assert up["mask"][down["point"]]                                  # it leaks into the other block's trap
+
+
+def test_a_window_below_the_other_blocks_spill_sets_the_contact():
+    """The weakest window 4 m below the upthrown block's spill point: the downthrown block, whose own spill point lies
+    8 m deeper, holds oil down to that window and no further (limited by the leak), so the fault holds the 4 m."""
+    res = dome_blocks(vsh=0.0, membrane=False)
+    spill = two_blocks(res)[0]["contact_depth"]
+    window = res.mults["face_records"]["depth"].min()                 # the shallowest face of the fault
+    held = spill + 4.0 - window                                       # the column that puts its leak level there
+    res = dome_blocks(vsh=0.0, membrane=False, delta_rho=1e5 * res.cap.floor / (9.81 * held))
+    up, down = two_blocks(res)
+    assert up["contact_depth"] == spill and down["contact_depth"] == pytest.approx(spill + 4.0, abs=1e-6)
+    assert (up["limited_by"], down["limited_by"]) == ("spill", "leak") and up["group"] != down["group"]
+    assert up["mask"][down["point"]]
+
+
+def test_a_throw_beyond_the_reservoir_is_a_wall():
+    """No bed meets a bed across a throw of 40 m in a 30 m reservoir, so the fault has no window: a wall. Each block
+    fills to its own spill point, a throw apart."""
+    res = dome_blocks(vsh=0.0, throw=40.0)
+    up, down = two_blocks(res)
+    assert len(res.mults["face_records"]) == 0
+    assert down["contact_depth"] - up["contact_depth"] == pytest.approx(40.0, rel=0.1)
+    assert up["limited_by"] == down["limited_by"] == "spill" and up["group"] != down["group"]
+
+
+def test_sand_against_shale_seals_whatever_the_gouge():
+    """A net bed against a non-net one never leaks. The top 5 layers are sand (100 mD) over 5 of shale (0.01 mD) and
+    the 20 m throw is more than the sand's 15 m, so every face is sand against shale, clean gouge (SGR 0) and all. Make
+    the shale net and the same clean faces leak."""
+    res = dome_blocks(vsh=0.0, perm=np.where(np.arange(10) < 5, 100.0, 0.01), throw=20.0)
+    rec = res.mults["face_records"]
+    up, down = two_blocks(res)
+    assert len(rec) > 0 and np.all(rec["perm"] < res.cap.net_perm)
+    assert up["group"] != down["group"] and down["contact_depth"] - up["contact_depth"] == pytest.approx(20.0, rel=0.1)
+    up, down = two_blocks(dome_blocks(vsh=0.0, throw=20.0))
+    assert up["group"] == down["group"]
+
+
+def test_without_the_membrane_every_net_face_holds_the_floor():
+    """With the membrane off the clay in the gouge gives no capillary seal: every net-on-net face holds the floor and
+    shale-rich gouge leaks as clean sand does (with it, the same fault holds its two contacts apart)."""
+    res = dome_blocks(vsh=0.9, membrane=False)
+    up, down = two_blocks(res)
+    assert len(column(res)) > 0 and np.allclose(column(res), 17.0, atol=0.1)
+    assert up["group"] == down["group"] and up["contact_depth"] == down["contact_depth"]
+    held_up, held_down = two_blocks(dome_blocks(vsh=0.9))
+    assert held_up["group"] != held_down["group"]
+
+
+def test_burial_is_counted_below_the_mudline():
+    """The same faces at 3.3 km depth hold more at 3.3 km burial (C 0.25, 4.7 bar at SGR 25 %) than under 1 km of
+    water (burial 2.3 km, C 0.5, 2.7 bar): at delta_rho 430 the first holds the trap (112 m), the second leaks
+    (63 m)."""
+    kw = dict(vsh=0.25, top=3300.0, plateau=100.0, delta_rho=430.0)
+    up, down = two_blocks(dome_blocks(**kw))
+    assert up["group"] != down["group"]
+    up, down = two_blocks(dome_blocks(mudline=1000.0, **kw))
+    assert up["group"] == down["group"]
+
+
+def test_a_block_closed_all_round_is_sealed_and_fills_to_its_deepest_point():
+    """Four faults with walls (throws beyond the reservoir) round a horst: nothing reaches the block, so it fills to its
+    deepest column, with no spill or leak point."""
+    sides = (((1500.0, 1500.0), 90.0, -1, "W"), ((2500.0, 1500.0), 90.0, 1, "E"),
+             ((2000.0, 1000.0), 0.0, -1, "S"), ((2000.0, 2000.0), 0.0, 1, "N"))
+    box = [Fault(center=c, strike=strike, length=20000.0, throw=40.0, dip=89.0, drag=(0.0, 0.0), hanging_wall=side,
+                 name=name) for c, strike, side, name in sides]
+    res = dome_blocks(vsh=0.0, faults=box)
+    horst = res.blocks[0]
+    assert horst["limited_by"] == "sealed" and horst["point"] is None
+    assert horst["contact_depth"] == res.depth[30:50, 20:40].max()
+    assert horst["mask"].sum() >= 390 and not horst["mask"][:30].any() and not horst["mask"][50:].any()
+    assert all(blk["limited_by"] != "sealed" for blk in res.blocks[1:])
+
+
+def test_without_faults_the_block_is_the_structures_closure():
+    """No fault, no window: one block, the closure ``closure_stats`` measures on the same top surface."""
     layer, fold = dome_model()
-    f = Fault(center=(2000.0, 1500.0), strike=90.0, length=20000.0, throw=8.0, dip=89.0, drag=(0.0, 0.0), name="F1")
-    for sealing, n in ((True, 2), (False, 1)):
-        faces = []
-        _, _, zc, act = _build_geometry([layer], structure=fold, faults=[f], _faces=faces)
-        perm = np.full(act.shape, 100.0)
-        vsh = np.full(act.shape, 0.9 if sealing else 0.0)
-        mults = face_multipliers(faces, zc, act, vsh, (perm, perm, perm), 50.0, 50.0, Seal())
-        blocks = fault_blocks(zc, act, faces, mults, 50.0, 50.0)
-        traps = [b for b in blocks if b["area"] > 0.2e6]
-        assert len(traps) == n
-        for b in traps:
-            assert b["height"] > 0.0 and b["spill_depth"] > b["crest_depth"]
+    faces = []
+    _, _, zc, act = _build_geometry([layer], structure=fold, _faces=faces)
+    full = np.ones(act.shape)
+    mults = face_multipliers(faces, zc, act, 0.0 * full, (100.0 * full,) * 3, 50.0, 50.0, Seal())
+    (blk,) = fault_blocks(zc, act, faces, mults, 50.0, 50.0, Capillary(delta_rho=300.0))
+    depth = 0.25 * (zc[0::2, 0::2] + zc[1::2, 0::2] + zc[0::2, 1::2] + zc[1::2, 1::2])[..., 0]
+    stats = st.closure_stats(depth, 50.0, 50.0)
+    assert blk["area"] == stats["area"] and blk["height"] == stats["height"] and blk["crest"] == stats["crest"]
+    assert blk["contact_depth"] == stats["spill_depth"] and np.array_equal(blk["mask"], stats["mask"])
+    assert blk["limited_by"] == "spill" and blk["group"] == 0 and depth[blk["point"]] == stats["spill_depth"]
+    assert not blk["mask"][blk["point"]]
+
+
+def test_dead_columns_leave_the_blocks_as_they_were():
+    """Columns without an active cell (eroded or pinched out) belong to no block and oil does not cross them: a dead
+    strip along the model's edge changes neither the blocks nor the contacts, and the flood ends."""
+    layer, fold = dome_model()
+    f = Fault(throw=8.0, name="F1", **CREST_FAULT)
+    faces = []
+    _, _, zc, act = _build_geometry([layer], structure=fold, faults=[f], _faces=faces)
+    full = np.ones(act.shape)
+    mults = face_multipliers(faces, zc, act, 0.9 * full, (100.0 * full,) * 3, 50.0, 50.0, Seal())
+    cap = Capillary(delta_rho=300.0)
+    before = fault_blocks(zc, act, faces, mults, 50.0, 50.0, cap)
+    act = act.copy()
+    act[:, :4] = False
+    after = fault_blocks(zc, act, faces, mults, 50.0, 50.0, cap)
+    assert [(b["crest"], b["contact_depth"], b["area"], b["group"]) for b in after] == \
+        [(b["crest"], b["contact_depth"], b["area"], b["group"]) for b in before]
