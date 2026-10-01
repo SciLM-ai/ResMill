@@ -31,8 +31,13 @@ import math
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .structure import Structure
+from .structure import Structure, _as_field, _axes, _mid
 
+# Salt thickness over discovered subsalt reservoirs (m): SMI 200, GB 171, WC 505, Mica, GB 165, Hickory, Tahiti (N30,
+# Moore & Brooks 2009 and the MMS pages): median 1.0 km, the canopy "more than 15,000 ft (4,572 m) thick in some places".
+_THICKNESS_M = (302.0, 338.0, 515.0, 1006.0, 2118.0, 2438.0, 3353.0)
+MAX_THICKNESS = 4600.0    # m: the canopy's thickest
+MIN_THICKNESS = 100.0     # m: below the thinnest sample (302 m) a log-normal tail has a weld, not a sheet [J]
 MAX_DIP = 85.0            # degrees: the largest upturn dip (the owner's choice over 75, 2026-10-01)
 MAX_LOBES = 0.3           # the largest outline irregularity, as a fraction of the radius (closure's warp reaches 0.35)
 _RAYS = 16000             # directions the outline is cast along
@@ -202,3 +207,78 @@ def salt_thinning(salt, a, width, power=2.0, z_ref=None):
         raise ValueError(f"a must lie in [0, 1], got {a}")
     _zone(salt, width, power)
     return Structure(lambda x, y: 1.0 - a * _taper(salt.distance(x, y, z_ref, width), width, power))
+
+
+class SaltBase(Structure):
+    """The base of a salt sheet: a Structure of absolute depths for ``erode_above``, carrying the sheet's ``thickness``
+    (m; a number, a Structure-like field or None: not drawn), which the grid does not hold."""
+
+    def __init__(self, fn, thickness=None):
+        super().__init__(fn)
+        self.thickness = thickness
+
+
+def base_of_salt(depth, dip=0.0, azimuth=0.0, rough=None, high=None, center=None, thickness=None):
+    """The surface a salt sheet rests on, for ``to_grdecl(erode_above=...)``: cells above it are salt (they collapse and
+    are written inactive), the cells it cuts are truncated against it, and a reservoir below is a subsalt trap.
+
+    A plane at ``depth`` (m, positive down) through ``center`` (default the middle of the map), dipping ``dip`` degrees
+    and deepening along the normal of ``azimuth`` (as :func:`resmill.structure.ramp`), plus ``rough`` (a rugose base:
+    :func:`resmill.structure.roughness`) and ``high`` (a base-salt high or feeder: any Structure-like, negative
+    lifts). Under it, three-way traps are truncated against the salt (Tahiti, Heidelberg: ``depth`` at the crest plus a
+    fraction 0.2-0.8 [J] of the closure's relief, ``closure_stats(...)["spill_depth"] - (1 - f) * height``) and four-way
+    folds lie beneath a cover (Mad Dog, Atlantis: a base above the crest, which cuts nothing and is only a label); the
+    base of the Sigsbee canopy dips 0 to over 90 degrees, mostly under 35 (N31). ``thickness`` is the label (draw it
+    with :func:`salt_thickness`); :func:`salt_labels` returns it with the base and the cut cells.
+    """
+    nx_, ny_ = _axes(azimuth)
+    slope = math.tan(math.radians(dip))
+    fields = [_as_field(f) for f in (rough, high) if f is not None]
+
+    def fn(x, y):
+        x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+        cx, cy = center if center is not None else (_mid(x), _mid(y))
+        return depth + slope * ((x - cx) * nx_ + (y - cy) * ny_) + sum(f(x, y) for f in fields)
+
+    return SaltBase(fn, thickness)
+
+
+def salt_thickness(rng, size=None):
+    """Thickness (m) of the salt over a subsalt trap: log-normal fitted to the seven published values of N30 (median
+    1.0 km), kept between :data:`MIN_THICKNESS` and :data:`MAX_THICKNESS`. ``rng`` a ``numpy.random.Generator``."""
+    logs = np.log(_THICKNESS_M)
+    return np.clip(np.exp(rng.normal(logs.mean(), logs.std(ddof=1), size)), MIN_THICKNESS, MAX_THICKNESS)
+
+
+def salt_labels(model, salt=None, structure=None, top=None, base=None, erode_above=None, erode_below=None,
+                isochore=None, onlap=False, faults=None):
+    """What an episode carries about its salt, for the geometry ``to_grdecl`` writes (the same shaping arguments, with
+    the :class:`SaltBase` of a subsalt model as ``erode_above``).
+
+    Returns a dict: ``mask`` (uint8, ``(nx, ny, nz)``, the exporter's top-down k order: 1 where a cell is salt: in
+    ``salt`` or collapsed by the base of salt), ``thickness`` and ``base`` (float32, ``(nx, ny)``, m) and
+    ``volume_fraction`` (the salt's share of the cells). For a body they are what the grid holds: the vertical extent of
+    its cells in the column (0 where none) and the depth of the bottom of the deepest (NaN where none; at the model's
+    bottom where the salt runs on below it, at an overhang's underside above sediment). For a base of salt they are the
+    sheet's own: its ``thickness`` where drawn (NaN where not) and its depth, in every column, cut cells or not.
+    """
+    from .export import _build_geometry, _field
+    layers = list(getattr(model, "layers", [model]))
+    shape = dict(structure=structure, top=top, base=base, erode_below=erode_below, isochore=isochore, onlap=onlap,
+                 faults=faults)
+    Xc, Yc, Zc, act = _build_geometry(layers, erode_above=erode_above, salt=salt, **shape)
+    nx, ny, nz = act.shape
+    mask = salt_cells(salt, Xc, Yc, Zc) if salt is not None else np.zeros(act.shape, dtype=bool)
+    sheet = isinstance(erode_above, SaltBase)
+    if sheet:
+        mask |= (_build_geometry(layers, salt=salt, **shape)[3] > 0) & (act == 0)       # the cells the base collapsed
+    z = Zc.reshape(nx, 2, ny, 2, -1).mean(axis=(1, 3))
+    thickness = np.where(mask, z[..., 1:] - z[..., :-1], 0.0).sum(axis=2)
+    bottom = np.where(mask.any(axis=2), np.where(mask, z[..., 1:], -np.inf).max(axis=2), np.nan)
+    if sheet:
+        xm, ym = (a.reshape(nx, 2, ny, 2).mean(axis=(1, 3)) for a in (Xc, Yc))
+        bottom = erode_above(xm, ym)
+        thickness = np.full((nx, ny), np.nan) if erode_above.thickness is None else \
+            _field(erode_above.thickness, layers[0].x_len, layers[0].y_len)(xm, ym)
+    return {"mask": mask.astype(np.uint8), "thickness": thickness.astype(np.float32),
+            "base": bottom.astype(np.float32), "volume_fraction": float(mask.mean())}
