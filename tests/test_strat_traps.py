@@ -5,7 +5,9 @@ import pytest
 from resmill import structure as st
 from resmill.export import _build_geometry
 from resmill.layers.base import Layer
-from resmill.strat_traps import zone_trap
+from resmill.strat_traps import barrier_column, effective_grain_size, zone_trap
+
+FT = 0.3048
 
 
 def _disc(cx, cy, radius):
@@ -101,3 +103,58 @@ def test_a_barrier_column_below_the_spill_limits_the_trap_and_one_above_it_does_
     assert not (held["mask"] & ~free["mask"]).any()
     (roomy,) = zone_trap(zc, act, dx, dx, column=100.0)
     assert roomy["limited_by"] == "spill" and roomy["height"] == free["height"]
+
+
+# Berg (1975, AAPG Bull. 59:939-956), Table 1: effective grain sizes D (m), fluids and the oil columns he calculated
+# (ft). Milbur: reservoir 32 %, 900 mD; barrier 20 %, 25 mD, or 24 %, 153 mD (D 5.5e-5 m, which his equation takes to
+# 35 ft, not the 53 ft of his table: left out). Lane: channel 21 %, 533 mD; J1 18 %, 65 mD; J2 24 %, 77 mD. Main Pass
+# 35: reservoir 9.5e-5 m; barriers 26 %, 75 mD and 29 %, 170 mD. Paduca: 24 %, 25 mD against 20 %, 5 mD.
+BERG_TABLE = [
+    # field, reservoir D, barrier D, water - oil density (kg/m3), interfacial tension (N/m), calculated column (ft)
+    ("Milbur, barrier 20 %, 25 mD", 6.0e-5, 3.5e-5, 90.0, 0.030, 64.0),
+    ("Lane, J1", 13.5e-5, 6.9e-5, 250.0, 0.035, 14.0),
+    ("Lane, J2", 13.5e-5, 3.6e-5, 250.0, 0.035, 30.0),
+    ("Main Pass 35, upper barrier", 9.5e-5, 2.9e-5, 320.0, 0.035, 29.0),
+    ("Main Pass 35, lower barrier", 9.5e-5, 3.3e-5, 320.0, 0.035, 25.0),
+    ("Main Pass 35, gas", 9.5e-5, 2.9e-5, 920.0, 0.035, 10.0),
+    ("Paduca", 2.1e-5, 1.5e-5, 440.0, 0.035, 34.0),
+]
+
+
+@pytest.mark.parametrize("name,d_res,d_bar,delta_rho,sigma,feet", BERG_TABLE, ids=[row[0] for row in BERG_TABLE])
+def test_barrier_column_reproduces_the_columns_berg_calculated(name, d_res, d_bar, delta_rho, sigma, feet):
+    """The column a finer barrier holds in a coarser reservoir, 2 sigma (1 / r_throat - 1 / r_pore) / (g delta_rho)
+    with the rhombohedral packing's radii (0.077 D of the barrier, 0.207 D of the reservoir), against the columns of
+    Berg's Table 1 (he rounds to the foot)."""
+    assert barrier_column(delta_rho, d_res, d_bar, sigma) / FT == pytest.approx(feet, abs=1.0)
+
+
+def test_barrier_column_reproduces_bergs_worked_examples():
+    """Berg's text: a 0.2 mm reservoir sand with a 0.05 mm coarse-silt barrier holds 55 ft of low-gravity oil (density
+    contrast 0.1 g/cm3, interfacial tension 35 dyn/cm) and about 5 ft of gas (1.0), a 0.01 mm fine silt 300 ft and
+    30 ft; oil migrating up through the 0.2 mm sand needs a stringer of 300 cm, and 760 cm to pass into sand of half the
+    grain size."""
+    args = dict(sigma=0.035)
+    assert barrier_column(100.0, 0.2e-3, 0.05e-3, **args) / FT == pytest.approx(55.0, abs=1.0)
+    assert barrier_column(1000.0, 0.2e-3, 0.05e-3, **args) / FT == pytest.approx(5.0, abs=0.7)
+    assert barrier_column(100.0, 0.2e-3, 0.01e-3, **args) / FT == pytest.approx(300.0, abs=3.0)
+    assert barrier_column(1000.0, 0.2e-3, 0.01e-3, **args) / FT == pytest.approx(30.0, abs=0.5)
+    assert barrier_column(100.0, 0.2e-3, 0.2e-3, **args) == pytest.approx(3.0, rel=0.05)
+    assert barrier_column(100.0, 0.2e-3, 0.1e-3, **args) == pytest.approx(7.6, rel=0.01)
+
+
+def test_barrier_column_scales_as_the_equation_says_and_is_never_negative():
+    base = barrier_column(300.0, 1.0e-4, 3.0e-5)
+    assert barrier_column(600.0, 1.0e-4, 3.0e-5) == pytest.approx(base / 2.0)           # 1 / (density contrast)
+    assert barrier_column(300.0, 1.0e-4, 3.0e-5, sigma=0.060) == pytest.approx(2.0 * base)   # interfacial tension
+    assert barrier_column(300.0, 1.0e-4, 1.0e-4) > 0.0                                  # throat against pore of one rock
+    assert barrier_column(300.0, 3.0e-5, 1.0e-4) == 0.0                                 # a barrier 3 times as coarse
+
+
+@pytest.mark.parametrize("k,phi,d", [(900, 0.32, 6.0e-5), (533, 0.21, 13.5e-5), (65, 0.18, 6.9e-5),
+                                     (77, 0.24, 3.6e-5), (75, 0.26, 2.9e-5), (170, 0.29, 3.3e-5),
+                                     (25, 0.24, 2.1e-5), (5, 0.20, 1.5e-5)])
+def test_effective_grain_size_is_berg_empirical_equation_of_permeability_and_porosity(k, phi, d):
+    """D = (1.89 k n^-5.1)^0.5 cm (k in mD, the porosity n in percent), against the grain sizes of his Table 1 that
+    follow from their own porosity and permeability (two entries of the Milbur barrier do not: 5 to 8 % off)."""
+    assert effective_grain_size(k, phi) == pytest.approx(d, rel=0.03)

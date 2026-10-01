@@ -18,6 +18,32 @@ from scipy import ndimage
 
 from .structure import _spill_levels
 
+GRAVITY = 9.81                      # m/s2
+# Berg's packing of the grains as uniform spheres, rhombohedral (porosity 26 %; Graton and Fraser 1935): the pores
+# between them are 0.414 of a grain diameter across, the throats connecting them 0.154.
+PORE_RADIUS, THROAT_RADIUS = 0.5 * 0.414, 0.5 * 0.154
+
+
+def effective_grain_size(permeability, porosity):
+    """The effective grain size (m) that sets a sandstone's pore size, from its permeability (mD) and porosity (a
+    fraction): D = (1.89 k n^-5.1)^0.5 cm, k in mD and the porosity n in percent (Berg 1975, eq. 33, his
+    empirical relation of permeability, porosity and the 90th-percentile grain size, which he applies to sandstones of
+    under 30 % porosity too)."""
+    return 1e-2 * np.sqrt(1.89 * np.asarray(permeability, dtype=float) * (100.0 * np.asarray(porosity)) ** -5.1)
+
+
+def barrier_column(delta_rho, d_reservoir, d_barrier, sigma=0.030):
+    """The oil (or gas) column (m) a finer barrier holds in a coarser reservoir, as the barrier's capillary entry
+    pressure less the reservoir's against the buoyancy of the column: z = 2 sigma (1 / r_t - 1 / r_p) / (g delta_rho)
+    (Berg 1975, eq. 16). The throats r_t are those of the barrier and the pores r_p those of the reservoir, each a fixed
+    share of its effective grain size (:data:`THROAT_RADIUS`, :data:`PORE_RADIUS`; :func:`effective_grain_size`).
+    ``delta_rho`` is the water minus hydrocarbon density (kg/m3), ``d_reservoir`` and ``d_barrier`` the grain sizes
+    (m) and ``sigma`` the interfacial tension (N/m; 30-35 mN/m for oil). Zero where the barrier's throats are no
+    narrower than the reservoir's pores (a barrier 2.7 times as coarse). It is the column above the contact in the
+    reservoir sand; the free-water level lies below that contact by the sand's own entry-pressure head."""
+    term = 1.0 / (THROAT_RADIUS * np.asarray(d_barrier, dtype=float)) - 1.0 / (PORE_RADIUS * np.asarray(d_reservoir))
+    return np.maximum(2.0 * sigma * term / (GRAVITY * np.asarray(delta_rho, dtype=float)), 0.0)
+
 
 def zone_trap(zc, act, dx, dy, k=None, column=None):
     """The traps of the top of the active cells of a zone, absent columns being walls and the map's edge the only exit.
