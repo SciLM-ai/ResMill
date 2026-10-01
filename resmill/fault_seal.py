@@ -16,10 +16,9 @@ uncorrelated), so all faces of a fault also share one log-normal factor 10^(``of
 on Norne's history match (``scatter`` 0.9 and ``offset`` -0.6 on its own grid, the mean of three fits to its 36 faults
 with throw). A share of faults is left open (``p_open``: every face 1) and a share raises flow (``p_enhance``: every
 face one log-uniform value of ``enhance``, above 1), as Norne's history match has (5 of its 36 faults with throw at 1 or
-above, up to 3.9, and a fault without throw at 20). The share of faults that seal by Dn = throw / gross reservoir
-thickness in Knott's (1993) North Sea counts (:func:`knott_seal_probability`) is a check on the calibration. A fault
-draws in this order, so a seed reproduces a tree: one uniform for its mode when either share is above 0, then one
-log-uniform value (enhancing) or one normal (seal, with a ``scatter``); with the options off nothing is drawn.
+above, up to 3.9, and a fault without throw at 20). A fault draws in this order, so a seed reproduces a tree: one
+uniform for its mode when either share is above 0, then one log-uniform value (enhancing) or one normal (seal, with a
+``scatter``); with the options off nothing is drawn.
 
 Juxtaposition needs nothing here: the simulator connects only the cells that touch. Over geological time a fault holds
 oil back only up to the column its capillary seal supports, however low its multiplier (which sets flow in production),
@@ -103,13 +102,6 @@ def fault_rock_permeability(sgr, displacement):
     return 10.0 ** (-4.0 * np.asarray(sgr, dtype=float) - 0.25 * np.log10(d) * (1.0 - np.asarray(sgr)) ** 5)
 
 
-def knott_seal_probability(dn):
-    """Share of faults that seal, by throw over gross reservoir thickness: Knott (1993), the northern and southern North
-    Sea counts averaged per class (over 0.9 and all for Dn >= 1; 1 in 2 and 82 % for 0.5-1; 1 in 3 to 1 in 2 and 66 %
-    for 0.25-0.5; 1 in 3 and 14 % below 0.25)."""
-    return 0.92 if dn >= 1.0 else 0.66 if dn >= 0.5 else 0.5 if dn >= 0.25 else 0.24                  # [J] (averages)
-
-
 def bretan_pressure(sgr, burial):
     """Pressure (bar) a fault face supports by capillary seal: the upper envelope of Bretan, Yielding & Jones (2003,
     eq. 1), 10^(100 SGR/27 - C) with SGR a fraction and burial in m, C = 0.5 below 3,000 m, 0.25 to 3,500 m and 0 deeper
@@ -169,15 +161,15 @@ class _Slip:
         return np.where((held_up > 0.0) & (held_down > 0.0), 0.5 * (up + down), np.where(held_up > 0.0, up, down))
 
 
-def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
+def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal):
     """Transmissibility multipliers per cell face from the faults' shale gouge ratio.
 
     ``faces`` holds ``(fault, side)`` pairs (from the geometry builder), ``zc`` the final interface stack, ``act`` the
     active cells, ``vsh`` the clay fraction per cell and ``perms`` (PERMX, PERMY, PERMZ), all (nx, ny, nz) in K-down
-    order. Returns ``MULTX``, ``MULTY``, ``MULTZ`` (nx, ny, nz; a cell's + face, as the GRDECL keywords mean), the
-    faces each fault listed (``listed``), and per fault its ``mode`` ("seal", "open" or "enhancing"), ``dn``, ``sgr``
-    and ``mult`` per face and ``effective``, the faces' mean weighted by the transmissibility each would have without
-    the fault: the one multiplier for the whole fault (a MULTFLT) that passes the same flow. ``face_records`` has one
+    order. Returns ``MULTX``, ``MULTY``, ``MULTZ`` (nx, ny, nz; a cell's + face, as the GRDECL keywords mean), and per
+    fault its ``mode`` ("seal", "open" or "enhancing"), ``sgr`` and ``mult`` per face and ``effective``, the faces' mean
+    weighted by the transmissibility each would have without the fault: the one multiplier for the whole fault (a
+    MULTFLT) that passes the same flow. ``face_records`` has one
     row per face with a multiplier, for :func:`fault_blocks`: its ``fault`` (index in ``faces``), the map edge it counts
     for (``axis`` 0 for X, 1 for Y, and the lower-index column ``i``, ``j``; a Z face, a tread inside one column, counts
     for the nearest lateral edge of its fault, as for its throw), its ``depth`` (m, mid), its ``sgr`` and ``perm``, the
@@ -187,10 +179,8 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
     nx, ny, nz = act.shape
     rng = np.random.default_rng(seal.seed)
     out = {key: np.ones((nx, ny, nz)) for key in ("MULTX", "MULTY", "MULTZ")}
-    listed = {"MULTX": np.zeros((nx, ny, nz), dtype=bool), "MULTY": np.zeros((nx, ny, nz), dtype=bool)}
     cell = 0.25 * (zc[0::2, 0::2] + zc[1::2, 0::2] + zc[0::2, 1::2] + zc[1::2, 1::2])
     tops, bots = cell[..., :-1], cell[..., 1:]
-    gross = thickness if thickness is not None else float(np.median((zc[:, :, -1] - zc[:, :, 0])))
     info, rows = [], []
     for n, (fault, side) in enumerate(faces):
         records = face_records("F", side, zc, act)
@@ -200,8 +190,6 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                 i, j = i1 - 1, j1 - 1
                 lateral[(face, i1, j1)] = _Slip(*_column_pair(zc, i, j, face), vsh[i, j],
                                                 vsh[i + (face == "X"), j + (face == "Y")])
-        throws = np.array([slip.throw for slip in lateral.values()] or [0.0])
-        dn = float(throws.max()) / max(gross, 1e-6)
         mode, fixed, shift = "seal", None, seal.offset       # fixed: the one multiplier of an open or enhancing fault
         if seal.p_open + seal.p_enhance > 0.0:
             u = rng.random()
@@ -255,17 +243,14 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                 else:
                     mult = 1.0             # a fault rock thicker and more permeable than the cell it replaces: open
                 out[key][i, j, k] *= mult
-                if key in listed:
-                    listed[key][i, j, k] = True
                 sgrs.append(sgr)
                 mults.append(mult)
                 net = min(max(math.sqrt(float(perms[0][c]) * float(perms[1][c])), 1e-9) for c in ((i, j, k), other))
                 rows.append((n, "XY".index(near[0]), near[1] - 1, near[2] - 1, mid, sgr, net))
                 weights.append(area / (0.5 * max(li, 1e-6) / ki + 0.5 * max(lj, 1e-6) / kj))      # T0, centre to face
-        info.append(dict(name=fault.name, mode=mode, dn=dn, sgr=sgrs, mult=mults,
+        info.append(dict(name=fault.name, mode=mode, sgr=sgrs, mult=mults,
                          effective=float(np.dot(weights, mults) / sum(weights)) if sum(weights) > 0.0 else 1.0))
     out["faults"] = info
-    out["listed"] = listed
     out["face_records"] = np.array(rows, dtype=FACE_RECORD)
     return out
 

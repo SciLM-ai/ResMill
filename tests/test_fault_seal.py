@@ -9,7 +9,7 @@ import pytest
 from resmill import structure as st
 from resmill.export import _build_geometry, to_grdecl
 from resmill.fault_seal import (Capillary, Seal, bretan_pressure, fault_blocks, fault_rock_permeability,
-                                face_multipliers, knott_seal_probability, seal_capacity)
+                                face_multipliers, seal_capacity)
 from resmill.faults import Fault, face_records
 from resmill.layers.base import Layer
 
@@ -65,13 +65,6 @@ def test_the_face_multiplier_follows_manzocchis_transmissibility():
     listed = mx < 1.0
     assert listed.any() and np.median(mx[listed]) == pytest.approx(0.01595, rel=0.01)
     assert np.all(mx[:5] == 1.0) and np.all(mx[-5:] == 1.0)
-
-
-def test_knott_seal_probability_rises_with_throw_over_thickness():
-    """Knott 1993 (North Sea): faults throwing more than the reservoir's thickness seal over 90 % of the time; within
-    the reservoir sealing rises with Dn."""
-    p = [knott_seal_probability(dn) for dn in (0.1, 0.3, 0.7, 1.5)]
-    assert p == sorted(p) and p[-1] >= 0.9 and 0.1 <= p[0] <= 0.35
 
 
 def test_faces_lie_between_open_and_sealed_by_the_clay_that_slid_past():
