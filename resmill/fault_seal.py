@@ -4,18 +4,19 @@ A fault seals or leaks by what lies on its plane. Per face of a fault (the faces
 ratio SGR (Yielding, Freeman & Needham 1997) is the clay of the beds that slid past the face, over the throw: at a face
 at depth z, in the upthrown column the beds from z - throw to z and, a throw lower, in the downthrown column those from
 z to z + throw, each column's thickness-weighted clay fraction over the part of its window it holds, the two averaged
-(Lyon et al. 2005 and Dincau 1998 do so for lateral changes; a tread, a Z face, takes the SGR of the column pair it
+(as Lyon et al. 2005 do; Dincau 1998 takes the geometric mean; a tread, a Z face, takes the SGR of the column pair it
 counts for). It sets the fault rock's permeability, log10 k_f = -4 SGR - 1/4 log10(D) (1 - SGR)^5 (mD; D the
 displacement in m, the throw over sin(dip)), and its thickness t_f = D / 66, the median ratio (Manzocchi, Walsh, Nell &
 Yielding 1999). The face's transmissibility multiplier is then T = [1 + t_f (2/k_f - 1/k_i - 1/k_j) / (L_i/k_i +
 L_j/k_j)]^-1 between the cells on either side (permeabilities k_i and k_j across the face, L_i and L_j the whole cells'
 lengths across it), at most 1, so every face lies somewhere between open and sealed. The throw at a column pair is read
 off the grid, as the largest offset of an interface across it, so the throws of several faults add. The physics shapes
-each fault but explains none of the spread of real ones (on Norne the predicted and the history-matched multipliers are
-uncorrelated), so all faces of a fault also share one log-normal factor 10^(``offset`` + N(0, ``scatter``)), calibrated
-on Norne's history match (``scatter`` 0.9 and ``offset`` -0.6 on its own grid, the mean of three fits to its 36 faults
-with throw). A share of faults is left open (``p_open``: every face 1) and a share raises flow (``p_enhance``: every
-face one log-uniform value of ``enhance``, above 1), as Norne's history match has (5 of its 36 faults with throw at 1 or
+each fault but explains little of the spread of real ones (the history-matched multipliers of Norne were uncorrelated
+with an earlier version of this prediction), so all faces of a fault also share one log-normal factor 10^(``offset`` +
+N(0, ``scatter``)). Those two values are a calibration against history-matched multipliers and hold only for the
+formula and the window they were fitted with: fits made with half cell lengths, or a window centred on the face, do not
+carry over. A share of faults is left open (``p_open``: every face 1) and a share raises flow (``p_enhance``: every face
+one log-uniform value of ``enhance``, above 1), as Norne's history match has (5 of its 36 faults with throw at 1 or
 above, up to 3.9, and a fault without throw at 20). A fault draws in this order, so a seed reproduces a tree: one
 uniform for its mode when either share is above 0, then one log-uniform value (enhancing) or one normal (seal, with a
 ``scatter``); with the options off nothing is drawn.
