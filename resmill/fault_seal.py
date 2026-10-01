@@ -122,10 +122,11 @@ def bretan_pressure(sgr, burial):
 def seal_capacity(sgr, burial, cap):
     """Pressure (bar) a fault face between two net cells holds, from its SGR (a fraction) and burial (m): the floor of
     ``cap`` below its onset or without the membrane, else :func:`bretan_pressure` up to the plateau, which is what a
-    face holds above 3,500 m burial, where oil is uncalibrated (the envelope's C = 0 class is gas')."""
+    face holds above 3,500 m burial, where oil is uncalibrated (the envelope's C = 0 class is gas'). Never below the
+    floor: eq. 1 at SGR 0 is 0.32 bar below 3 km, under a floor of 0.5 bar."""
     sgr, burial = np.asarray(sgr, dtype=float), np.asarray(burial, dtype=float)
     held = np.where(burial > 3500.0, cap.plateau, np.minimum(bretan_pressure(sgr, burial), cap.plateau))
-    return np.where((sgr < cap.onset) | (not cap.membrane), cap.floor, held)
+    return np.where((sgr < cap.onset) | (not cap.membrane), cap.floor, np.maximum(held, cap.floor))
 
 
 def _column_pair(zc, i, j, face):

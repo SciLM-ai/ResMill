@@ -304,6 +304,22 @@ def test_seal_capacity_follows_bretans_envelope():
     assert seal_capacity(sgr, burial, wide) == pytest.approx([0.5, 3.10, 100.0], abs=0.005)
 
 
+def test_a_face_never_holds_less_than_the_floor():
+    """Eq. 1 at SGR 0 is 0.32 bar below 3 km (C 0.5), under the floor of 0.5 bar, so with an onset below about 0.054 a
+    face just above its onset held less than one just below it. The floor is the least any face holds: capacity never
+    falls as SGR rises, and a gas-sized floor beats the envelope up to where it crosses it."""
+    low = Capillary(delta_rho=300.0, onset=0.0)
+    assert seal_capacity(0.0, 2000.0, low) == low.floor and seal_capacity(0.0, 4000.0, low) == low.plateau
+    sgr = np.linspace(0.0, 0.3, 61)
+    for onset in (0.0, 0.03, 0.05, 0.2):
+        cap = Capillary(delta_rho=300.0, onset=onset, plateau=100.0)
+        held = seal_capacity(sgr, 2000.0, cap)
+        assert np.all(held >= cap.floor) and np.all(np.diff(held) >= 0.0)
+    high = Capillary(delta_rho=300.0, onset=0.0, floor=1.0, plateau=100.0)
+    assert seal_capacity(0.10, 2000.0, high) == 1.0
+    assert seal_capacity(0.20, 2000.0, high) == pytest.approx(1.74, abs=0.005)
+
+
 def test_bretans_envelope_steps_up_by_burial_class():
     """Eq. 1 at SGR 0 gives 0.32, 0.56 and 1.00 bar for burial below 3 km, at 3-3.5 km and above 3.5 km (the research's
     table); the classes' edges belong to the shallower class."""
