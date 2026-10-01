@@ -5,13 +5,25 @@ from .base import Layer
 from ._fluvial import _gauss_clip
 
 
+def _compensation_weights(surface, dz, dh_ave, scale):
+    """Probability that each column is the next stamp's centre, ``(ny, nx)``.
+
+    ``exp(-deficit / (scale * dh_ave))``, the deficit being the column's height above the
+    lowest column in metres (``surface`` is in cells of ``dz``) and ``dh_ave`` the stamps'
+    peak thickness: a column one ``scale`` of stamp thicknesses higher is e times less
+    likely. A vanishing scale always picks the lowest column, a large one is random.
+    """
+    weight = np.exp(-(surface - surface.min()) * dz / (scale * dh_ave))
+    return weight / weight.sum()
+
+
 class LobeLayer(Layer):
     """Layer with turbidite lobe deposition geology."""
 
     def create_geology(self, poro_ave, perm_ave, poro_std, perm_std, ntg,
                        dh_ave=4.0, dh_std=0.5, r_ave=450.0, r_std=20.0,
                        asp=1.5, azimuth=0.0, azimuth_std=10.0,
-                       m=100, upthinning=True, bouma_factor=0):
+                       m=100, upthinning=True, bouma_factor=0, compensation_scale=None):
         """Generate turbidite lobe geology.
 
         Parameters
@@ -48,11 +60,22 @@ class LobeLayer(Layer):
             cone of well-aligned lobes uses ~5°; turbidite-realistic
             scatter is ~15-25°.
         m : float
-            Compensation exponent (higher = more clustered stacking).
+            Compensation exponent: a column's weight as the next stamp's centre is
+            ``(height above the lowest column in cells + 0.001) ** -m``, so every ``m``
+            above about 2 puts the centre on the lowest column and changes nothing
+            (see ``compensation_scale``).
         upthinning : bool
             Apply vertical thinning upward.
         bouma_factor : float
             Bouma sequence discretization factor (0 = none).
+        compensation_scale : float or None
+            ``None`` keeps ``m``. A number replaces its weight by
+            ``exp(-deficit / (compensation_scale * dh_ave))``, the deficit being the
+            column's height above the lowest one in metres: a column one scale of stamp
+            thicknesses higher is e times less likely to be the next stamp's centre. The
+            strength is then a continuous setting from nearly random stacking (a scale of
+            a few thicknesses, compensation index kappa about 0.6) to a stamp always on
+            the lowest column (0.05 or less; kappa 0.8-0.95 by the stamp size).
         """
         self.poro_ave = poro_ave
         self.perm_ave = perm_ave
@@ -64,6 +87,7 @@ class LobeLayer(Layer):
             dh_ave=dh_ave, dh_std=dh_std, r_ave=r_ave, r_std=r_std,
             asp=asp, azimuth=azimuth, azimuth_std=azimuth_std, m=m,
             upthinning=upthinning, bouma_factor=bouma_factor,
+            compensation_scale=compensation_scale,
         )
         # Swap axes from (nz, ny, nx) to (nx, ny, nz)
         lobe_poro = np.swapaxes(allporo[-1], 0, -1)
@@ -128,7 +152,7 @@ class LobeLayer(Layer):
 
     def _lobemodeling(self, dh_ave=4.0, dh_std=0.5, r_ave=450.0, r_std=20.0,
                       asp=1.5, azimuth=0.0, azimuth_std=10.0, m=100,
-                      upthinning=True, bouma_factor=0):
+                      upthinning=True, bouma_factor=0, compensation_scale=None):
         facies = np.zeros((self.nz, self.ny, self.nx))
         poro = facies.copy() - 0.1
         allsurface = []
@@ -153,8 +177,11 @@ class LobeLayer(Layer):
         while i < iiii - 1:
             surface0 = surface.copy()
             zz = surface
-            prob = (1 / (surface - zz.min() + 0.001)**m) / np.sum(1 / (surface - zz.min() + 0.001))
-            prob = prob / np.sum(prob)
+            if compensation_scale is None:
+                prob = (1 / (surface - zz.min() + 0.001)**m) / np.sum(1 / (surface - zz.min() + 0.001))
+                prob = prob / np.sum(prob)
+            else:
+                prob = _compensation_weights(surface, self.dz, dh_ave, compensation_scale)
             prob_flat = prob.flatten()
             loc = np.random.choice(loc_idx, p=prob_flat)
             y = loc // self.nx

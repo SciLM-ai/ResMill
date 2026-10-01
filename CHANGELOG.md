@@ -191,6 +191,16 @@
   generation the older ones are abandoned and mud-filled with `mFFCHprop`. Off by default; the published dataset is
   unchanged. `examples/dataset_generation/config_full_delta_v2.json` is the
   dataset config for it. `layer.tree_branches` lists every segment.
+- `compensation_scale` (`LobeLayer`): the weight of a column as the next stamp's centre is
+  `exp(-deficit / (compensation_scale * dh_ave))`, the deficit being its height above the lowest
+  column in metres, so a column one scale of stamp thicknesses higher is e times less likely.
+  ResMill's weight, `(height above the lowest column in cells + 0.001) ** -m`, puts every stamp on the
+  lowest column from `m` = 2 up, so `m` = 2, 10 and 50 give the same stack and the same compensation
+  index kappa (Straub et al. 2009): 0.83 for about 350 stamps of 1.4 km (3 m peak), 0.86 for 90 stamps,
+  0.93-0.95 for 15-19 stamps wider than the model, and the strength could not be varied. With the scale
+  kappa falls smoothly as the scale grows (about 350 stamps, 2 seeds: 0.81-0.85 at 0.2 or less, 0.75 at
+  0.5, 0.70 at 1, 0.66 at 2; random stacking is 0.55). Default `None` keeps the old weight: outputs are
+  bit-identical to before.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);
   `examples/anticline_meander.py` and `examples/angular_unconformity.py`.
 
