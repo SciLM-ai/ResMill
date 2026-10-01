@@ -70,6 +70,40 @@ def test_the_grdecl_lists_the_faults_faces_and_its_multiplier(tmp_path):
     assert i_cols <= set(range(28, 34))                              # the faces sit along x = 1.5 km (+ dip shift)
 
 
+def trace_offsets(f, nx=200, ny=160, dx=25.0):
+    """The fault's top-surface trace on a fine flat grid: for each row j, the x (m) where the side flips."""
+    layer = Layer(nx, ny, 4, nx * dx, ny * dx, 20.0, top_depth=TOP, kzkx=0.1)
+    faces = []
+    _build_geometry([layer], faults=[f], _faces=faces)
+    side = faces[0][1][:, :, 0]
+    rows, xs = [], []
+    for j in range(ny):
+        flips = np.flatnonzero(side[:-1, j] * side[1:, j] == -1)
+        if flips.size:
+            rows.append((j + 0.5) * dx)
+            xs.append((flips[0] + 1) * dx)
+    return np.array(rows), np.array(xs)
+
+
+def test_bends_move_the_trace_by_their_rms_and_keep_its_centre_and_strike():
+    """bends = 0.03 on a 3 km straight fault striking along y: the trace wanders about 0.03 x 3 km = 90 m
+    (rms) about its chord, whose position and direction stay those asked for; bends = 0 draws the straight
+    trace exactly as before, and the same seed draws the same bends."""
+    base = dict(center=(2500.0, 2000.0), strike=90.0, length=3000.0, throw=20.0, dip=89.0, drag=(0.0, 0.0))
+    y0, x0 = trace_offsets(Fault(**base))
+    assert np.ptp(x0) <= 25.0
+    y1, x1 = trace_offsets(Fault(**base, bends=0.03, seed=4))
+    assert np.ptp(y1) > 2900.0
+    dev = x1 - 2500.0
+    assert np.sqrt(np.mean(dev ** 2)) == pytest.approx(90.0, rel=0.1)
+    slope, mean = np.polyfit(y1 - 2000.0, dev, 1)
+    assert abs(mean) < 10.0 and abs(slope) < 0.01
+    y2, x2 = trace_offsets(Fault(**base, bends=0.03, seed=4))
+    assert np.array_equal(x1, x2)
+    _, x3 = trace_offsets(Fault(**base, bends=0.03, seed=5))
+    assert not np.array_equal(x1, x3)
+
+
 def test_the_faults_faces_are_continuous_where_the_plane_cuts_a_cell():
     """Every layer's hanging wall meets its footwall along an unbroken line of faces: a cell the dipping plane
     cuts goes with the side of its middle, so no row leaves a gap in FAULTS (a leak for MULTFLT)."""

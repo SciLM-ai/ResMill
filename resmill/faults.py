@@ -6,7 +6,9 @@ following Walsh & Watterson (1987), D = Dmax (1 - r)^1.5 (1 + 3 r)^0.5, with a t
 (Nicol et al. 1996). The displacement is split between the hanging wall (``hw_share``) and the footwall,
 and bends the layers next to the fault (reverse drag) with a taper (1 - d / reach)^2 over ``drag`` times
 the length on each side (Georgsen et al. 2012; Wu et al. 2020). The fault dips at ``dip`` toward its
-hanging wall, so its trace moves with depth, and its trace may curve (``radius``).
+hanging wall, so its trace moves with depth, and its trace may curve (``radius``) and wander about its
+chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surfaces across their slip
+(Candela et al. 2012), for the bends left where segments linked; Walsh et al. 2003).
 
 :func:`apply_fault` displaces the interface stack in 3-D and reports which side of the fault each cell
 ended on; :func:`face_records` turns that into the stair-stepped cell faces the GRDECL export writes as
@@ -37,6 +39,8 @@ class Fault:
     reverse: bool = False          # a reverse fault: the hanging wall moves up
     mult: float = 1.0              # transmissibility multiplier across the fault (MULTFLT)
     name: str = ""
+    bends: float = 0.0             # rms wander of the trace about its chord or arc, x length (0: none)
+    seed: int = 0                  # draws the bends
 
 
 def ww_profile(r):
@@ -61,7 +65,28 @@ def _frame(fault, x, y):
         h = math.copysign(1.0, r) * (abs(r) - np.hypot(wx, wy))
         ux, uy = (cx - ox) / abs(r), (cy - oy) / abs(r)
         s = r * np.arctan2(ux * wy - uy * wx, ux * wx + uy * wy)
+    if fault.bends > 0.0:
+        h = h - _bend(fault, s)
     return s, fault.hanging_wall * h
+
+
+def _bend(fault, s):
+    """Wander of the trace (m) toward +h at ``s``: 32 wavelengths from twice the length down to a sixteenth
+    of it, amplitudes falling as wavenumber^-1.3 (Hurst 0.8), with its best-fit line over the fault removed
+    (so ``center`` and ``strike`` keep their meaning) and ``bends`` x length rms there."""
+    a = np.random.default_rng(fault.seed).standard_normal((2, 32)) * np.arange(1, 33) ** -1.3
+
+    def profile(t):
+        w = np.zeros_like(t)
+        for n in range(1, 33):
+            w += a[0, n - 1] * np.cos(np.pi * n * t) + a[1, n - 1] * np.sin(np.pi * n * t)
+        return w
+
+    u = np.linspace(-0.5, 0.5, 257)
+    slope, mean = np.polyfit(u, profile(u), 1)
+    scale = fault.bends * fault.length / np.sqrt(np.mean((profile(u) - slope * u - mean) ** 2))
+    t = s / fault.length
+    return scale * (profile(t) - slope * t - mean)
 
 
 def _cells(a, nx, ny):
