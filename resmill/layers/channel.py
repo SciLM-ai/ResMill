@@ -480,6 +480,8 @@ class ChannelLayer(Layer):
         # Metres between the points of a splay's walk, so a splay is the same on any grid
         # (its walk and one-cell sheet followed the cell). None: one cell, Alluvsim's.
         splay_step: float | None = None,
+        # Upper clip of every drawn sinuosity; Alluvsim's 1.9, reaches have up to 2.75.
+        max_sinuosity: float = 1.9,
         # ---- avulsion --------------------------------------------------
         probAvulOutside: float = 0.10, probAvulInside: float = 0.05,
         # ---- channel geometry ------------------------------------------
@@ -611,7 +613,7 @@ class ChannelLayer(Layer):
             cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
             thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth, thalweg_lag=thalweg_lag,
             path_buffer=path_buffer, continuous_banks=continuous_banks, path_step=path_step,
-            splay_step=splay_step,
+            splay_step=splay_step, max_sinuosity=max_sinuosity,
             event_poro_sd=event_poro_sd, event_log_perm_sd=event_log_perm_sd,
             record_flow_angle=any("kxky" in dict(v) for v in (facies_props or {}).values()),
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,

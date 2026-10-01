@@ -437,6 +437,11 @@ class fluvial:
         # lobe are the same on any grid, and no sheet is painted: the volume is the
         # lobe's. None: one grid cell, the sheet, Alluvsim's rules.
         splay_step: float | None = None,
+        # Upper clip of every drawn sinuosity (Alluvsim's 1.9). Freely meandering reaches
+        # reach 2.0-2.75, so raise it to draw them; the walk's sinuosity grows steeply
+        # above 2 (the noise rule is linear in it: asked 2.2, bends 100 m / 6 apart walk
+        # a median 2.5, asked 2.5 a median 4.1).
+        max_sinuosity: float = _MAX_SINUOSITY,
         # Spread of each flow event's rock: relative porosity and log10-permeability
         # standard deviations of the per-event draw (today's values by default).
         event_poro_sd: float = 0.04,
@@ -530,6 +535,7 @@ class fluvial:
         self.path_buffer = float(path_buffer)
         self.continuous_banks = bool(continuous_banks)
         self.splay_step = None if splay_step is None else float(splay_step)
+        self.max_sinuosity = float(max_sinuosity)
 
         # Hydraulic
         g = 9.8
@@ -618,7 +624,7 @@ class fluvial:
         # undershooting silently truncates (it did on elongated grids when
         # the cap was ``ndis0``: the far end never filled).
         diag = float(np.hypot(self.xmax - self.xmin, self.ymax - self.ymin))
-        self.ndis_cap = int(diag / self.step * _MAX_SINUOSITY) * 2
+        self.ndis_cap = int(diag / self.step * self.max_sinuosity) * 2
         # "Walk died immediately, redraw it" threshold (Alluvsim: ndis0/10).
         self.ndis_min = max(2, self.ndis0 // 10)
         # A path walked ``path_buffer`` beyond the grid at both ends is that much
@@ -876,7 +882,7 @@ class fluvial:
         """
         chazi = float(np.random.normal(self.mCHazi, max(self.stdevCHazi, 1e-9)))
         chsinu = float(np.random.normal(self.mCHsinu, max(self.stdevCHsinu, 1e-9)))
-        chsinu = float(np.clip(chsinu, 1.1, 1.9))
+        chsinu = float(np.clip(chsinu, 1.1, self.max_sinuosity))
         ang = np.radians(450.0 - self.mCHazi)
         dx, dy = float(np.cos(ang)), float(np.sin(ang))
         for _ in range(1000):

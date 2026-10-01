@@ -878,7 +878,7 @@ def test_every_writer_gets_permx_and_permy_from_one_place(tmp_path):
     assert iso_x is iso_y                                          # no kx/ky: PERMY is PERMX
 
 
-# === Splays in metres (splay_step) ===
+# === Splays in metres (splay_step) and a liftable sinuosity clip (max_sinuosity) ===
 
 SPLAY_KW = dict(
     nlevel=2, ntime=[12, 12], ntime_per_level=True, probAvulOutside=0.0, probAvulInside=0.0, NTGtarget=0.99,
@@ -974,3 +974,45 @@ def test_a_splays_volume_is_its_lobes_analytic_volume_on_any_cell():
         paint_lobe(100.0 + s, np.full_like(s, 200.0), LL, WW, l, w, hw, dw, 5.0, x, y_grid, nx, ny, nz,
                    cell, cell, dz, facies, np.zeros(1, dtype=np.int64), xmn=cell / 2, ymn=cell / 2)
         assert (facies == 1).sum() * cell * cell * dz == pytest.approx(expected, rel=0.015)
+
+
+def test_max_sinuosity_lifts_the_clip_on_the_drawn_sinuosity():
+    """Alluvsim clips every drawn sinuosity at 1.9, but freely meandering reaches have 2.0 /
+    2.34 / 2.75 (P10 / P50 / P90 of 38 reaches, Finotello et al. 2020 data, Camporeale et al.
+    2005): ``max_sinuosity`` raises the clip (default 1.9: outputs unchanged)."""
+    import inspect
+    from resmill.layers._fluvial import fluvial
+    assert inspect.signature(ChannelLayer.create_geology).parameters["max_sinuosity"].default == 1.9
+
+    def drawn(**kw):
+        engine = fluvial(nx=40, ny=30, nz=4, xsiz=25.0, ysiz=25.0, zsiz=1.0, xmn=12.5, ymn=12.5, nlevel=1,
+                         level_z=[2.0], mCHsinu=2.3, stdevCHsinu=0.0, seed=1, **kw)
+        return engine._sample_streamline()[3]
+
+    assert drawn() == pytest.approx(1.9)
+    assert drawn(max_sinuosity=2.6) == pytest.approx(2.3)
+    layer = ChannelLayer(nx=40, ny=30, nz=8, x_len=1000.0, y_len=750.0, z_len=8.0, top_depth=0.0)
+    layer.create_geology(seed=1, nlevel=1, ntime=2, mCHsinu=2.3, stdevCHsinu=0.0, max_sinuosity=2.6)
+    assert layer._engine.max_sinuosity == 2.6 and layer._engine._chsinu == pytest.approx(2.3)
+
+
+def test_a_lifted_clip_walks_the_literature_reach_sinuosity():
+    """With the clip at 1.9 a walk's sinuosity stays below about 1.9 whatever is asked (six
+    seeds, bends 100 m / 6 apart); asked for 2.2 with the clip lifted it reaches the
+    literature reach P10 of 2.0 and more (median 2.4)."""
+    from resmill.layers._fluvial import fluvial
+
+    def median_sinuosity(mCHsinu, **kw):
+        values = []
+        for seed in range(1, 7):
+            engine = fluvial(nx=220, ny=160, nz=4, xsiz=25.0, ysiz=25.0, zsiz=1.0, xmn=12.5, ymn=12.5, nlevel=1,
+                             level_z=[2.0], mCHsinu=mCHsinu, stdevCHsinu=0.0, stdevCHazi=0.5, path_step=100.0 / 6.0,
+                             path_buffer=340.0, seed=seed, **kw)
+            assert engine.generate_streamline() == 1
+            inside = (engine.cx > 0) & (engine.cx < 5500) & (engine.cy > 0) & (engine.cy < 4000)
+            x, y = engine.cx[inside], engine.cy[inside]
+            values.append(np.hypot(np.diff(x), np.diff(y)).sum() / np.hypot(x[-1] - x[0], y[-1] - y[0]))
+        return float(np.median(values))
+
+    assert median_sinuosity(2.2) < 1.9
+    assert median_sinuosity(2.2, max_sinuosity=2.6) > 2.0

@@ -30,6 +30,15 @@
   (x0.97, x1, x1.00); between 20 m and 40 m cells (six seeds) the volume ratio
   is 1.01, 0.98 to 1.08 per seed, against 1.50, 0.99 to 2.10, without it. `None`,
   the default, keeps the cell and the sheet: outputs are bit-identical to before.
+- `max_sinuosity` (`ChannelLayer`, and `DeltaLayer` through its fluvial
+  passthrough): the upper clip of every drawn sinuosity, 1.9 by default
+  (Alluvsim's, outputs bit-identical). Freely meandering reaches have 2.0, 2.34
+  and 2.75 (P10, P50, P90 of 38 reaches, Finotello et al. 2020 data and
+  Camporeale et al. 2005), above the clip. The walk's noise rule is linear in
+  the sinuosity, so the realized sinuosity grows steeply above 2: with bends
+  100 m / 6 apart (24 seeds) a walk asked for 2.0 has a median 1.9, 2.1 gives
+  2.25, 2.2 gives 2.5 (P10 2.2, P90 3.0), 2.3 gives 2.9 and 2.5 gives 4.1. Raise
+  the clip and ask for about 2.0 to 2.2.
 - `path_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): metres between a channel path's points. Alluvsim spaces
   them one grid cell apart, and its bend rules count points: migration
