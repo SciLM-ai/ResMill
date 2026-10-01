@@ -16,6 +16,8 @@ set (R-1 to R-14 of ``fold_fault_relations.md``):
 * the style's own sets: crestal grabens or step faults (throw at most 0.2-0.6 of the trap's relief), break thrusts on
   the steeper limb, tear faults (strike-slip faults as steep low-throw faults), a bounding fault through the spill
   point with minor faults in its hanging wall; inherited faults in some cases; relays where the grid resolves them;
+  the block styles (:mod:`resmill.block_styles`) draw the faults inside the trap of their model with the population
+  alone, a rollover's with the keystone graben of the Gulf anticline, 0.5 of the time;
 * throw 0.03 L^0.92 sin(dip) 10^N(0, 0.27) on Norne's lengths, dips by kind, curvature, wander.
 
 Each fault's tip ellipse is placed from the reservoir's depth at the fault (the datum ``top`` plus the fold there). The
@@ -32,7 +34,7 @@ from scipy import ndimage
 from .faults import Fault, ww_profile
 from .structure import _spill_levels
 
-STYLES = ("four_way", "turtle", "faulted_anticline", "fold_belt", "fault_bounded", "low_relief")
+STYLES = ("four_way", "turtle", "faulted_anticline", "fold_belt", "fault_bounded", "low_relief", "tilted_blocks", "rollover")
 MIN_THROW = 5.0                     # m in the reservoir: the faults S6's densities count
 ORDER = ("inherited", "bounding", "major", "regional", "longitudinal", "oblique", "transverse", "minor", "graben",
          "step", "thrust", "tear")  # genetic order [J]
@@ -167,7 +169,7 @@ def _kind(angle, axis):
 
 
 def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, regional=None, over_salt=False,
-                max_faults=300):
+                max_faults=300, basinward=0.8):
     """The faults of one folded trap (a list of :class:`resmill.faults.Fault`, in genetic order).
 
     ``style`` is one of :data:`STYLES`; ``fold`` the trap's structure without roughness (depth shift, m, positive
@@ -179,7 +181,8 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     the style's draw (n's azimuth in degrees clockwise from +x; for a fault-bounded trap it then also replaces the
     bounding fault's direction for the regional set); ``over_salt`` marks a dome over deep salt or a salt-cored fold.
     A density of 0 still draws the style's own sets; ``max_faults`` caps the total, dropping the regional faults
-    farthest from the trap first.
+    farthest from the trap first. ``basinward`` is the share of the regionally oriented faults whose hanging wall lies on
+    the +n side, basinward (0.8 [J]; a rollover's crestal faults are 40-70 % antithetic, Evamy et al. 1978, Okari).
     """
     if style not in STYLES:
         raise ValueError(f"style must be one of {STYLES}, got {style!r}")
@@ -205,7 +208,7 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
         R, n_angle = float(regional[0]), -math.radians(float(regional[1]))
     elif style in ("four_way", "turtle"):
         R, n_angle = 0.0, axis
-    elif style in ("faulted_anticline", "low_relief"):                   # Gulf type: n at any angle to the axis
+    elif style in ("faulted_anticline", "low_relief", "tilted_blocks", "rollover"):   # Gulf type: n at any angle to the axis
         R, n_angle = rng.uniform(0.5, 2.0), axis + rng.choice((-1.0, 1.0)) * math.radians(rng.uniform(0.0, 90.0))
         down_x, down_y, slope = _regional_dip(fr)
         if (math.cos(n_angle) * down_x + math.sin(n_angle) * down_y < 0.0) if slope > 1e-3 else rng.uniform() < 0.5:
@@ -334,7 +337,8 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
                     break
                 length *= 0.5
     graben = {"four_way": (0.6, 0.25) if over_salt else (0.2, 0.1), "turtle": (0.8, 0.0),       # E6, E7, E28 [J]
-              "faulted_anticline": (0.6, 0.0), "fold_belt": (0.5, 0.0)}.get(style, (0.0, 0.0))
+              "faulted_anticline": (0.6, 0.0), "fold_belt": (0.5, 0.0),
+              "rollover": (0.5, 0.0)}.get(style, (0.0, 0.0))                                      # T23 [J]
     u = rng.uniform()
     transverse_graben = style == "fold_belt" and over_salt and 0.5 <= u < 0.7                     # salt-cored, E13
     share = rng.uniform(0.2, 0.6)                                       # R-6: graben throw / relief 0.2-0.6 [J]
@@ -392,7 +396,7 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     def regional_fault(major, at=None):
         angle = n_angle + 0.5 * math.pi + rng.normal(0.0, reg_sigma)
         basin = math.cos(n_angle - (angle + 0.5 * math.pi))             # the hanging-wall side against +n
-        hw = int(math.copysign(1.0, basin)) * (1 if rng.uniform() < 0.8 else -1)                  # basinward 0.8 [J]
+        hw = int(math.copysign(1.0, basin)) * (1 if rng.uniform() < basinward else -1)            # basinward 0.8 [J]
         if major:                                                        # through a point of the buffered trap
             i, j = np.unravel_index(int(rng.choice(cells)), allowed.shape)
             frac = rng.uniform(-0.4, 0.4)
