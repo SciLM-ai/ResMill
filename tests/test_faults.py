@@ -68,3 +68,20 @@ def test_the_grdecl_lists_the_faults_faces_and_its_multiplier(tmp_path):
     assert len(rows) > 5 and all(r[0] == "'F1'" and r[7] in ("'X'", "'Y'") for r in rows)
     i_cols = {int(r[1]) for r in rows}
     assert i_cols <= set(range(28, 34))                              # the faces sit along x = 1.5 km (+ dip shift)
+
+
+def test_the_faults_faces_are_continuous_where_the_plane_cuts_a_cell():
+    """Every layer's hanging wall meets its footwall along an unbroken line of faces: a cell the dipping plane
+    cuts goes with the side of its middle, so no row leaves a gap in FAULTS (a leak for MULTFLT)."""
+    layer = flat_layer()
+    faces = []
+    f = Fault(center=(1520.0, 1000.0), strike=90.0, length=1200.0, throw=20.0, dip=60.0, drag=(0.0, 0.0))
+    _build_geometry([layer], faults=[f], _faces=faces)                # off the cell edge: the plane cuts cells
+    side = faces[0][1]
+    broken = 0
+    for k in range(side.shape[2]):
+        for j in range(side.shape[1]):
+            row = side[:, j, k]
+            if (row > 0).any() and (row < 0).any() and not np.any(row[:-1] * row[1:] == -1):
+                broken += 1
+    assert broken == 0

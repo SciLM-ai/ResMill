@@ -116,6 +116,8 @@ def apply_fault(fault, Xc, Yc, Zc):
                     np.where(_corners(fw), Zc - sign * dfw_k, _corners(zp)[..., None]))
     reach = (dhw_c + dfw_c) > 1e-9
     mid = 0.5 * (hw[..., 1:].astype(int) + hw[..., :-1] - fw[..., 1:] - fw[..., :-1].astype(int))
+    above = 0.5 * (Zcell[..., 1:] + Zcell[..., :-1]) <= zp[..., None]      # a cell the plane cuts: its middle's side
+    mid = np.where(mid == 0, np.where(above, 1.0, -1.0), mid)
     side = np.where(reach[..., 1:] | reach[..., :-1], np.sign(mid), 0).astype(np.int8)
     return np.maximum.accumulate(Znew, axis=2), side
 
