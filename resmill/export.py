@@ -305,7 +305,9 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         With ``faults``: also write MULTX, MULTY and MULTZ, each fault face's
         transmissibility multiplier from its shale gouge ratio
         (:mod:`resmill.fault_seal`); ``seal.vsh`` holds the clay fraction per
-        cell or per facies code.
+        cell or per facies code. ``seal.scatter``, ``offset``, ``p_open`` and
+        ``p_enhance`` spread the faults' multipliers, a share of them open or
+        raising flow, as in company decks.
     """
     layers = list(getattr(model, "layers", [model]))
     L0 = layers[0]

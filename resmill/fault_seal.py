@@ -7,9 +7,16 @@ t_f = D / 66, the median ratio (Manzocchi, Walsh, Nell & Yielding 1999). The fac
 T = [1 + t_f (2/k_f - 1/k_i - 1/k_j) / (L_i/k_i + L_j/k_j)]^-1 between the cells on either side (permeabilities k_i and
 k_j across the face, half-lengths L_i and L_j), at most 1, so every face lies somewhere between open and sealed. The
 throw at a face is read off the grid, as the offset of the same layer across it, so the throws of several faults add.
-Each fault's faces may share a log-normal factor (``scatter``), its spread calibrated against Norne's history-matched
-multipliers and against the share of faults that seal by Dn = throw / gross reservoir thickness in Knott's (1993)
-North Sea counts (:func:`knott_seal_probability`).
+The physics shapes each fault but explains none of the spread of real ones (on Norne the predicted and the
+history-matched multipliers are uncorrelated), so all faces of a fault also share one log-normal factor 10^(``offset`` +
+N(0, ``scatter``)), calibrated on Norne's history match (``scatter`` 0.9 and ``offset`` -0.6 on its own grid, the mean
+of three fits to its 36 faults with throw). A share of faults is left open (``p_open``: every face 1) and a share raises
+flow (``p_enhance``: every face one log-uniform value of ``enhance``, above 1), as Norne's history match has (5 of its
+36 faults with throw at 1 or above, up to 3.9, and a fault without throw at 20). The share of faults that seal by Dn =
+throw / gross reservoir thickness in Knott's (1993) North Sea counts (:func:`knott_seal_probability`) is a check on the
+calibration. A fault draws in this order, so a seed reproduces a tree: one uniform for its mode when either share is
+above 0, then one log-uniform value (enhancing) or one normal (seal, with a ``scatter``); with the options off nothing
+is drawn.
 
 Juxtaposition needs nothing here: the simulator connects only the cells that touch. :func:`fault_blocks` splits the
 top surface into blocks bounded by sealing faces (multiplier below 0.01, Norne's sealing range) or by a throw beyond
@@ -37,6 +44,20 @@ class Seal:
     dt_ratio: float = 66.0          # displacement over fault-rock thickness (Manzocchi 1999: median 66, harmonic 170)
     scatter: float = 0.0            # per-fault spread (log10) of its face multipliers (calibration)
     seed: int | None = None
+    offset: float = 0.0             # per-fault median shift (log10) of its face multipliers (calibration)
+    p_open: float = 0.0             # share of faults left open: every face 1
+    p_enhance: float = 0.0          # share of faults that raise flow: every face one value of ``enhance``
+    enhance: tuple = (1.0, 20.0)    # that multiplier's range, drawn log-uniform
+
+    def __post_init__(self):
+        problems = [msg for bad, msg in (
+            (not 0.0 <= self.p_open <= 1.0, "p_open must lie in [0, 1]"),
+            (not 0.0 <= self.p_enhance <= 1.0, "p_enhance must lie in [0, 1]"),
+            (self.p_open + self.p_enhance > 1.0, "p_open + p_enhance must not exceed 1"),
+            (not 0.0 < self.enhance[0] <= self.enhance[1], "enhance must be a range from above 0 upwards"),
+        ) if bad]
+        if problems:
+            raise ValueError("Seal: " + "; ".join(problems))
 
 
 def fault_rock_permeability(sgr, displacement):
@@ -71,9 +92,9 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
     ``faces`` holds ``(fault, side)`` pairs (from the geometry builder), ``zc`` the final interface stack, ``act`` the
     active cells, ``vsh`` the clay fraction per cell and ``perms`` (PERMX, PERMY, PERMZ), all (nx, ny, nz) in K-down
     order. Returns ``MULTX``, ``MULTY``, ``MULTZ`` (nx, ny, nz; a cell's + face, as the GRDECL keywords mean), the
-    faces each fault listed (``listed``), and per fault its ``dn``, ``sgr`` and ``mult`` per face and ``effective``,
-    the faces' mean weighted by the transmissibility each would have without the fault: the one multiplier for the
-    whole fault (a MULTFLT) that passes the same flow.
+    faces each fault listed (``listed``), and per fault its ``mode`` ("seal", "open" or "enhancing"), ``dn``, ``sgr``
+    and ``mult`` per face and ``effective``, the faces' mean weighted by the transmissibility each would have without
+    the fault: the one multiplier for the whole fault (a MULTFLT) that passes the same flow.
     """
     nx, ny, nz = act.shape
     rng = np.random.default_rng(seal.seed)
@@ -92,7 +113,16 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                 lateral[(face, i1, j1)] = float(np.abs(a - b).mean(axis=0).max())     # a dipping plane offsets only some layers
         throws = np.array(list(lateral.values()) or [0.0])
         dn = float(throws.max()) / max(gross, 1e-6)
-        factor = 10.0 ** rng.normal(0.0, seal.scatter) if seal.scatter > 0.0 else 1.0
+        mode, fixed, shift = "seal", None, seal.offset       # fixed: the one multiplier of an open or enhancing fault
+        if seal.p_open + seal.p_enhance > 0.0:
+            u = rng.random()
+            if u < seal.p_open:
+                mode, fixed = "open", 1.0
+            elif u < seal.p_open + seal.p_enhance:
+                mode, fixed = "enhancing", 10.0 ** rng.uniform(*np.log10(seal.enhance))
+        if mode == "seal" and seal.scatter > 0.0:
+            shift += rng.normal(0.0, seal.scatter)
+        factor = 10.0 ** shift
         sin_d = max(math.sin(math.radians(fault.dip)), 1e-3)
         sgrs, mults, weights = [], [], []
         for _, i1, _, j1, _, k1, k2, face in records:
@@ -133,14 +163,14 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                 ki, kj = max(float(perm[i, j, k]), 1e-9), max(float(perm[other]), 1e-9)
                 mult = 1.0 / (1.0 + d / seal.dt_ratio * (2.0 / kf - 1.0 / ki - 1.0 / kj) / (max(li, 1e-6) / ki
                                                                                          + max(lj, 1e-6) / kj))
-                mult = min(max(mult * factor, 1e-12), 1.0)
+                mult = min(max(mult * factor, 1e-12), 1.0) if fixed is None else fixed
                 out[key][i, j, k] *= mult
                 if key in listed:
                     listed[key][i, j, k] = True
                 sgrs.append(sgr)
                 mults.append(mult)
                 weights.append(area / (max(li, 1e-6) / ki + max(lj, 1e-6) / kj))
-        info.append(dict(name=fault.name, dn=dn, sgr=sgrs, mult=mults,
+        info.append(dict(name=fault.name, mode=mode, dn=dn, sgr=sgrs, mult=mults,
                          effective=float(np.dot(weights, mults) / sum(weights)) if sum(weights) > 0.0 else 1.0))
     out["faults"] = info
     out["listed"] = listed

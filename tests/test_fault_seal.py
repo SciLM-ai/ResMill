@@ -103,6 +103,114 @@ def test_a_faults_effective_multiplier_follows_the_faces_that_carry_flow():
     assert 10.0 ** np.mean(np.log10(mult)) > 2.0 * info["effective"]
 
 
+def tiny_fault():
+    """One fault through a 10 x 4 x 8 stack of 2.5 m beds, clay-rich and clean in pairs, all of 100 mD: the faults
+    ``faces`` and the arguments of ``face_multipliers`` that follow them, up to the seal."""
+    layer = Layer(10, 4, 8, 250.0, 100.0, 20.0, top_depth=TOP, kzkx=0.1)
+    layer.perm_mat = np.full((10, 4, 8), 100.0)
+    vsh = np.where((np.arange(8) // 2) % 2 == 0, 0.1, 0.9)[None, None, :] * np.ones((10, 4, 8))     # K-down
+    f = Fault(center=(130.0, 50.0), strike=90.0, length=20000.0, throw=3.0, dip=70.0, name="F1")
+    faces = []
+    _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
+    perm = np.asarray(layer.perm_mat)[:, :, ::-1]
+    return faces, (zc, act, vsh, (perm, perm, perm), 25.0, 25.0)
+
+
+def many_faults(seal, n):
+    """The per-fault results of ``n`` copies of the tiny fault, each with its own draws."""
+    faces, rest = tiny_fault()
+    return face_multipliers(faces * n, *rest, seal)["faults"]
+
+
+def test_the_spread_options_off_reproduce_the_physics_and_draw_nothing(monkeypatch):
+    """With the defaults every face keeps its physics multiplier, as before the spread existed (the sum is that of the
+    code at 9b23681), and a fixed offset shifts the faults without drawing a random number."""
+    faces, rest = tiny_fault()
+    base = face_multipliers(faces, *rest, Seal())["faults"][0]
+    assert base["mode"] == "seal" and len(base["mult"]) == 28
+    assert sum(base["mult"]) == pytest.approx(2.789068201551789, rel=1e-12)
+
+    class Silent:
+        def __getattr__(self, name):
+            raise AssertionError(f"drew a random number ({name})")
+
+    monkeypatch.setattr(np.random, "default_rng", lambda seed=None: Silent())
+    off = face_multipliers(faces, *rest, Seal(offset=0.0, p_open=0.0, p_enhance=0.0, scatter=0.0))["faults"][0]
+    assert off["mult"] == base["mult"]
+    shifted = face_multipliers(faces, *rest, Seal(offset=-0.6))["faults"][0]["mult"]
+    assert np.allclose(np.array(shifted) / np.array(base["mult"]), 10.0 ** -0.6, rtol=1e-12)
+
+
+def test_each_fault_has_one_factor_with_the_asked_median_and_spread():
+    """All faces of a fault share one factor 10^(offset + N(0, scatter)); over many faults its log10 has the asked
+    median and spread (the faces stay below 1 here, so the cap does not touch the ratio)."""
+    base = np.array(many_faults(Seal(), 1)[0]["mult"])
+    logs = []
+    for info in many_faults(Seal(offset=-0.8, scatter=0.3, seed=4), 300):
+        ratio = np.log10(np.array(info["mult"]) / base)
+        assert np.ptp(ratio) < 1e-9
+        logs.append(ratio[0])
+    assert np.median(logs) == pytest.approx(-0.8, abs=0.07)
+    assert np.std(logs) == pytest.approx(0.3, abs=0.04)
+
+
+def test_scatter_alone_draws_one_normal_per_fault_as_it_always_did():
+    """With no open or enhancing share the stream is what it was: one normal per fault, in the order of the faults."""
+    base = np.array(many_faults(Seal(), 1)[0]["mult"])
+    rng = np.random.default_rng(9)
+    for info in many_faults(Seal(scatter=0.3, seed=9), 5):
+        assert np.array(info["mult"])[0] / base[0] == pytest.approx(10.0 ** rng.normal(0.0, 0.3), rel=1e-12)
+
+
+def test_open_and_enhancing_faults_follow_their_shares():
+    """A uniform draw per fault: below p_open the fault is open (every face 1), up to p_open + p_enhance it enhances
+    flow (every face one log-uniform value of ``enhance``, above 1), else the faces keep their physics. Counts lie
+    within four binomial standard deviations of the shares."""
+    n, p_open, p_enhance = 500, 0.2, 0.3
+    faults = many_faults(Seal(p_open=p_open, p_enhance=p_enhance, seed=1), n)
+    modes = [f["mode"] for f in faults]
+    for mode, p in (("open", p_open), ("enhancing", p_enhance), ("seal", 1.0 - p_open - p_enhance)):
+        assert abs(modes.count(mode) - n * p) <= 4.0 * math.sqrt(n * p * (1.0 - p))
+    boost = []
+    for f in faults:
+        mult = np.array(f["mult"])
+        if f["mode"] == "open":
+            assert np.all(mult == 1.0) and f["effective"] == pytest.approx(1.0, abs=1e-12)
+        elif f["mode"] == "enhancing":
+            assert np.ptp(mult) == 0.0 and 1.0 <= mult[0] <= 20.0
+            boost.append(np.log10(mult[0]))
+        else:
+            assert np.all(mult < 1.0)
+    assert max(boost) > 1.0 and min(boost) < 0.3                       # beyond the cap of 1, over the whole range
+    assert np.mean(boost) == pytest.approx(0.5 * math.log10(20.0), abs=0.13)    # log-uniform: the middle of the range
+
+
+def test_the_draws_per_fault_are_the_share_then_one_value():
+    """The order is fixed, so a seed reproduces a tree: a uniform per fault, then (enhancing) one uniform in log10 of
+    ``enhance`` or (seal, with a scatter) one normal."""
+    seal = Seal(p_open=0.3, p_enhance=0.2, scatter=0.25, enhance=(2.0, 8.0), seed=5)
+    base = np.array(many_faults(Seal(), 1)[0]["mult"])
+    rng = np.random.default_rng(5)
+    for info in many_faults(seal, 40):
+        u = rng.random()
+        mult = np.array(info["mult"])
+        if u < 0.3:
+            assert info["mode"] == "open" and np.all(mult == 1.0)
+        elif u < 0.5:
+            assert info["mode"] == "enhancing"
+            assert mult[0] == pytest.approx(10.0 ** rng.uniform(math.log10(2.0), math.log10(8.0)), rel=1e-12)
+        else:
+            assert info["mode"] == "seal"
+            assert mult[0] / base[0] == pytest.approx(min(10.0 ** rng.normal(0.0, 0.25), 1.0 / base[0]), rel=1e-12)
+
+
+@pytest.mark.parametrize("kw", [dict(p_open=-0.1), dict(p_enhance=1.2), dict(p_open=0.7, p_enhance=0.5),
+                                dict(enhance=(5.0, 2.0)), dict(enhance=(0.0, 4.0))])
+def test_shares_and_ranges_that_make_no_sense_are_refused(kw):
+    with pytest.raises(ValueError):
+        Seal(**kw)
+
+
 def test_to_grdecl_writes_the_face_multipliers(tmp_path):
     layer, vsh = cake()
     f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=12.0, dip=60.0, name="F1")
@@ -112,6 +220,22 @@ def test_to_grdecl_writes_the_face_multipliers(tmp_path):
     plain = tmp_path / "plain.grdecl"
     to_grdecl(layer, plain, faults=[f])
     assert "MULTX" not in plain.read_text()
+
+
+def test_to_grdecl_writes_the_spread_of_the_faults(tmp_path):
+    """The spread options reach the file: an enhancing fault's faces are written above 1, an open one's at 1."""
+    layer, vsh = cake()
+    f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=12.0, dip=60.0, name="F1")
+
+    def multx(seal):
+        to_grdecl(layer, tmp_path / "m.grdecl", faults=[f], seal=seal)
+        block = (tmp_path / "m.grdecl").read_text().split("\nMULTX\n")[1].split("\n/")[0]
+        return np.array([float(tok.split("*")[-1]) for tok in block.split()])
+
+    assert multx(Seal(vsh=vsh)).min() < 1.0
+    enhanced = multx(Seal(vsh=vsh, p_enhance=1.0, enhance=(5.0, 5.0), seed=1))
+    assert enhanced.max() == pytest.approx(5.0) and enhanced.min() == 1.0
+    assert np.all(multx(Seal(vsh=vsh, p_open=1.0, seed=1)) == 1.0)
 
 
 def dome_model(nx=80, ny=60, dx=50.0):
