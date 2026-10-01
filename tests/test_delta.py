@@ -145,3 +145,19 @@ def test_delta_bottom_generation_sits_on_the_floor():
     sand = (layer.facies >= 1).mean(axis=(0, 1))
     assert sand[0] > 0                     # bottom generation reaches the floor ...
     assert sand[0] <= 1.5 * sand[2] + 1e-6  # ... as a full body, not a sliver over mud
+
+
+def test_delta_passes_splay_step_and_max_sinuosity_to_every_generation(monkeypatch):
+    """The fluvial passthrough of the CHANGELOG: both options reach the engine of each generation."""
+    from resmill.layers import _fluvial
+    seen = []
+    original = _fluvial.fluvial.__init__
+
+    def record(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        seen.append((self.splay_step, self.max_sinuosity))
+
+    monkeypatch.setattr(_fluvial.fluvial, "__init__", record)
+    layer = DeltaLayer(nx=32, ny=32, nz=8, x_len=512, y_len=512, z_len=16, top_depth=0.0)
+    layer.create_geology(seed=1, n_generations=2, ntime_per_gen=3, splay_step=20.0, max_sinuosity=2.2)
+    assert seen == [(20.0, 2.2)] * 2
