@@ -120,6 +120,25 @@ def test_closure_stats_measures_a_paraboloid_dome():
     assert stats["mask"][150, 150] and not stats["mask"][0, 0]
 
 
+def test_spill_levels_treat_cells_without_rock_as_walls():
+    """A cell of infinite depth is one a fault collapsed (no rock): no path crosses it and its own level stays infinite.
+    Two of them side by side once kept pushing each other onto the flood's queue for ever. A band of them across a map
+    splits it into two maps (each spills at its own edge), and a pit ringed by them has no way out: its level is infinite."""
+    band = np.full((5, 8), 7.0)
+    band[:, 3:5] = np.inf                                                # a collapsed band, two cells wide, across the map
+    band[2, 6] = 1.0                                                     # a pit east of it
+    band[2, 1] = 2.0                                                     # and one west
+    spill = st._spill_levels(band)
+    assert np.isinf(spill[:, 3:5]).all()
+    assert (spill[2, 6], spill[2, 1]) == (7.0, 7.0)                      # each spills over its own side's 7 m rim
+    ringed = np.full((7, 7), 10.0)
+    ringed[2:5, 2:5] = np.inf
+    ringed[3, 3] = 2.0                                                   # a pit inside a ring of collapsed cells
+    spill = st._spill_levels(ringed)
+    assert np.isinf(spill[2:5, 2:5]).all()
+    assert (spill[np.isfinite(ringed)][ringed[np.isfinite(ringed)] == 10.0] == 10.0).all()
+
+
 @pytest.mark.parametrize("kw", [dict(), dict(aspect=3.0, azimuth=30.0), dict(limb_ratio=2.5, tilt=0.4),
                                 dict(aspect=2.0, satellites=2, seed=4, tilt=0.2)])
 def test_closure_has_the_requested_area_and_height(kw):

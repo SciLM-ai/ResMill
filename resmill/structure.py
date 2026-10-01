@@ -206,20 +206,21 @@ def surface(arr, x_len, y_len):
 def _spill_levels(depth, wall_x=None, wall_y=None):
     """Each cell's spill depth: the deepest point of the shallowest path from it to the map's edge (a priority
     flood from the edge, 4-connected). ``wall_x`` (nx-1, ny) and ``wall_y`` (nx, ny-1) mark sealed cell edges the
-    path may not cross (between i and i+1, j and j+1); a cell no path reaches keeps an infinite level."""
+    path may not cross (between i and i+1, j and j+1); a cell no path reaches keeps an infinite level. A cell of
+    infinite depth holds no rock (collapsed by a fault): no path crosses it, and its own level stays infinite."""
     nx, ny = depth.shape
     spill = np.full(depth.shape, np.inf)
     heap = []
     for i in range(nx):
         for j in range(ny):
-            if i in (0, nx - 1) or j in (0, ny - 1):
+            if (i in (0, nx - 1) or j in (0, ny - 1)) and depth[i, j] != np.inf:
                 spill[i, j] = depth[i, j]
                 heap.append((depth[i, j], i, j))
     heapq.heapify(heap)
     while heap:
         level, i, j = heapq.heappop(heap)
         for a, b in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
-            if not (0 <= a < nx and 0 <= b < ny) or spill[a, b] != np.inf:
+            if not (0 <= a < nx and 0 <= b < ny) or spill[a, b] != np.inf or depth[a, b] == np.inf:
                 continue
             if (wall_x is not None and a != i and wall_x[min(a, i), j]) or \
                     (wall_y is not None and b != j and wall_y[i, min(b, j)]):
