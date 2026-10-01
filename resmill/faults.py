@@ -6,7 +6,8 @@ following Walsh & Watterson (1987), D = Dmax (1 - r)^1.5 (1 + 3 r)^0.5, with a t
 (Nicol et al. 1996). The displacement is split between the hanging wall (``hw_share``) and the footwall,
 and bends the layers next to the fault (reverse drag) with a taper (1 - d / reach)^2 over ``drag`` times
 the length on each side (Georgsen et al. 2012; Wu et al. 2020). The fault dips at ``dip`` toward its
-hanging wall, so its trace moves with depth, and its trace may curve (``radius``) and wander about its
+hanging wall, so its trace moves with depth (a reverse fault's does not: a column, ordered in k, cannot
+repeat a section, so each column goes whole to one side), and its trace may curve (``radius``) and wander about its
 chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surfaces across their slip
 (Candela et al. 2012), for the bends left where segments linked; Walsh et al. 2003).
 
@@ -135,8 +136,12 @@ def apply_fault(fault, Xc, Yc, Zc):
     dhw_k, dfw_k = displacement(s_k, h_k, Zc)
     dhw_c, dfw_c = displacement(s_c, h_c, Zcell)
     zp = zc + h_c * tan_d                                         # the fault plane's depth under each column
-    hw = Zcell + sign * dhw_c <= zp[..., None]
-    fw = Zcell - sign * dfw_c >= zp[..., None]
+    if fault.reverse:                     # a k-ordered column cannot repeat a section: whole columns to one side
+        hw = np.broadcast_to((h_c > 0.0)[..., None], Zcell.shape)
+        fw = ~hw
+    else:
+        hw = Zcell + dhw_c <= zp[..., None]
+        fw = Zcell - dfw_c >= zp[..., None]
     Znew = np.where(_corners(hw), Zc + sign * dhw_k,
                     np.where(_corners(fw), Zc - sign * dfw_k, _corners(zp)[..., None]))
     reach = (dhw_c + dfw_c) > 1e-9

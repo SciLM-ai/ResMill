@@ -119,3 +119,21 @@ def test_the_faults_faces_are_continuous_where_the_plane_cuts_a_cell():
             if (row > 0).any() and (row < 0).any() and not np.any(row[:-1] * row[1:] == -1):
                 broken += 1
     assert broken == 0
+
+
+def test_a_reverse_fault_raises_its_hanging_wall_without_stretching_cells():
+    """A k-ordered column cannot hold a reverse fault's repeated section, so each column goes whole to one
+    side: the hanging wall (+x here) rises by about the throw, and no cell is stretched across the plane
+    (5 m cells stay 5 m to within the few per cent the tip-line profile bends them)."""
+    layer = flat_layer()
+    f = Fault(center=(1520.0, 1000.0), strike=90.0, length=1200.0, throw=20.0, dip=60.0, drag=(0.0, 0.0),
+              reverse=True)
+    faces = []
+    _, _, zc, _ = _build_geometry([layer], faults=[f], _faces=faces)
+    thickness = np.diff(zc, axis=2)
+    assert thickness.min() > 4.7 and thickness.max() < 5.3
+    j_mid = 2 * int(1000.0 // DX)
+    top = zc[:, j_mid, 0]
+    assert top[:40].mean() - top[-40:].mean() == pytest.approx(20.0, rel=0.15)   # east (hanging wall) higher
+    side = faces[0][1]
+    assert np.all(side == side[:, :, :1])                                         # whole columns
