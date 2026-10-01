@@ -186,3 +186,66 @@ def test_closure_warp_makes_the_outline_lobate():
                                              center=(0.0, 0.0)))
     assert lobate > 1.1 * plain
     assert stats["area"] == pytest.approx(8e6, rel=0.03) and stats["height"] == pytest.approx(120.0, rel=0.02)
+
+
+# ----- growth strata: the thickness factor of a zone laid down while a fault moved -----
+
+def growth_fault(**kw):
+    from resmill.faults import Fault
+    return Fault(**{**dict(center=(1000.0, 1000.0), strike=90.0, length=10000.0, throw=50.0, dip=60.0, z_center=2000.0,
+                           hw_share=1.0, drag=(0.0, 0.0), name="F1"), **kw})
+
+
+def test_growth_is_one_at_the_footwall_cutoff_and_the_expansion_a_width_beyond_it():
+    """A 60 degree fault whose plane at 2,000 m is at x = 1,000 m, hanging wall east: at the zone's depth, 2,100 m, its trace
+    is 100 / tan(60) = 57.74 m east. The factor is 1 there and west of it, EI a width on, and a smooth step between
+    (3 t^2 - 2 t^3: 0.156 of the way up a quarter of the way along, half way up at the middle), on the fault's centre line."""
+    from resmill.faults import _plane
+    g = st.growth(growth_fault(), expansion=1.8, width=300.0, depth=2100.0)
+    x0 = 1000.0 + 100.0 / np.tan(np.radians(60.0))
+    x = np.array([x0 - 500.0, x0, x0 + 75.0, x0 + 150.0, x0 + 300.0, x0 + 4000.0])
+    assert g(x, np.full(6, 1000.0)) == pytest.approx([1.0, 1.0, 1.0 + 0.8 * 0.15625, 1.4, 1.8, 1.8], abs=1e-9)
+    f = growth_fault(detach=4500.0, dip=40.0)                              # listric: the trace is the arc's at 2,100 m
+    h0 = float(_plane(f, 2000.0)[1](2100.0))
+    xl = np.array([1000.0 + h0 - 1.0, 1000.0 + h0 + 300.0])
+    assert st.growth(f, 1.8, 300.0, 2100.0)(xl, np.full(2, 1000.0)) == pytest.approx([1.0, 1.8], abs=1e-9)
+
+
+def test_growth_dies_along_strike_with_the_throw_profile():
+    """Half a half-length along the strike the throw of a fault is 0.559 of its centre's (Walsh and Watterson: (1 - r)^1.5
+    sqrt(1 + 3 r) at r = 0.5), and nothing beyond the tip: so the excess expansion is 0.559 of the centre's there and
+    zero past the tip, 1 in the footwall."""
+    g = st.growth(growth_fault(), expansion=2.0, width=100.0, depth=2000.0)       # the zone at the tip ellipse's centre
+    far = 1000.0 + 2000.0                                                          # clear of the transition
+    trace = lambda s: (far, 1000.0 - s)                                           # the trace runs along -y at strike 90
+    assert g(*trace(0.0)) == pytest.approx(2.0)
+    assert g(*trace(2500.0)) == pytest.approx(1.0 + 0.559017, abs=1e-5)           # r = 2500 / 5000 = 0.5
+    assert g(*trace(5000.0)) == pytest.approx(1.0) and g(*trace(7000.0)) == pytest.approx(1.0)
+    assert g(far - 2500.0, 1000.0) == pytest.approx(1.0)                          # footwall
+
+
+@pytest.mark.parametrize("detach", [None, 4500.0])
+def test_growth_thickens_the_zone_by_the_expansion_in_the_hanging_wall_only(detach):
+    """As the isochore of a 40 m zone cut by a fault whose hanging wall moves rigidly (a plane) or by vertical shear (listric,
+    toward its flat): 5 m cells are EI x 5 m in the hanging wall far from the fault and 5 m in the footwall, none negative."""
+    from resmill.export import _build_geometry
+    nx, ny, nz, dx = 160, 6, 8, 50.0
+    layer = Layer(nx, ny, nz, nx * dx, ny * dx, 40.0, top_depth=2000.0, kzkx=0.1)
+    f = growth_fault(center=(1000.0, 150.0), detach=detach, dip=40.0 if detach else 60.0, throw=30.0, z_center=2020.0)
+    g = st.growth(f, 2.2, 200.0, 2020.0)
+    _, _, zc, _ = _build_geometry([layer], isochore=[g], faults=[f])
+    thick = np.diff(zc[:, 6, :], axis=1)
+    assert thick.min() >= 0.0                                                        # the cut-out beside the plane is thin, never negative
+    assert thick[20:30].max() == pytest.approx(5.0, abs=1e-6)                        # x 0.5-0.75 km: footwall, clear of the fault
+    far = thick[-20:]                                       # plus the throw's own change over the thickened zone: a few cm
+    assert far.max() == pytest.approx(11.0, abs=0.05) and far.min() == pytest.approx(11.0, abs=0.05)
+
+
+def test_growth_refuses_what_has_no_meaning():
+    """It needs the fault's own depth scale (z_center), a width and an expansion above 0."""
+    from resmill.faults import Fault
+    with pytest.raises(ValueError, match="z_center"):
+        st.growth(Fault(center=(0.0, 0.0), strike=0.0, length=1000.0, throw=10.0), 1.5, 100.0, 2000.0)
+    for kw in (dict(width=0.0), dict(width=-5.0), dict(expansion=0.0)):
+        with pytest.raises(ValueError):
+            st.growth(growth_fault(), **{**dict(expansion=1.5, width=100.0, depth=2000.0), **kw})

@@ -155,6 +155,17 @@ def _listric(dip, zc, detach):
     return plane, trace
 
 
+def _plane(fault, zc):
+    """``plane(h)`` and ``trace(z)`` of ``fault``'s plane with its tip ellipse centred at depth ``zc``: the plane's depth
+    under a column ``h`` m from the trace there (toward the hanging wall), and the distance of the plane at depth ``z``."""
+    if fault.detach is None:
+        tan_d = math.tan(math.radians(fault.dip))
+        return (lambda h: zc + h * tan_d), (lambda z: (z - zc) / tan_d)
+    if not fault.detach > zc:
+        raise ValueError(f"Fault {fault.name!r}: detach ({fault.detach:g} m) must lie below the tip ellipse's centre ({zc:g} m)")
+    return _listric(fault.dip, zc, fault.detach)
+
+
 def apply_fault(fault, Xc, Yc, Zc):
     """Displace the interface stack ``Zc`` (2nx, 2ny, nk) by ``fault``.
 
@@ -164,19 +175,14 @@ def apply_fault(fault, Xc, Yc, Zc):
     nx, ny = Xc.shape[0] // 2, Xc.shape[1] // 2
     Xm, Ym = _cells(Xc, nx, ny), _cells(Yc, nx, ny)
     Zcell = _cells(Zc, nx, ny)
-    sin_d, tan_d = math.sin(math.radians(fault.dip)), math.tan(math.radians(fault.dip))
+    sin_d = math.sin(math.radians(fault.dip))
     if fault.z_center is None:
         i0 = int(np.clip(np.argmin(np.abs(Xm[:, 0] - fault.center[0])), 0, nx - 1))
         j0 = int(np.clip(np.argmin(np.abs(Ym[0, :] - fault.center[1])), 0, ny - 1))
         zc = float(0.5 * (Zcell[i0, j0, 0] + Zcell[i0, j0, -1]))
     else:
         zc = float(fault.z_center)
-    if fault.detach is None:
-        plane, trace = (lambda h: zc + h * tan_d), (lambda z: (z - zc) / tan_d)
-    elif fault.detach > zc:
-        plane, trace = _listric(fault.dip, zc, fault.detach)
-    else:
-        raise ValueError(f"Fault {fault.name!r}: detach ({fault.detach:g} m) must lie below the tip ellipse's centre ({zc:g} m)")
+    plane, trace = _plane(fault, zc)
     lx = 0.5 * fault.length
     ly = lx / fault.aspect
 
