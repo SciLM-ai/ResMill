@@ -347,3 +347,150 @@ def test_plot_section_and_to_pyvista_draw_faulted_models():
     from resmill.export import to_pyvista
     grid = to_pyvista(layer, faults=faults)
     assert grid.n_cells == NX * NY * NZ
+
+
+# ----- listric faults (Fault.detach): a circular plane flattening at a detachment, the hanging wall by vertical shear -----
+
+def research_rollover(delta_s, z_d, z_r, throw):
+    """The research's closed form (design_notes/structure_research/step4_rollover_calc.py), written out again: a circular
+    fault of surface dip ``delta_s`` (deg) turning flat at depth ``z_d`` (m), x measured from its surface trace; the horizon
+    at ``z_r`` has ``throw`` at the fault and, by vertical shear (constant heave), depth z_r + F(x) - F(x - H) beyond the
+    hanging-wall cutoff. Returns the fault's dip at z_r (deg), the heave H, and the depth as a function of the distance p
+    (m) east of the footwall cutoff."""
+    ds = math.radians(delta_s)
+    radius = z_d / (1.0 - math.cos(ds))
+    xb = radius * math.sin(ds)
+
+    def plane(x):
+        x = np.asarray(x, float)
+        u = np.clip((xb - x) / radius, -1.0, 1.0)
+        return np.where(x >= xb, z_d, z_d - radius * (1.0 - np.sqrt(1.0 - u ** 2)))
+
+    th = math.acos(1.0 - (z_d - z_r) / radius)
+    x_r = radius * (math.sin(ds) - math.sin(th))
+    xs = np.linspace(x_r, x_r + 20000.0, 400001)
+    heave = float(xs[int(np.argmin(np.abs(plane(xs) - (z_r + throw))))] - x_r)
+    return math.degrees(th), heave, lambda p: z_r + plane(x_r + p) - plane(x_r + p - heave)
+
+
+def rollover_section(dip, detach, z_r, throw, dx=25.0, nx=320, **kw):
+    """Top-interface corner depths along the middle row of a 10 m thick layer cut by a huge listric fault (so its throw does
+    not taper) whose trace at z_r passes x = 1000 m, the hanging wall to the east; returns x of the corners and depths."""
+    layer = Layer(nx, 6, 2, nx * dx, 6 * dx, 10.0, top_depth=z_r, kzkx=0.1)
+    f = Fault(center=(1000.0, 3 * dx), strike=90.0, length=4.0e5, throw=throw, dip=dip, detach=detach, z_center=z_r, **kw)
+    xc, _, zc, _ = _build_geometry([layer], faults=[f])
+    return xc[:, 6], zc[:, 6, 0]
+
+
+def test_a_listric_fault_with_a_far_detachment_is_the_planar_fault():
+    """As the detachment recedes the circle straightens: a listric fault with its detachment 10^9 m down gives the planar
+    fault's layers to 1 mm and the same sides, the planar fault with the whole throw on the hanging wall and no drag (what
+    vertical shear over a plane is)."""
+    layer = thin_stack()
+    kw = dict(center=(1510.0, 1500.0), strike=75.0, length=1500.0, throw=40.0, dip=60.0, z_center=TOP + 20.0)
+    planar, listric = [], []
+    _, _, za, _ = _build_geometry([layer], faults=[Fault(hw_share=1.0, drag=(0.0, 0.0), **kw)], _faces=planar)
+    _, _, zb, _ = _build_geometry([layer], faults=[Fault(detach=1.0e9, **kw)], _faces=listric)
+    assert np.abs(za - zb).max() < 1.0e-3
+    assert np.array_equal(planar[0][1], listric[0][1])
+
+
+def test_the_listric_plane_is_the_circle_through_the_dip_at_z_center_flat_at_the_detachment():
+    """The plane is a circular arc: at z_center it is where the trace is and dips ``dip`` there, it flattens at ``detach``
+    (a horizontal run beyond R sin(dip) of the trace), never turns back, and trace(plane(h)) gives h back to 1e-9 m. R is
+    (detach - z_center) / (1 - cos dip), the arc's radius."""
+    from resmill.faults import _listric
+    dip, zc, detach = 55.0, 2500.0, 4500.0
+    plane, trace = _listric(dip, zc, detach)
+    radius = (detach - zc) / (1.0 - math.cos(math.radians(dip)))
+    h = np.linspace(-1500.0, 3.0 * radius, 4001)
+    z = plane(h)
+    assert float(plane(0.0)) == pytest.approx(zc, abs=1e-9)
+    slope = (plane(1e-3) - plane(-1e-3)) / 2e-3
+    assert math.degrees(math.atan(slope)) == pytest.approx(dip, abs=1e-6)
+    assert np.all(np.diff(z) >= 0.0) and z[-1] == pytest.approx(detach, abs=1e-9)
+    assert np.all(z[h >= radius * math.sin(math.radians(dip))] == pytest.approx(detach, abs=1e-9))
+    on_arc = (z > zc - 400.0) & (z < detach - 1e-6)
+    assert np.abs(trace(z[on_arc]) - h[on_arc]).max() < 1e-9
+    # the circle itself: every point of the arc is R from its centre, which lies R above the flat's tangent point
+    cx, cz = radius * math.sin(math.radians(dip)), detach - radius
+    on = (h > cx - radius) & (h < cx)                                  # past the vertical point the plane stays vertical
+    assert np.abs(np.hypot(h[on] - cx, z[on] - cz) - radius).max() < 1e-6
+
+
+def test_a_rollover_has_the_closed_form_amplitude_heave_and_width_of_vertical_shear():
+    """Circular fault, surface dip 55 deg, detachment 4.5 km, horizon at 2.5 km with 300 m of throw (the research's table:
+    dip at the horizon 35.9 deg, heave 438 m, steepest drag dip 4.2 deg, 90 % of the drag gone 5.24 km from the cutoff):
+    the grid's top surface follows the closed form depth z + F(h) - F(h - H) at every corner clear of the fault, drags down
+    by the throw at the cutoff, and measures those numbers."""
+    dip, heave, depth = research_rollover(55.0, 4500.0, 2500.0, 300.0)
+    assert dip == pytest.approx(35.9, abs=0.05) and heave == pytest.approx(438.0, abs=1.0)
+    x, z = rollover_section(dip, 4500.0, 2500.0, 300.0)
+    east = x > 1000.0 + heave + 50.0
+    assert np.abs(z[east] - depth(x[east] - 1000.0)).max() < 0.05
+    west = x < 1000.0 - 50.0
+    assert np.abs(z[west] - 2500.0).max() < 1e-6
+    first = np.argmax(east)                                           # the drag starts at the throw and falls no faster than its steepest dip
+    assert 0.0 <= 300.0 - (z[first] - 2500.0) <= math.tan(math.radians(4.3)) * (x[first] - 1000.0 - heave)
+    drag = z - 2500.0
+    pos = x[east] - 1000.0 - heave
+    dips = np.degrees(np.arctan(np.diff(z[east]) / np.diff(x[east])))
+    assert -dips.min() == pytest.approx(4.2, abs=0.15)                                               # steepest drag dip
+    width = pos[np.argmax(drag[east] < 0.1 * drag[east][0])]
+    assert width == pytest.approx(5240.0, abs=100.0)
+    gap = (x > 1000.0) & (x < 1000.0 + heave) & (np.abs(z - 2500.0) > 1.0)
+    assert 0.5 * np.count_nonzero(gap) * 25.0 == pytest.approx(heave, abs=3 * 25.0)                  # treads span the heave
+
+
+def test_a_deeper_detachment_gives_a_broader_flatter_roll_and_a_bigger_throw_a_bigger_one():
+    """The research's table: with 300 m of throw the steepest drag dip is 4.2, 3.2 and 2.7 deg for detachments at 4.5, 6
+    and 7.5 km, and 8.5 deg for 600 m of throw at 4.5 km."""
+    for z_d, throw, steepest in ((4500.0, 300.0, 4.2), (6000.0, 300.0, 3.2), (7500.0, 300.0, 2.7), (4500.0, 600.0, 8.5)):
+        dip, heave, _ = research_rollover(55.0, z_d, 2500.0, throw)
+        x, z = rollover_section(dip, z_d, 2500.0, throw, nx=480)
+        east = x > 1000.0 + heave + 50.0
+        dips = np.degrees(np.arctan(np.diff(z[east]) / np.diff(x[east])))
+        assert -dips.min() == pytest.approx(steepest, abs=0.2)
+
+
+def test_the_listric_hanging_wall_drags_by_the_throw_at_the_fault_and_lies_still_beyond_the_flat():
+    """Vertical shear: no drag past the fault's flat (R sin(dip) + heave from the trace), the drag falls monotonically from
+    the fault, no cell has negative thickness, and the footwall is not moved at all (its share of the throw is zero)."""
+    x, z = rollover_section(35.9, 4500.0, 2500.0, 300.0, nx=480)
+    east = x > 1000.0 + 438.0 + 50.0
+    drag = z[east] - 2500.0
+    assert np.all(np.diff(drag) <= 1e-9) and drag[-1] == pytest.approx(0.0, abs=1e-9)
+    assert np.all(drag[x[east] > 1000.0 + 438.0 + 6.4e3] == pytest.approx(0.0, abs=1e-9))
+    assert np.all(z[x < 950.0] == 2500.0)
+
+
+def test_a_listric_fault_refuses_values_that_make_no_arc():
+    """A detachment at or above the tip ellipse's centre, a non-positive one, and a reverse listric fault have no arc."""
+    base = dict(center=(1500.0, 1000.0), strike=90.0, length=1200.0, throw=20.0)
+    for bad in (dict(detach=0.0), dict(detach=-5.0), dict(detach=2000.0, z_center=2000.0), dict(detach=3000.0, reverse=True)):
+        with pytest.raises(ValueError):
+            Fault(**{**base, **bad})
+    with pytest.raises(ValueError):                                    # the default centre is the stack's middle, known only there
+        _build_geometry([flat_layer()], faults=[Fault(**base, detach=TOP + 10.0)])
+
+
+def test_a_listric_fault_lists_every_contact_across_it_and_every_tread(tmp_path):
+    """FAULTS for a listric fault: every face on which a cell meets the other side, wherever along the face, and every cell
+    resting on the other side, as for a planar one (twisted trace, so a face may touch only between its pillars)."""
+    layer = thin_stack()
+    f = Fault(**{**TWISTED, "dip": 50.0}, detach=TOP + 1500.0, z_center=TOP + 25.0, name="F1")
+    faces = []
+    _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
+    to_grdecl(layer, tmp_path / "m.grdecl", faults=[f])
+    rows = [r.split() for r in (tmp_path / "m.grdecl").read_text().split("\nFAULTS\n")[1].split("\n/\n")[0].splitlines()]
+    listed = {(r[7].strip("'"), int(r[1]) - 1, int(r[3]) - 1, k) for r in rows for k in range(int(r[5]) - 1, int(r[6]))}
+    side = faces[0][1]
+    assert lateral_contacts(side, zc) and lateral_contacts(side, zc) <= listed
+    treads = 0
+    for i, j in zip(*np.nonzero((side > 0).any(axis=2) & (side < 0).any(axis=2))):
+        live = [k for k in range(side.shape[2]) if act[i, j, k]]
+        for a, b in zip(live, live[1:]):
+            if side[i, j, a] * side[i, j, b] == -1:
+                treads += 1
+                assert ("Z", i, j, a) in listed
+    assert treads
