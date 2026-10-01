@@ -152,16 +152,33 @@ def apply_fault(fault, Xc, Yc, Zc):
     return np.maximum.accumulate(Znew, axis=2), side
 
 
-def face_records(name, side):
-    """``FAULTS`` records (1-based I1 I2 J1 J2 K1 K2 and face) of the cell faces between the two sides."""
+def face_records(name, side, zc, act):
+    """``FAULTS`` records (1-based I1 I2 J1 J2 K1 K2 and face) of every cell face on which a cell meets a cell of the
+    fault's other side, on the final interface stack ``zc`` (2nx, 2ny, nk) with active cells ``act`` (nx, ny, nz).
+
+    Flow multiplies each connection by the multiplier of its lower-index cell's face, so a face is listed wherever
+    its cell meets the other side: sideways in any layer (layer k against layer k' across the throw, 'X' and 'Y'),
+    and downward where a cell rests on one of the other side, directly or across cut-out cells PINCH bridges ('Z').
+    """
     records = []
     for axis, face in ((0, "X"), (1, "Y")):
         lo = np.take(side, np.arange(side.shape[axis] - 1), axis=axis)
         hi = np.take(side, np.arange(1, side.shape[axis]), axis=axis)
-        cut = (lo * hi) == -1
-        for i, j in zip(*np.nonzero(cut.any(axis=2))):
-            ks = np.flatnonzero(cut[i, j])
-            breaks = np.flatnonzero(np.diff(ks) > 1)
-            for run in np.split(ks, breaks + 1):
+        meet = ((lo > 0).any(axis=2) & (hi < 0).any(axis=2)) | ((lo < 0).any(axis=2) & (hi > 0).any(axis=2))
+        for i, j in zip(*np.nonzero(meet)):
+            if axis == 0:
+                a, b = zc[2 * i + 1, 2 * j:2 * j + 2], zc[2 * i + 2, 2 * j:2 * j + 2]
+            else:
+                a, b = zc[2 * i:2 * i + 2, 2 * j + 1], zc[2 * i:2 * i + 2, 2 * j + 2]
+            a, b = np.vstack([a, a.mean(axis=0)]), np.vstack([b, b.mean(axis=0)])   # both pillars and the middle
+            overlap = np.minimum(a[:, 1:, None], b[:, None, 1:]) - np.maximum(a[:, :-1, None], b[:, None, :-1])
+            other = lo[i, j][:, None] * hi[i, j][None, :] == -1
+            ks = np.flatnonzero(((overlap > 1e-6).any(axis=0) & other).any(axis=1))
+            for run in np.split(ks, np.flatnonzero(np.diff(ks) > 1) + 1) if ks.size else ():
                 records.append((name, i + 1, i + 1, j + 1, j + 1, int(run[0]) + 1, int(run[-1]) + 1, face))
+    for i, j in zip(*np.nonzero((side > 0).any(axis=2) & (side < 0).any(axis=2))):
+        live = np.flatnonzero(act[i, j])
+        s = side[i, j, live]
+        for k in live[:-1][s[:-1] * s[1:] == -1]:
+            records.append((name, i + 1, i + 1, j + 1, j + 1, int(k) + 1, int(k) + 1, "Z"))
     return records

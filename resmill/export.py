@@ -360,7 +360,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
             names = [fault.name or f"F{n + 1:02d}" for n, (fault, _) in enumerate(faces)]
             f.write("\nFAULTS\n")
             for name, (_, side) in zip(names, faces):
-                for rec in face_records(name, side):
+                for rec in face_records(name, side, Zc, actnum):
                     f.write(" '{}' {} {} {} {} {} {} '{}' /\n".format(*rec))
             f.write("/\n\nMULTFLT\n")
             for name, (fault, _) in zip(names, faces):

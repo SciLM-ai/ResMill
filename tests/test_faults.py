@@ -137,3 +137,48 @@ def test_a_reverse_fault_raises_its_hanging_wall_without_stretching_cells():
     assert top[:40].mean() - top[-40:].mean() == pytest.approx(20.0, rel=0.15)   # east (hanging wall) higher
     side = faces[0][1]
     assert np.all(side == side[:, :, :1])                                         # whole columns
+
+
+def test_faults_lists_every_face_across_which_the_two_sides_touch(tmp_path):
+    """Flow multiplies a connection by the face of its lower-index cell, also a connection across the throw
+    (layer k against layer k'), so FAULTS must list every face on which a cell meets the fault's other side in
+    any layer. Listing only same-layer pairs let a sealing dipping normal fault leak fully in Flow."""
+    layer = flat_layer()
+    f = Fault(center=(1520.0, 1000.0), strike=90.0, length=1200.0, throw=20.0, dip=60.0, drag=(0.0, 0.0), name="F1")
+    faces = []
+    _, _, zc, _ = _build_geometry([layer], faults=[f], _faces=faces)
+    side = faces[0][1]
+    to_grdecl(layer, tmp_path / "m.grdecl", faults=[f])
+    rows = [r.split() for r in (tmp_path / "m.grdecl").read_text().split("\nFAULTS\n")[1].split("\n/\n")[0].splitlines()]
+    listed = {(int(r[1]) - 1, int(r[3]) - 1, k) for r in rows if r[7] == "'X'" for k in range(int(r[5]) - 1, int(r[6]))}
+    missing = []
+    for i in range(NX - 1):
+        for j in range(NY):
+            for k in range(NZ):
+                a = zc[2 * i + 1, 2 * j:2 * j + 2, k:k + 2]                    # the shared face, west cell
+                for kk in range(NZ):
+                    b = zc[2 * i + 2, 2 * j:2 * j + 2, kk:kk + 2]              # the shared face, east cell
+                    touch = np.any(np.minimum(a[:, 1], b[:, 1]) - np.maximum(a[:, 0], b[:, 0]) > 1e-6)
+                    if touch and side[i, j, k] * side[i + 1, j, kk] == -1 and (i, j, k) not in listed:
+                        missing.append((i, j, k, kk))
+    assert not missing
+
+
+def test_faults_lists_the_tread_where_the_hanging_wall_sits_on_the_footwall(tmp_path):
+    """In the column a dipping normal fault cuts, hanging-wall cells sit on footwall cells, joined across the cut-out
+    (zero-thickness) cells by PINCH. That vertical connection crosses the fault too, so the hanging-wall cell's
+    +Z face is listed ('Z'); without it a sealing fault leaked fully in Flow."""
+    layer = flat_layer()
+    f = Fault(center=(1520.0, 1000.0), strike=90.0, length=1200.0, throw=20.0, dip=60.0, drag=(0.0, 0.0), name="F1")
+    faces = []
+    _, _, _, act = _build_geometry([layer], faults=[f], _faces=faces)
+    side = faces[0][1]
+    to_grdecl(layer, tmp_path / "m.grdecl", faults=[f])
+    rows = [r.split() for r in (tmp_path / "m.grdecl").read_text().split("\nFAULTS\n")[1].split("\n/\n")[0].splitlines()]
+    listed = {(int(r[1]) - 1, int(r[3]) - 1, k) for r in rows if r[7] == "'Z'" for k in range(int(r[5]) - 1, int(r[6]))}
+    treads = set()
+    for i in range(NX):
+        for j in range(NY):
+            live = [k for k in range(NZ) if act[i, j, k]]
+            treads |= {(i, j, a) for a, b in zip(live, live[1:]) if side[i, j, a] * side[i, j, b] == -1}
+    assert treads and treads <= listed
