@@ -234,13 +234,13 @@ def _write_array(f, keyword, values, fmt, per_line):
     f.write("/\n\n")
 
 
-def _write_rle(f, keyword, values, per_line=12):
-    """Write an integer array with GRDECL count*value run compression."""
+def _write_rle(f, keyword, values, per_line=12, fmt="%d"):
+    """Write an array with GRDECL count*value run compression (integers unless ``fmt`` says otherwise)."""
     v = np.asarray(values).ravel()
     edges = np.flatnonzero(np.diff(v)) + 1
     starts = np.concatenate(([0], edges))
     ends = np.concatenate((edges, [v.size]))
-    toks = [f"{e - s}*{v[s]:d}" if e - s > 1 else f"{v[s]:d}"
+    toks = [f"{e - s}*{fmt % v[s]}" if e - s > 1 else fmt % v[s]
             for s, e in zip(starts, ends)]
     f.write(keyword + "\n")
     for i in range(0, len(toks), per_line):
@@ -252,7 +252,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
               erode_above=None, erode_below=None, facies=False, isochore=None, onlap=False,
               faults=None,
               poro_floor=None, perm_floor=None,
-              fmt_z="%.2f", fmt_prop="%.6g"):
+              fmt_z="%.2f", fmt_prop="%.6g", seal=None):
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
 
     The file carries SPECGRID, COORD, ZCORN, ACTNUM, PORO, PERMX, PERMY
@@ -301,6 +301,11 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         would auto-deactivate as zero-pore-volume cells).
     fmt_z, fmt_prop : str
         printf formats for depth/coordinate and permeability values.
+    seal : resmill.fault_seal.Seal, optional
+        With ``faults``: also write MULTX, MULTY and MULTZ, each fault face's
+        transmissibility multiplier from its shale gouge ratio
+        (:mod:`resmill.fault_seal`); ``seal.vsh`` holds the clay fraction per
+        cell or per facies code.
     """
     layers = list(getattr(model, "layers", [model]))
     L0 = layers[0]
@@ -368,6 +373,17 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
             for name, (fault, _) in zip(names, faces):
                 f.write(f" '{name}' {fault.mult:g} /\n")
             f.write("/\n")
+        if faces and seal is not None:
+            from .fault_seal import face_multipliers
+            vsh = seal.vsh
+            if isinstance(vsh, dict):
+                codes = _stack_prop(layers, "facies").astype(int)
+                vsh = np.vectorize(lambda c: vsh[int(c)], otypes=[float])(codes)
+            mults = face_multipliers(faces, Zc, actnum, np.asarray(vsh, dtype=float), (permx, permy, permz),
+                                     L0.dx, L0.dy, seal)
+            for key in ("MULTX", "MULTY", "MULTZ"):
+                f.write("\n")
+                _write_rle(f, key, mults[key].ravel(order="F"), fmt="%.6g")
     return path
 
 

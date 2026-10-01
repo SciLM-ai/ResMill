@@ -203,9 +203,10 @@ def surface(arr, x_len, y_len):
     return Structure(fn)
 
 
-def _spill_levels(depth):
+def _spill_levels(depth, wall_x=None, wall_y=None):
     """Each cell's spill depth: the deepest point of the shallowest path from it to the map's edge (a priority
-    flood from the edge, 4-connected)."""
+    flood from the edge, 4-connected). ``wall_x`` (nx-1, ny) and ``wall_y`` (nx, ny-1) mark sealed cell edges the
+    path may not cross (between i and i+1, j and j+1); a cell no path reaches keeps an infinite level."""
     nx, ny = depth.shape
     spill = np.full(depth.shape, np.inf)
     heap = []
@@ -218,9 +219,13 @@ def _spill_levels(depth):
     while heap:
         level, i, j = heapq.heappop(heap)
         for a, b in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
-            if 0 <= a < nx and 0 <= b < ny and spill[a, b] == np.inf:
-                spill[a, b] = max(depth[a, b], level)
-                heapq.heappush(heap, (spill[a, b], a, b))
+            if not (0 <= a < nx and 0 <= b < ny) or spill[a, b] != np.inf:
+                continue
+            if (wall_x is not None and a != i and wall_x[min(a, i), j]) or \
+                    (wall_y is not None and b != j and wall_y[i, min(b, j)]):
+                continue
+            spill[a, b] = max(depth[a, b], level)
+            heapq.heappush(heap, (spill[a, b], a, b))
     return spill
 
 
