@@ -182,6 +182,44 @@ def test_a_salt_stock_inside_the_trap_is_a_wall_the_trap_does_not_leak_through()
     assert block["crest_depth"] > stats["spill_depth"] - stats["height"] + 1.0            # the crest went into the salt
 
 
+def test_a_trap_beneath_an_overhang_has_the_underside_of_the_salt_as_its_crest():
+    """With the contact leaning out over the beds (flare < 0) the columns beneath it stay active, topped by the salt's
+    underside, and the trap runs in beneath it. By hand: at distance rho from the stock's axis the salt covers the
+    depths above z_cut = z_ref + (rho - R) / flare, so a column's top of active cells is its layer's top or z_cut,
+    whichever is deeper (to the cell), and the shallowest of those is the crest, deeper than against a vertical wall (the
+    wall's shallowest, most upturned columns are salt now). closure_stats of the effective top agrees with fault_blocks."""
+    L, f = layer(), fold(seed=1)
+    cx, cy = CENTER[0] + f.crest_offset[0], CENTER[1] + f.crest_offset[1]
+    radius, dz, nz = 1000.0, 2.0, 60
+    xs, ys = np.meshgrid((np.arange(NX) + 0.5) * DX, (np.arange(NY) + 0.5) * DX, indexing="ij")
+    crests = {}
+    for flare in (0.0, -0.5):
+        body = sl.salt_body((cx, cy + 0.4 * 0.5 * math.sqrt(4e6 / math.pi) + radius), (radius, radius), z_ref=TOP + 60.0,
+                            flare=flare)
+        shape = f + sl.salt_upturn(body, 40.0, 400.0)
+        _, _, zc, act = _build_geometry([L], structure=shape, salt=body)
+        block = blocks_of(zc, act)[0]
+        crests[flare] = block["crest_depth"]
+        tm = top_map(zc, act)
+        stats = st.closure_stats(np.where(np.isnan(tm), 1e9, tm), DX, DX)
+        assert stats["crest"] == block["crest"] and stats["spill_depth"] == pytest.approx(block["spill_depth"], abs=1e-6)
+        assert stats["height"] == pytest.approx(block["height"], abs=1e-6)
+        under = act.any(axis=2) & (act[:, :, 0] == 0)                           # salt on top, sediment beneath
+        if flare == 0.0:
+            assert not under.any()
+            continue
+        assert (block["mask"] & under).sum() > 10                              # the trap runs in beneath the overhang
+        rho = np.hypot(xs - body.center[0], ys - body.center[1])
+        z_cut = body.z_ref + (rho - radius) / body.flare
+        top = TOP + shape(xs, ys)
+        first = np.clip(np.ceil((z_cut - top) / dz - 0.5), 0, nz)               # cells whose centres lie above z_cut
+        by_hand = np.where(first < nz, top + first * dz, np.nan)
+        assert (np.isnan(by_hand) == np.isnan(tm)).all()                        # the same columns are dead
+        assert block["crest_depth"] == pytest.approx(np.nanmin(by_hand), abs=dz + 0.5)
+        assert np.abs(tm - by_hand)[~np.isnan(tm)].max() < dz                   # and every column's top is where it says
+    assert crests[-0.5] > crests[0.0] + 20.0
+
+
 def test_a_salt_wall_across_the_closure_splits_it_into_two_traps():
     L, f = layer(), fold()
     _, _, zc, act = _build_geometry([L], structure=f)

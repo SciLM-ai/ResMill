@@ -14,7 +14,7 @@ from resmill.export import _build_geometry, to_grdecl, to_pyvista
 from resmill.faults import Fault
 from resmill.layers.base import Layer
 from resmill.plotting import plot_section
-from tests.test_export import prop_cube, read_grdecl
+from tests.test_export import prop_cube, read_grdecl, zcorn_cube
 
 NX, NY, DX, TOP = 60, 50, 20.0, 2000.0
 CX, CY, R = 0.5 * NX * DX, 0.5 * NY * DX, 300.0
@@ -49,6 +49,29 @@ def test_the_written_file_has_the_inactive_cells_and_untouched_properties(tmp_pa
     assert (act == (~((xc - CX) ** 2 + (yc - CY) ** 2 < R ** 2))[:, :, None]).all()
     for key in ("PORO", "PERMX", "PERMY", "PERMZ", "ZCORN", "COORD"):
         assert salty[key] == plain[key]                                # the cells keep their values, only ACTNUM changes
+
+
+def test_the_salt_has_no_pore_volume_and_the_rest_of_the_model_keeps_its_own(tmp_path):
+    """A simulator's pore volume is porosity x cell volume over the active cells. Cell volumes come from the file's ZCORN
+    (vertical pillars: plan area times the mean corner thickness) of a folded layer: the model's pore volume is the whole
+    layer's less that of the cells whose centres lie in the stock (counted by hand), every salt cell holds none, and what
+    the stock removes is pi R^2 x thickness x porosity to the staircase's error."""
+    nz, dz, phi = 8, 2.5, 0.2
+    body = sl.salt_body((CX, CY), (R, R))
+    L = layer(nz=nz, dz=dz)
+    path = to_grdecl(L, tmp_path / "salt.grdecl", structure=st.dome(40.0, 500.0, center=(CX, CY)), salt=body)
+    blocks = read_grdecl(path)
+    zc = zcorn_cube(blocks, NX, NY, nz)
+    thick = (zc[:, :, 1::2] - zc[:, :, 0::2]).reshape(NX, 2, NY, 2, nz).mean(axis=(1, 3))
+    pv = prop_cube(blocks, "PORO", NX, NY, nz) * DX * DX * thick               # what the cells would hold if all were active
+    act = prop_cube(blocks, "ACTNUM", NX, NY, nz)
+    xc, yc = centres()
+    salt = ((xc - CX) ** 2 + (yc - CY) ** 2 < R ** 2)[:, :, None] * np.ones(nz, dtype=bool)
+    held = act * pv                                                            # the simulator's PORV
+    assert (held[salt] == 0.0).all() and pv[salt].min() > 0.0                  # the file keeps their PORO: ACTNUM is what zeroes it
+    assert held.sum() == pytest.approx(pv.sum() - pv[salt].sum(), rel=1e-12)
+    assert thick.sum(axis=2).mean() == pytest.approx(nz * dz, rel=1e-9)        # the dome shifts, it does not stretch
+    assert pv.sum() - held.sum() == pytest.approx(phi * math.pi * R ** 2 * nz * dz, abs=phi * DX * 2.0 * math.pi * R * nz * dz)
 
 
 def test_no_salt_changes_nothing(tmp_path):
