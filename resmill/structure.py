@@ -376,3 +376,61 @@ def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):
 
     return Structure(fn)
 
+
+
+def _inside_distance(outline, level, x_len, y_len, step):
+    """The distance (m) in from the edge of the footprint of ``outline`` (the region where it lies below ``level``) as a
+    surface over ``[0, x_len] x [0, y_len]``: 0 outside, growing inward. A Euclidean distance transform of the
+    footprint on a grid of ``step`` m (default 1/800 of the longer side), taken to the edge between two pixels; a
+    footprint that fills the model has no edge to measure from and is far from it everywhere."""
+    step = float(step) if step else max(x_len, y_len) / 800.0
+    xs = np.linspace(0.0, x_len, int(np.ceil(x_len / step)) + 1)
+    ys = np.linspace(0.0, y_len, int(np.ceil(y_len / step)) + 1)
+    inside = np.asarray(outline(*np.meshgrid(xs, ys, indexing="ij"))) < level
+    sx, sy = xs[1] - xs[0], ys[1] - ys[0]
+    if inside.all():
+        return surface(np.full(inside.shape, 1e12), x_len, y_len)
+    dist = ndimage.distance_transform_edt(np.pad(inside, 1, mode="edge"), sampling=(sx, sy))[1:-1, 1:-1]
+    return surface(np.maximum(dist - 0.5 * min(sx, sy), 0.0), x_len, y_len)
+
+
+def taper(position, taper_m, azimuth=0.0, wander=0.0, range_m=None, seed=None, outline=None,
+          x_len=None, y_len=None, level=0.0, step=None):
+    """A thickness factor for ``to_grdecl(isochore=[...])``: 0 where the sand is absent, rising linearly to 1 over
+    ``taper_m`` metres in from the edge of the sand, so a body ``T`` thick tapers at ``atan(T / taper_m)``.
+
+    The sand is the side of a pinch-out line that the azimuth normal points to (the dip direction of :func:`ramp`),
+    the line lying ``position`` m along it from the model's origin and wandering about that by ``wander`` m rms (a
+    :func:`roughness` surface of range ``range_m``); and/or the footprint of ``outline``, a Structure that is negative
+    inside it (a :func:`closure` without tilt, or any other), cut where it is below ``level``. With both the sand is
+    their union: an outline centred on the line is a tongue protruding updip from a sheet; with the outline alone
+    (``position`` None) it is an enclosed lens. The factor rises with the distance in from the line or the footprint's
+    edge (the larger of the two where both reach), so the taper is as long all round a lobate lens as it is across a
+    straight line; the footprint is measured on a grid of ``step`` m (default 1/800 of the longer side), as are the
+    ``wander`` surface and the outline, so ``x_len`` and ``y_len`` (the model's size) are needed with either.
+
+    All zones of an interval take the same factor to thin together; the thin cells of the outer ``T f`` below 5 mm
+    collapse (ACTNUM 0), so the factor is 0 exactly where the sand is absent.
+    """
+    if not taper_m > 0.0:
+        raise ValueError(f"taper_m must be positive, not {taper_m}")
+    if position is None and outline is None:
+        raise ValueError("taper needs a pinch-out line (position) or an outline")
+    if (wander or outline is not None) and (x_len is None or y_len is None):
+        raise ValueError("x_len and y_len (the model's size) are needed with wander or an outline")
+    if wander and not range_m:
+        raise ValueError("range_m (the wander's correlation range) is needed with wander")
+    nx_, ny_ = _axes(azimuth)
+    shift = roughness(wander, range_m, x_len, y_len, seed=seed) if wander else None
+    inside = None if outline is None else _inside_distance(outline, level, x_len, y_len, step)
+
+    def fn(x, y):
+        x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+        d = np.full(np.broadcast(x, y).shape, -np.inf)
+        if position is not None:
+            d = x * nx_ + y * ny_ - position - (0.0 if shift is None else shift(x, y))
+        if inside is not None:
+            d = np.maximum(d, inside(x, y))
+        return np.clip(d / taper_m, 0.0, 1.0)
+
+    return Structure(fn)

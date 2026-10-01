@@ -264,3 +264,101 @@ def test_the_spill_flood_ends_on_columns_of_infinite_depth():
     depth = np.where(ring == 2, np.inf, 10.0)
     spill = st._spill_levels(depth)
     assert np.all(spill[ring <= 2] == np.inf) and np.all(spill[ring > 2] == 10.0)
+
+
+def test_taper_is_a_linear_ramp_across_the_pinch_out_line():
+    """The factor is 0 at and beyond the line, 1 once ``taper_m`` in from it, and linear between: with the line at
+    1,000 m along the dip direction (+y, azimuth 0) and 400 m of taper, 0.25 / 0.5 / 1 at 1,100 / 1,200 / 1,400 m,
+    whatever x is."""
+    f = st.taper(position=1000.0, taper_m=400.0)
+    y = np.array([0.0, 999.0, 1000.0, 1100.0, 1200.0, 1399.0, 1400.0, 5000.0])
+    expected = [0.0, 0.0, 0.0, 0.25, 0.5, 399.0 / 400.0, 1.0, 1.0]
+    for x in (0.0, 123.4, 7000.0):
+        assert f(x + 0.0 * y, y) == pytest.approx(expected)
+
+
+def test_taper_follows_the_azimuth_normal():
+    """The line lies across the azimuth normal ``(sin az, cos az)``, the dip direction of ``ramp``: at azimuth 90 the
+    factor depends on x alone, and at 30 degrees it is (x sin 30 + y cos 30 - position) / taper_m."""
+    f = st.taper(position=200.0, taper_m=1000.0, azimuth=90.0)
+    assert f(700.0, 0.0) == pytest.approx(0.5) and f(700.0, 4321.0) == pytest.approx(0.5)
+    g = st.taper(position=200.0, taper_m=1000.0, azimuth=30.0)
+    x, y = 500.0, 600.0
+    assert g(x, y) == pytest.approx((x * 0.5 + y * np.sqrt(3.0) / 2.0 - 200.0) / 1000.0) == pytest.approx(0.5696, abs=1e-4)
+
+
+def test_taper_gradient_is_the_drawn_angle():
+    """Thickness T times the factor changes by tan(angle) per metre across the taper: its steepest slope on a map is
+    T / taper_m, 10 m over 573 m for 1 degree, and the factor never decreases downdip."""
+    t_m, angle = 10.0, 1.0
+    f = st.taper(position=1500.0, taper_m=t_m / np.tan(np.radians(angle)))
+    y = np.linspace(0.0, 4000.0, 8001)
+    thickness = t_m * f(0.0 * y, y)
+    assert np.max(np.diff(thickness) / np.diff(y)) == pytest.approx(np.tan(np.radians(angle)), rel=1e-9)
+    assert np.all(np.diff(thickness) >= 0.0) and thickness.min() == 0.0 and thickness.max() == t_m
+
+
+def test_taper_line_wanders_as_roughness_does():
+    """The line lies at ``position`` plus a ``roughness`` surface of SD ``wander`` and range ``range_m`` (the same
+    seed gives the same surface), so the factor is the straight-line one with that surface subtracted from the
+    distance in from the line."""
+    kw = dict(position=1500.0, taper_m=500.0)
+    f = st.taper(**kw, wander=60.0, range_m=1200.0, x_len=6000.0, y_len=4000.0, seed=5)
+    rough = st.roughness(60.0, 1200.0, 6000.0, 4000.0, seed=5)
+    X, Y = np.meshgrid(np.linspace(0.0, 6000.0, 61), np.linspace(0.0, 4000.0, 41), indexing="ij")
+    assert np.array_equal(f(X, Y), np.clip((Y - 1500.0 - rough(X, Y)) / 500.0, 0.0, 1.0))
+    edge = (f(X, Y) > 0.0).argmax(axis=1)                                 # the first row of sand in each column
+    assert edge.max() > edge.min()                                        # the line really is not straight
+
+
+def _disc(cx, cy, radius):
+    """An outline of a disc: negative inside, as ``closure`` is (a distance, so its footprint is exact)."""
+    return st.Structure(lambda x, y: np.hypot(np.asarray(x) - cx, np.asarray(y) - cy) - radius)
+
+
+def test_taper_outline_tapers_from_the_footprint_edge():
+    """With an ``outline`` the sand is its footprint (where the outline is below ``level``) and the factor rises with
+    the distance in from its edge: a disc of radius 1,000 m with 400 m of taper has f = (1000 - r) / 400 up to 1 and
+    is 0 outside it, to within the raster step (about 8 m here)."""
+    f = st.taper(None, 400.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0)
+    r = np.array([0.0, 300.0, 599.0, 700.0, 900.0, 990.0, 1010.0, 1500.0])
+    assert f(3000.0 + r, 2000.0 + 0.0 * r) == pytest.approx(np.clip((1000.0 - r) / 400.0, 0.0, 1.0), abs=0.03)
+    assert f(3000.0, 2000.0 + r[0]) == 1.0 and f(0.0, 0.0) == 0.0 and f(5500.0, 3900.0) == 0.0
+
+
+def test_taper_outline_unites_with_the_line():
+    """A line and an outline together are the sand of both: a disc centred on the line is a tongue protruding updip
+    from the sheet (downdip of the line the sheet's ramp, updip of it the disc's)."""
+    f = st.taper(2000.0, 400.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0)
+    assert f(500.0, 2100.0) == pytest.approx(0.25)                          # the sheet, 100 m down from the line
+    assert f(500.0, 1900.0) == 0.0                                          # updip of the line, outside the disc
+    assert f(3000.0, 1000.0) == pytest.approx(0.0, abs=0.03)                # the disc's tip, 1,000 m updip of its centre
+    assert f(3000.0, 1200.0) == pytest.approx(0.5, abs=0.03)                # 200 m in from it
+    assert f(3000.0, 1500.0) == pytest.approx(1.0, abs=0.03)                # 500 m in from it: full thickness
+
+
+@pytest.mark.parametrize("kw,message", [
+    (dict(position=1000.0, taper_m=0.0), "taper_m"),
+    (dict(position=None, taper_m=100.0), "position"),
+    (dict(position=1000.0, taper_m=100.0, wander=10.0, range_m=500.0), "x_len"),
+    (dict(position=1000.0, taper_m=100.0, wander=10.0, x_len=4000.0, y_len=4000.0), "range_m"),
+    (dict(position=None, taper_m=100.0, outline=_disc(0.0, 0.0, 5.0)), "x_len"),
+])
+def test_taper_refuses_what_it_cannot_draw(kw, message):
+    with pytest.raises(ValueError, match=message):
+        st.taper(**kw)
+
+
+def test_taper_with_isochore_gives_thickness_times_factor_and_collapses_where_it_is_zero():
+    """As an isochore the factor scales a zone: at every node the zone is T f thick, and a column is inactive exactly
+    where all four of its corners hold less than the 5 mm that ``to_grdecl`` counts as a cell."""
+    from resmill.export import _build_geometry
+    nx, ny, nz, dx = 30, 24, 4, 50.0
+    layer = Layer(nx, ny, nz, nx * dx, ny * dx, 20.0, top_depth=1500.0)
+    f = st.taper(position=500.0, taper_m=300.0, azimuth=0.0)
+    Xc, Yc, zc, act = _build_geometry([layer], isochore=[f])
+    thick = zc[:, :, -1] - zc[:, :, 0]
+    assert np.allclose(thick, 20.0 * f(Xc, Yc), atol=1e-6) and thick.min() == 0.0
+    layer_thick = (thick / nz).reshape(nx, 2, ny, 2).max(axis=(1, 3))
+    assert np.array_equal(act.any(axis=2), layer_thick > 5e-3)
+    assert not act[:, :10].any() and act[:, 12:].all()
