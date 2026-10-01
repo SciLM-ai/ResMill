@@ -146,11 +146,11 @@ def _listric(dip, zc, detach):
 
     def plane(h):
         u = np.clip(np.asarray(h, dtype=float) / radius, sin_d - 1.0, sin_d)          # sin dip - sin(dip there)
-        return zc + radius * u * (2.0 * sin_d - u) / (np.sqrt(cos_d ** 2 + u * (2.0 * sin_d - u)) + cos_d)
+        return zc + radius * u * (2.0 * sin_d - u) / (np.sqrt(np.maximum(cos_d ** 2 + u * (2.0 * sin_d - u), 0.0)) + cos_d)
 
     def trace(z):
         e = np.clip((np.asarray(z, dtype=float) - zc) / radius, -cos_d, 1.0 - cos_d)  # cos(dip there) - cos dip
-        return radius * e * (2.0 * cos_d + e) / (np.sqrt(sin_d ** 2 - e * (2.0 * cos_d + e)) + sin_d)
+        return radius * e * (2.0 * cos_d + e) / (np.sqrt(np.maximum(sin_d ** 2 - e * (2.0 * cos_d + e), 0.0)) + sin_d)
 
     return plane, trace
 

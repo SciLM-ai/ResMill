@@ -418,6 +418,19 @@ def test_the_listric_plane_is_the_circle_through_the_dip_at_z_center_flat_at_the
     assert np.abs(np.hypot(h[on] - cx, z[on] - cz) - radius).max() < 1e-6
 
 
+@pytest.mark.parametrize("dip, zc, detach", [(35.0, 3000.0, 6000.0), (40.0, 2700.0, 7000.0), (55.0, 2500.0, 4500.0),
+                                             (30.0, 2500.0, 8000.0), (60.0, 2400.0, 5200.0)])
+def test_the_listric_plane_and_trace_are_finite_far_into_the_footwall_and_below_the_detachment(dip, zc, detach):
+    """The arc's two square roots reach 0 at its vertical point (landward) and at its flat (below the detachment), where
+    rounding made them -1e-17 and the whole footwall side, or every corner below the flat, NaN: they stay finite and
+    monotone over any distance and depth."""
+    from resmill.faults import _listric
+    plane, trace = _listric(dip, zc, detach)
+    h, z = np.linspace(-2.0e5, 2.0e5, 40001), np.linspace(0.0, 3.0 * detach, 40001)
+    assert np.isfinite(plane(h)).all() and np.isfinite(trace(z)).all()
+    assert np.all(np.diff(plane(h)) >= 0.0) and np.all(np.diff(trace(z)) >= 0.0)
+
+
 def test_a_rollover_has_the_closed_form_amplitude_heave_and_width_of_vertical_shear():
     """Circular fault, surface dip 55 deg, detachment 4.5 km, horizon at 2.5 km with 300 m of throw (the research's table:
     dip at the horizon 35.9 deg, heave 438 m, steepest drag dip 4.2 deg, 90 % of the drag gone 5.24 km from the cutoff):
