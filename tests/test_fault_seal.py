@@ -76,24 +76,27 @@ def test_knott_seal_probability_rises_with_throw_over_thickness():
 
 def test_faces_lie_between_open_and_sealed_by_the_clay_that_slid_past():
     """Not a switch: between sands of one permeability each face's multiplier falls continuously as more clay slid past
-    it, from about 0.3 (clean sand) to about 0.01 (half clay), where most of Norne's history-matched faults sit."""
+    it, from 0.46 (clean sand, SGR 0.1) to 0.03 (half clay, SGR 0.5) on a vertical fault with 6 m of throw, where most
+    of Norne's history-matched faults sit (10 m beds of 0.1 and 0.5 clay: the window takes six SGR levels)."""
     layer, vsh = cake(shale_vsh=0.5, beds=4)
     layer.perm_mat[:] = 100.0
-    f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=6.0, dip=70.0, name="F1")
+    f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=6.0, dip=90.0, drag=(0.0, 0.0), name="F1")
     faces = []
     _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
     perm = np.asarray(layer.perm_mat)[:, :, ::-1]
     info = face_multipliers(faces, zc, act, vsh, (perm, perm, perm), DX, DX, Seal())["faults"][0]
     mult, sgr = np.array(info["mult"]), np.array(info["sgr"])
-    assert 0.001 < mult.min() < 0.05 and 0.2 < mult.max() < 0.5
-    assert np.unique(mult.round(3)).size > 10
-    assert np.corrcoef(np.argsort(np.argsort(sgr)), np.argsort(np.argsort(mult)))[0, 1] < -0.9
+    levels = np.unique(sgr.round(3))
+    assert len(levels) == 6 and levels.min() == pytest.approx(0.1) and levels.max() == pytest.approx(0.5)
+    by_level = np.array([mult[sgr.round(3) == s].mean() for s in levels])
+    assert np.all(np.diff(by_level) < -0.02)
+    assert by_level[0] == pytest.approx(0.457, abs=0.005) and by_level[-1] == pytest.approx(0.0264, abs=0.001)
 
 
 def test_a_faults_effective_multiplier_follows_the_faces_that_carry_flow():
     """Faces between tight shales carry almost no flow, so the fault's one equivalent multiplier (a MULTFLT passing the
-    same flow) follows its sand faces (0.08-0.3 here), not the plain mean of all faces, which the shale faces (near 1
-    against the shale's own permeability) pull up."""
+    same flow) follows its sand faces (SGR 0.1, 100 mD: 0.44 at 70 degrees dip), not the plain mean of all faces, which
+    the shale faces (near 1 against the shale's own permeability) pull up to 0.76."""
     layer, vsh = cake(beds=4)
     f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=6.0, dip=70.0, name="F1")
     faces = []
@@ -101,8 +104,8 @@ def test_a_faults_effective_multiplier_follows_the_faces_that_carry_flow():
     perm = np.asarray(layer.perm_mat)[:, :, ::-1]
     info = face_multipliers(faces, zc, act, vsh, (perm, perm, perm), DX, DX, Seal())["faults"][0]
     mult = np.array(info["mult"])
-    assert 0.08 < info["effective"] < 0.3
-    assert 10.0 ** np.mean(np.log10(mult)) > 2.0 * info["effective"]
+    assert 0.40 < info["effective"] < 0.47
+    assert 10.0 ** np.mean(np.log10(mult)) > 1.5 * info["effective"]
 
 
 def tiny_fault():

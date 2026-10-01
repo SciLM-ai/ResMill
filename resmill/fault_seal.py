@@ -1,23 +1,25 @@
 """Fault seal per cell face, and fault blocks.
 
 A fault seals or leaks by what lies on its plane. Per face of a fault (the faces ``FAULTS`` lists), the shale gouge
-ratio SGR = sum(Vsh dz) / throw over the beds that slid past the face (Yielding, Freeman & Needham 1997) sets the fault
-rock's permeability, log10 k_f = -4 SGR - 1/4 log10(D) (1 - SGR)^5 (mD; D the displacement in m), and its thickness
-t_f = D / 66, the median ratio (Manzocchi, Walsh, Nell & Yielding 1999). The face's transmissibility multiplier is then
-T = [1 + t_f (2/k_f - 1/k_i - 1/k_j) / (L_i/k_i + L_j/k_j)]^-1 between the cells on either side (permeabilities k_i and
-k_j across the face, L_i and L_j the whole cells' lengths across it), at most 1, so every face lies somewhere between
-open and sealed. The throw at a face is read off the grid, as the offset of the same layer across it, so the throws of
-several faults add.
-The physics shapes each fault but explains none of the spread of real ones (on Norne the predicted and the
-history-matched multipliers are uncorrelated), so all faces of a fault also share one log-normal factor 10^(``offset`` +
-N(0, ``scatter``)), calibrated on Norne's history match (``scatter`` 0.9 and ``offset`` -0.6 on its own grid, the mean
-of three fits to its 36 faults with throw). A share of faults is left open (``p_open``: every face 1) and a share raises
-flow (``p_enhance``: every face one log-uniform value of ``enhance``, above 1), as Norne's history match has (5 of its
-36 faults with throw at 1 or above, up to 3.9, and a fault without throw at 20). The share of faults that seal by Dn =
-throw / gross reservoir thickness in Knott's (1993) North Sea counts (:func:`knott_seal_probability`) is a check on the
-calibration. A fault draws in this order, so a seed reproduces a tree: one uniform for its mode when either share is
-above 0, then one log-uniform value (enhancing) or one normal (seal, with a ``scatter``); with the options off nothing
-is drawn.
+ratio SGR (Yielding, Freeman & Needham 1997) is the clay of the beds that slid past the face, over the throw: at a face
+at depth z, in the upthrown column the beds from z - throw to z and, a throw lower, in the downthrown column those from
+z to z + throw, each column's thickness-weighted clay fraction over the part of its window it holds, the two averaged
+(Lyon et al. 2005 and Dincau 1998 do so for lateral changes; a tread, a Z face, takes the SGR of the column pair it
+counts for). It sets the fault rock's permeability, log10 k_f = -4 SGR - 1/4 log10(D) (1 - SGR)^5 (mD; D the
+displacement in m, the throw over sin(dip)), and its thickness t_f = D / 66, the median ratio (Manzocchi, Walsh, Nell &
+Yielding 1999). The face's transmissibility multiplier is then T = [1 + t_f (2/k_f - 1/k_i - 1/k_j) / (L_i/k_i +
+L_j/k_j)]^-1 between the cells on either side (permeabilities k_i and k_j across the face, L_i and L_j the whole cells'
+lengths across it), at most 1, so every face lies somewhere between open and sealed. The throw at a column pair is read
+off the grid, as the largest offset of an interface across it, so the throws of several faults add. The physics shapes
+each fault but explains none of the spread of real ones (on Norne the predicted and the history-matched multipliers are
+uncorrelated), so all faces of a fault also share one log-normal factor 10^(``offset`` + N(0, ``scatter``)), calibrated
+on Norne's history match (``scatter`` 0.9 and ``offset`` -0.6 on its own grid, the mean of three fits to its 36 faults
+with throw). A share of faults is left open (``p_open``: every face 1) and a share raises flow (``p_enhance``: every
+face one log-uniform value of ``enhance``, above 1), as Norne's history match has (5 of its 36 faults with throw at 1 or
+above, up to 3.9, and a fault without throw at 20). The share of faults that seal by Dn = throw / gross reservoir
+thickness in Knott's (1993) North Sea counts (:func:`knott_seal_probability`) is a check on the calibration. A fault
+draws in this order, so a seed reproduces a tree: one uniform for its mode when either share is above 0, then one
+log-uniform value (enhancing) or one normal (seal, with a ``scatter``); with the options off nothing is drawn.
 
 Juxtaposition needs nothing here: the simulator connects only the cells that touch. Over geological time a fault holds
 oil back only up to the column its capillary seal supports, however low its multiplier (which sets flow in production),
@@ -133,10 +135,37 @@ def _column_pair(zc, i, j, face):
     return zc[2 * i:2 * i + 2, 2 * j + 1], zc[2 * i:2 * i + 2, 2 * j + 2]
 
 
-def _window_vsh(tops, bots, vsh, lo, hi):
-    """Clay times thickness, and thickness, of a column's cells inside the depth window [lo, hi]."""
-    overlap = np.clip(np.minimum(bots, hi) - np.maximum(tops, lo), 0.0, None)
-    return float((overlap * vsh).sum()), float(overlap.sum())
+def _window_clay(column, lo, hi):
+    """Mean clay fraction of a column over the depth window [lo, hi] (m; arrays or numbers), and the thickness of the
+    window the column holds. ``column`` is (interface depths, clay thickness above each interface)."""
+    depth, clay = column
+    lo, hi = np.clip(lo, depth[0], depth[-1]), np.clip(hi, depth[0], depth[-1])
+    thick = hi - lo
+    held = np.interp(hi, depth, clay) - np.interp(lo, depth, clay)
+    return np.divide(held, thick, out=np.zeros_like(thick), where=thick > 0.0), thick
+
+
+class _Slip:
+    """What slid past the faces of two neighbouring columns: their throw (m) and the clay of the beds either side."""
+
+    def __init__(self, a, b, vsh_a, vsh_b):
+        """``a``, ``b``: the interface depths (2 pillars, nk + 1) of the lower- and the upper-index column on their shared
+        face (:func:`_column_pair`); ``vsh_a``, ``vsh_b``: their clay fraction per cell."""
+        gap = np.abs(a - b).mean(axis=0)                   # a dipping plane offsets only some layers
+        self.throw = float(gap.max())
+        depths = (a.mean(axis=0), b.mean(axis=0))
+        columns = [(d, np.concatenate(([0.0], np.cumsum(v * np.diff(d))))) for d, v in zip(depths, (vsh_a, vsh_b))]
+        a_up = depths[0][gap.argmax()] < depths[1][gap.argmax()]
+        self.up, self.down = columns if a_up else columns[::-1]
+
+    def sgr(self, z):
+        """The shale gouge ratio at depth z (m) of a face of this pair: the clay of the beds that slid past that point
+        (Yielding, Freeman & Needham 1997). In the upthrown column they lie between z - throw and z, and, a throw lower,
+        in the downthrown column between z and z + throw; each column's thickness-weighted clay fraction over the part
+        of its window it holds, the two averaged (the practice of Lyon et al. 2005 and Dincau 1998 for lateral changes)."""
+        up, held_up = _window_clay(self.up, z - self.throw, z)
+        down, held_down = _window_clay(self.down, z, z + self.throw)
+        return np.where((held_up > 0.0) & (held_down > 0.0), 0.5 * (up + down), np.where(held_up > 0.0, up, down))
 
 
 def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
@@ -163,12 +192,13 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
     info, rows = [], []
     for n, (fault, side) in enumerate(faces):
         records = face_records("F", side, zc, act)
-        lateral = {}                                                     # the throw across each column pair
+        lateral = {}                                                     # what slid past each column pair
         for _, i1, _, j1, _, _, _, face in records:
             if face in "XY" and (face, i1, j1) not in lateral:
-                a, b = _column_pair(zc, i1 - 1, j1 - 1, face)
-                lateral[(face, i1, j1)] = float(np.abs(a - b).mean(axis=0).max())     # a dipping plane offsets only some layers
-        throws = np.array(list(lateral.values()) or [0.0])
+                i, j = i1 - 1, j1 - 1
+                lateral[(face, i1, j1)] = _Slip(*_column_pair(zc, i, j, face), vsh[i, j],
+                                                vsh[i + (face == "X"), j + (face == "Y")])
+        throws = np.array([slip.throw for slip in lateral.values()] or [0.0])
         dn = float(throws.max()) / max(gross, 1e-6)
         mode, fixed, shift = "seal", None, seal.offset       # fixed: the one multiplier of an open or enhancing fault
         if seal.p_open + seal.p_enhance > 0.0:
@@ -188,7 +218,7 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                 near = min(lateral, key=lambda key: abs(key[1] - i1) + abs(key[2] - j1)) if lateral else None
             else:
                 near = (face, i1, j1)
-            throw = lateral[near] if near else 0.0
+            throw = lateral[near].throw if near else 0.0
             for k in range(k1 - 1, k2):
                 if face == "Z":
                     below = [kk for kk in range(k + 1, nz) if act[i, j, kk]]
@@ -196,7 +226,6 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                         continue
                     other, mid = (i, j, below[0]), bots[i, j, k]
                     li, lj = bots[i, j, k] - tops[i, j, k], bots[other] - tops[other]
-                    cols = [(tops[i, j], bots[i, j], vsh[i, j])]
                     key, area = "MULTZ", dx * dy
                 else:
                     a, b = _column_pair(zc, i, j, face)
@@ -206,14 +235,11 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     i2, j2 = (i + 1, j) if face == "X" else (i, j + 1)
                     other = (i2, j2, int(np.argmax(o)) if o.max() > 0.0 else k)
                     li = lj = dx if face == "X" else dy
-                    cols = [(ta, ba, vsh[i, j]), (tb, bb, vsh[i2, j2])]
                     key = "MULTX" if face == "X" else "MULTY"
                     area = float(o.sum()) * (dy if face == "X" else dx)
                 if throw <= 0.0:
                     continue
-                parts = [_window_vsh(t, b_, v, mid - 0.5 * throw, mid + 0.5 * throw) for t, b_, v in cols]
-                weight = sum(p[1] for p in parts)
-                sgr = sum(p[0] for p in parts) / weight if weight > 0.0 else 0.0
+                sgr = float(lateral[near].sgr(mid))
                 d = throw / sin_d
                 kf = float(fault_rock_permeability(sgr, d))
                 perm = perms[0 if face == "X" else 1 if face == "Y" else 2]
