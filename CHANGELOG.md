@@ -201,6 +201,22 @@
   kappa falls smoothly as the scale grows (about 350 stamps, 2 seeds: 0.81-0.85 at 0.2 or less, 0.75 at
   0.5, 0.70 at 1, 0.66 at 2; random stacking is 0.55). Default `None` keeps the old weight: outputs are
   bit-identical to before.
+- `facies_props` (`LobeLayer`): rock by facies for lobes, keyed by facies code as in `ChannelLayer`.
+  Without it the sand is the top `ntg` share of the lobe structure, whose porosity and permeability are
+  standardized over all cells before the mud is zeroed, so the sand's average moves with `ntg` (porosity
+  0.292, 0.274 and 0.256 for a requested 0.25 at `ntg` 0.25, 0.5 and 0.85), the mud has no rock (the
+  deck's floors) and PERMZ is one `kzkx` per layer. With it the sand keeps exactly `poro_ave`,
+  `perm_ave`, `poro_std` and `perm_std` at any `ntg`; the mud (`-1`) has its own `poro`, `log10_perm`
+  and optional `poro_sd` / `log10_perm_sd`; `kvkh` entries give each facies' vertical to horizontal
+  ratio per cell (`kvkh_mat`, written as PERMZ). `{2: {"ntg_floor": f, "ntg_crest": c, "kvkh": k}}`
+  also fades the sand: a cell's sub-cell sand fraction is an exponential of the rank of its lobe
+  structure, `c` (default 1) in the axis and the base of a bed and `f` in the fringe and the top of a
+  bed, with the mean (`ntg`) kept; porosity and permeability are the arithmetic mix of sand and mud
+  and kv/kh runs log-linearly from `k` at `f` to the sand's at 1. Binary lobes leave a connected
+  mud lattice 100-400 m wide around round sand cores in plan view, where Tanqua lobes fade from 85-100 %
+  sand at the axis to 20-50 % at the fringe (Spychala et al. 2017); faded lobes have no cell below
+  `f` of the sand's permeability. Facies are 3 (sand fraction of 0.5 or more) and 2 (thin-bedded
+  fringe); `sand_fraction` holds the fraction. Default `None`: outputs are bit-identical to before.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);
   `examples/anticline_meander.py` and `examples/angular_unconformity.py`.
 
