@@ -244,9 +244,14 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                 kf = float(fault_rock_permeability(sgr, d))
                 perm = perms[0 if face == "X" else 1 if face == "Y" else 2]
                 ki, kj = max(float(perm[i, j, k]), 1e-9), max(float(perm[other]), 1e-9)
-                mult = 1.0 / (1.0 + d / seal.dt_ratio * (2.0 / kf - 1.0 / ki - 1.0 / kj) / (max(li, 1e-6) / ki
-                                                                                         + max(lj, 1e-6) / kj))
-                mult = min(max(mult * factor, 1e-12), 1.0) if fixed is None else fixed
+                bracket = 1.0 + d / seal.dt_ratio * (2.0 / kf - 1.0 / ki - 1.0 / kj) / (max(li, 1e-6) / ki
+                                                                                     + max(lj, 1e-6) / kj)
+                if fixed is not None:
+                    mult = fixed
+                elif bracket > 0.0:
+                    mult = min(max(factor / bracket, 1e-12), 1.0)
+                else:
+                    mult = 1.0             # a fault rock thicker and more permeable than the cell it replaces: open
                 out[key][i, j, k] *= mult
                 if key in listed:
                     listed[key][i, j, k] = True

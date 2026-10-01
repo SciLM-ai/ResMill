@@ -291,3 +291,25 @@ def test_a_faults_effective_multiplier_weights_each_face_by_its_unfaulted_transm
     w = np.array([50.0 / (0.5 * 25.0 / 100.0 * 2.0)] * 5 + [1250.0 / (0.5 * 1.0 / 20.0 * 2.0)])
     assert info["effective"] == pytest.approx(float(np.dot(w, m) / w.sum()), rel=1e-9)
     assert info["effective"] == pytest.approx(manzocchi(0.375, d, 20.0, 20.0, 1.0, 1.0), rel=0.05)
+
+
+def test_a_fault_rock_thicker_than_a_tight_cell_and_more_permeable_leaves_the_face_open():
+    """Clean gouge (k_f 0.56 mD at 10 m of displacement, t_f 0.15 m) against 0.01 mD cells 0.05 m wide: the fault rock
+    would replace more than the whole cell with a better conductor, so the formula's bracket falls to -1.98 (a negative
+    resistance). The face is open (1), not sealed by the sign: also when the fault's factor would scale it."""
+    for seal in (Seal(), Seal(offset=-0.6)):
+        out = mults(step(10.0, vsh=0.0, perm=0.01), dx=0.05, dy=25.0, seal=seal)
+        assert len(out["faults"][0]["mult"]) == 20
+        assert np.all(np.array(out["faults"][0]["mult"]) == 1.0) and out["faults"][0]["effective"] == 1.0
+        assert np.all(out["MULTX"] == 1.0)
+
+
+def test_a_fault_rock_a_little_better_than_the_cells_gives_more_than_1_which_the_factor_scales_before_the_cap():
+    """The same gouge against 0.01 mD cells 25 m wide: the bracket 0.994, T = 1.006. Without a factor the cap holds it
+    at 1; with the fault's factor 10^-0.6 it is 1.006 x 0.251 = 0.253, as the multiplier of the physics was always
+    scaled before it was capped."""
+    base = mults(step(10.0, vsh=0.0, perm=0.01), dx=25.0, dy=25.0)["faults"][0]["mult"]
+    scaled = mults(step(10.0, vsh=0.0, perm=0.01), dx=25.0, dy=25.0, seal=Seal(offset=-0.6))["faults"][0]["mult"]
+    assert len(base) == 20 and np.all(np.array(base) == 1.0)
+    bracket = 1.0 + (10.0 / 66.0) * (2.0 / fault_rock_k(0.0, 10.0) - 2.0 / 0.01) / (2.0 * 25.0 / 0.01)
+    assert 0.99 < bracket < 1.0 and np.allclose(scaled, 10.0 ** -0.6 / bracket, rtol=1e-9)
