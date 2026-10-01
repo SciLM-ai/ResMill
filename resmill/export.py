@@ -223,6 +223,21 @@ def horizontal_permeability(model):
         for name in ("kx_mult", "ky_mult"))
 
 
+def drape_multipliers(model):
+    """MULTX, MULTY and MULTZ of ``model``'s mud drapes in Eclipse K-down order, or None when there are none.
+
+    A channel layer made with ``drapes`` carries ``mult_x``, ``mult_y`` and ``mult_z``, the transmissibility multiplier
+    across each cell's +x, +y and lower face (k up); in K-down order the lower face is the + z face, which MULTZ
+    multiplies. A layer without them counts as 1. None when no layer has a multiplier below 1.
+    """
+    layers = list(getattr(model, "layers", [model]))
+    out = {key: np.concatenate(
+        [np.ones((L.nx, L.ny, L.nz)) if getattr(L, name, None) is None
+         else np.asarray(getattr(L, name), dtype=float)[:, :, ::-1] for L in layers], axis=2)
+        for key, name in (("MULTX", "mult_x"), ("MULTY", "mult_y"), ("MULTZ", "mult_z"))}
+    return out if any((a != 1.0).any() for a in out.values()) else None
+
+
 def _write_array(f, keyword, values, fmt, per_line):
     f.write(keyword + "\n")
     v = np.asarray(values).ravel()
@@ -306,6 +321,10 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         transmissibility multiplier from its shale gouge ratio
         (:mod:`resmill.fault_seal`); ``seal.vsh`` holds the clay fraction per
         cell or per facies code.
+
+    A channel layer made with ``drapes`` (mud drapes at the bases of storeys,
+    :mod:`resmill.layers.drapes`) also gets MULTX, MULTY and MULTZ, its drapes'
+    multipliers; where a seal writes them too, the two multiply face by face.
     """
     layers = list(getattr(model, "layers", [model]))
     L0 = layers[0]
@@ -373,6 +392,8 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
             for name, (fault, _) in zip(names, faces):
                 f.write(f" '{name}' {fault.mult:g} /\n")
             f.write("/\n")
+        drapes = drape_multipliers(model)
+        mults = drapes
         if faces and seal is not None:
             from .fault_seal import face_multipliers
             vsh = seal.vsh
@@ -381,6 +402,9 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
                 vsh = np.vectorize(lambda c: vsh[int(c)], otypes=[float])(codes)
             mults = face_multipliers(faces, Zc, actnum, np.asarray(vsh, dtype=float), (permx, permy, permz),
                                      L0.dx, L0.dy, seal)
+            if drapes is not None:
+                mults = {key: mults[key] * drapes[key] for key in drapes}
+        if mults is not None:
             for key in ("MULTX", "MULTY", "MULTZ"):
                 f.write("\n")
                 _write_rle(f, key, mults[key].ravel(order="F"), fmt="%.6g")
