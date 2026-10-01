@@ -14,7 +14,9 @@ chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surf
 
 :func:`apply_fault` displaces the interface stack in 3-D and reports which side of the fault each cell
 ended on; :func:`face_records` turns that into the stair-stepped cell faces the GRDECL export writes as
-``FAULTS``, with the fault's ``mult`` as ``MULTFLT``. ``azimuth``-style angles follow the package
+``FAULTS``, with the fault's ``mult`` as ``MULTFLT`` (a face multiplier acts on every connection through
+the face, so a same-side connection sharing a listed face is sealed too: a little more seal, never a
+leak). ``azimuth``-style angles follow the package
 convention (degrees clockwise from +x; the trace runs along (cos strike, -sin strike)).
 """
 import math
@@ -42,7 +44,24 @@ class Fault:
     mult: float = 1.0              # transmissibility multiplier across the fault (MULTFLT)
     name: str = ""
     bends: float = 0.0             # rms wander of the trace about its chord or arc, x length (0: none)
-    seed: int = 0                  # draws the bends
+    seed: int | None = None        # draws the bends (required with them)
+
+    def __post_init__(self):
+        problems = [msg for bad, msg in (
+            (not self.length > 0.0, "length must be positive"),
+            (not self.throw > 0.0, "throw must be positive"),
+            (not 0.0 < self.dip <= 90.0, "dip must lie in (0, 90]"),
+            (self.hanging_wall not in (1, -1), "hanging_wall must be +1 or -1"),
+            (not 0.0 <= self.hw_share <= 1.0, "hw_share must lie in [0, 1]"),
+            (len(self.drag) != 2 or not min(self.drag) >= 0.0, "drag must be two reaches >= 0"),
+            (not abs(self.radius) >= self.length / math.pi, "abs(radius) must be at least length / pi (half a circle)"),
+            (not self.aspect > 0.0, "aspect must be positive"),
+            (not self.mult >= 0.0, "mult must be >= 0"),
+            (not self.bends >= 0.0, "bends must be >= 0"),
+            (self.bends > 0.0 and self.seed is None, "bends needs a seed"),
+        ) if bad]
+        if problems:
+            raise ValueError(f"Fault {self.name!r}: " + "; ".join(problems))
 
 
 def ww_profile(r):

@@ -310,6 +310,9 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     faces = []
     Xc, Yc, Zc, actnum = _build_geometry(
         layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, faces)
+    names = [fault.name or f"F{n + 1:02d}" for n, (fault, _) in enumerate(faces)]
+    if len(set(names)) < len(names) or any(len(nm) > 8 for nm in names):
+        raise ValueError(f"fault names must be unique within 8 characters (OPM keeps 8): {names}")
 
     fac = _stack_prop(layers, "facies").astype(int) if facies else None
     poro = _stack_prop(layers, "poro_mat").astype(float)
@@ -357,7 +360,6 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
             _write_rle(f, "FACIES", fac.ravel(order="F"))
         if faces:
             from .faults import face_records
-            names = [fault.name or f"F{n + 1:02d}" for n, (fault, _) in enumerate(faces)]
             f.write("\nFAULTS\n")
             for name, (_, side) in zip(names, faces):
                 for rec in face_records(name, side, Zc, actnum):
