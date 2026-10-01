@@ -138,6 +138,17 @@ def test_the_spread_options_off_reproduce_the_physics_and_draw_nothing(monkeypat
     assert np.allclose(np.array(shifted) / np.array(base["mult"]), 10.0 ** -0.6, rtol=1e-12)
 
 
+def test_the_tiny_fault_physics_is_pinned():
+    """A regression pin, not a proof: the 28 faces of the tiny fault give these sums at the commit that settled the
+    physics (full cell lengths, the slipped-interval SGR, the open face). What makes them right is
+    test_fault_seal_references.py, whose expectations are worked out of the beds and the series resistance."""
+    faces, rest = tiny_fault()
+    base = face_multipliers(faces, *rest, Seal())["faults"][0]
+    assert len(base["mult"]) == 28
+    assert sum(base["mult"]) == pytest.approx(5.883110557433645, rel=1e-9)
+    assert sum(base["sgr"]) == pytest.approx(13.73634313070236, rel=1e-9)
+
+
 def test_each_fault_has_one_factor_with_the_asked_median_and_spread():
     """All faces of a fault share one factor 10^(offset + N(0, scatter)); over many faults its log10 has the asked
     median and spread (the faces stay below 1 here, so the cap does not touch the ratio)."""
@@ -182,6 +193,17 @@ def test_open_and_enhancing_faults_follow_their_shares():
             assert np.all(mult < 1.0)
     assert max(boost) > 1.0 and min(boost) < 0.3                       # beyond the cap of 1, over the whole range
     assert np.mean(boost) == pytest.approx(0.5 * math.log10(20.0), abs=0.13)    # log-uniform: the middle of the range
+
+
+def test_open_and_enhancing_faults_keep_the_sgr_that_sets_their_capillary_seal():
+    """The multiplier is what flows in production and the capacity what held oil over geological time: a fault left open
+    or enhancing still has every face's SGR, depth and permeability, as the physics gave them, for fault_blocks."""
+    faces, rest = tiny_fault()
+    base = face_multipliers(faces, *rest, Seal())["face_records"]
+    for seal in (Seal(p_open=1.0, seed=1), Seal(p_enhance=1.0, seed=1)):
+        out = face_multipliers(faces, *rest, seal)
+        assert out["faults"][0]["mode"] in ("open", "enhancing")
+        assert np.array_equal(out["face_records"], base) and base["sgr"].min() < base["sgr"].max()
 
 
 def test_the_draws_per_fault_are_the_share_then_one_value():
@@ -265,6 +287,34 @@ def test_seal_vsh_that_cannot_be_used_says_what_is_wrong_before_a_file_is_writte
     assert not (tmp_path / "m.grdecl").exists()
 
 
+def grdecl_block(text, keyword):
+    """The cells of the GRDECL keyword ``keyword`` with its ``count*value`` runs expanded."""
+    body = text.split(f"\n{keyword}\n")[1].split("\n/")[0]
+    out = []
+    for tok in body.split():
+        count, _, value = tok.rpartition("*")
+        out += [float(value)] * (int(count) if count else 1)
+    return np.array(out)
+
+
+def test_to_grdecl_writes_the_multipliers_that_face_multipliers_gives(tmp_path):
+    """MULTX, MULTY and MULTZ in the file, parsed back and expanded, are the arrays of face_multipliers on the same
+    geometry (to the six figures the file keeps), with the exporter's PERMZ (kv/kh 0.1) and the spread of the seal; a
+    fault across the grid at 60 degrees strike has X, Y and Z faces."""
+    layer, vsh = cake()
+    f = Fault(center=(510.0, 250.0), strike=60.0, length=20000.0, throw=12.0, dip=60.0, name="F1")
+    seal = Seal(vsh=vsh, scatter=0.3, offset=-0.2, seed=3)
+    to_grdecl(layer, tmp_path / "m.grdecl", faults=[f], seal=seal)
+    faces = []
+    _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
+    perm = np.asarray(layer.perm_mat)[:, :, ::-1]
+    expected = face_multipliers(faces, zc, act, vsh, (perm, perm, 0.1 * perm), DX, DX, seal)
+    for key in ("MULTX", "MULTY", "MULTZ"):
+        got = grdecl_block((tmp_path / "m.grdecl").read_text(), key)
+        assert got.size == NX * NY * NZ and (got != 1.0).any()
+        assert np.allclose(got, expected[key].ravel(order="F"), rtol=1e-5)
+
+
 def dome_model(nx=80, ny=60, dx=50.0, top=TOP):
     layer = Layer(nx, ny, 10, nx * dx, ny * dx, 30.0, top_depth=top, kzkx=0.1)
     layer.poro_mat = np.full((nx, ny, 10), 0.2)
@@ -321,6 +371,7 @@ def test_seal_capacity_follows_bretans_envelope():
     assert seal_capacity(0.19, 2000.0, wide) == wide.floor
     assert seal_capacity(0.90, 2000.0, Capillary(delta_rho=300.0, membrane=False)) == plain.floor
     assert seal_capacity(0.25, 4000.0, plain) == plain.plateau
+    assert seal_capacity(0.10, 4000.0, plain) == plain.floor                # the onset holds at any burial
     sgr, burial = np.array([0.1, 0.2, 0.3]), np.array([2000.0, 3200.0, 4000.0])
     assert seal_capacity(sgr, burial, wide) == pytest.approx([0.5, 3.10, 100.0], abs=0.005)
 
@@ -441,6 +492,15 @@ def test_sand_against_shale_seals_whatever_the_gouge():
     assert up["group"] != down["group"] and down["contact_depth"] - up["contact_depth"] == pytest.approx(20.0, rel=0.1)
     up, down = two_blocks(dome_blocks(vsh=0.0, throw=20.0))
     assert up["group"] == down["group"]
+
+
+def test_a_cell_at_exactly_the_net_permeability_is_net():
+    """Net reservoir is horizontal permeability from ``net_perm``: 100 mD sand with net_perm 100 leaks as it does with
+    net_perm 1, and with net_perm just above it the same faces are against non-net rock and wall the fault."""
+    up, down = two_blocks(dome_blocks(vsh=0.0, perm=100.0, net_perm=100.0))
+    assert up["group"] == down["group"]
+    up, down = two_blocks(dome_blocks(vsh=0.0, perm=100.0, net_perm=100.0001))
+    assert up["group"] != down["group"]
 
 
 def test_without_the_membrane_every_net_face_holds_the_floor():
