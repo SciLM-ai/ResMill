@@ -478,6 +478,46 @@ def test_a_self_juxtaposed_footwall_trap_holds_about_the_throw(throw, delta_rho,
     assert delta_rho != 400.0 or abs(held - throw) <= 15.0
 
 
+def chain_blocks(throw1, throw2, delta_rho=400.0, nx=30, ny=7, nz=60):
+    """Three fault blocks in a row, by hand, the ramp of :func:`ramp_blocks` twice: A (columns 0 to 9) rises 4 m a
+    column to fault 1, between columns 9 and 10, where its 60 m of clean sand (clay 0, 100 mD) meets B's, ``throw1``
+    lower; B (10 to 19) rises 2 m a column to fault 2, where it meets C's, ``throw2`` lower; C (20 to 29) rises on to
+    the map's edge and holds no trap. Every row away from the middle is 20 m deeper than the one before. The blocks of
+    ``fault_blocks`` under ``Capillary(delta_rho)``, shallowest crest first: B (its crest, at fault 2, lies ``throw1``
+    - 18 m below the top of A at fault 1), then A."""
+    i, j = np.arange(nx)[:, None], np.arange(ny)[None, :]
+    west, middle, east = 4.0 * (9 - i), throw1 - 2.0 * (i - 10), throw1 - 18.0 + throw2 - 2.0 * (i - 20)
+    top = np.select([i <= 9, i <= 19], [west, middle], east) + 20.0 * np.abs(j - ny // 2)
+    c = columns(TOP + top[:, :, None] + np.arange(nz + 1.0), np.where(i <= 9, -1, 1) + 0 * j, vsh=0.0)
+    second = np.broadcast_to((np.where(i <= 19, -1, 1) + 0 * j).astype(np.int8)[:, :, None], c["act"].shape).copy()
+    c["faces"] = c["faces"] + [(SimpleNamespace(name="F2", dip=90.0), second)]
+    mult = face_multipliers(**c, dx=50.0, dy=50.0, seal=Seal())
+    return fault_blocks(c["zc"], c["act"], c["faces"], mult, 50.0, 50.0, Capillary(delta_rho=delta_rho))
+
+
+@pytest.mark.parametrize("throw1,throw2,joined", [(10.0, 10.0, False), (10.0, 25.0, True)])
+def test_oil_leaks_down_a_chain_of_fault_blocks_from_one_window_to_the_next(throw1, throw2, joined):
+    """Each fault leaks at its own weakest window, the first sand against sand (the throw and half a cell below the
+    sand top of the block it holds), once the contact stands the floor's column below it (0.5 bar at a density
+    contrast of 400: 12.7 m). With 10 m of throw at both faults B's window, 2.5 m below the top of A, is shallower than
+    A's, 10.5 m: B keeps its oil down to 15.2 m and passes the rest on to C, A spills across fault 1 into B at 23.2 m,
+    and there are two accumulations, A's contact 8 m deeper than B's. With 25 m of throw at fault 2 its window, 17.5 m,
+    is the deeper one: B fills to 30.2 m, A's oil stands as high in B as B's does, and one contact serves both."""
+    b, a = chain_blocks(throw1, throw2)
+    window = float(column_height(0.5, 400.0)) + 0.5
+    leak_b = TOP + throw1 - 18.0 + throw2 + window                  # fault 2: B's top there, throw2, half a cell, floor
+    leak_a = TOP + throw1 + window                                  # fault 1: A's top there is TOP
+    assert b["crest_depth"] == TOP + throw1 - 18.0 and a["crest_depth"] == TOP
+    assert b["contact_depth"] == pytest.approx(leak_b, abs=1e-9)
+    assert a["contact_depth"] == pytest.approx(max(leak_a, leak_b), abs=1e-9)
+    assert a["limited_by"] == b["limited_by"] == "leak" and (a["group"] == b["group"]) == joined
+    assert a["height"] == pytest.approx(a["contact_depth"] - TOP)
+    assert b["height"] == pytest.approx(leak_b - b["crest_depth"])
+    if not joined:
+        assert a["point"] == (10, 3) and b["point"] == (20, 3)          # A leaks into B, B into C
+        assert (a["contact_depth"] - b["contact_depth"]) == pytest.approx(8.0, abs=1e-9)
+
+
 def test_the_effective_multiplier_weighs_x_and_y_faces_by_their_own_areas():
     """A corner of a fault: one column (1, 0) 10 m down, between its neighbours, so the fault has 20 X faces on 25 m
     cells (face area 0.5 m x dy = 25 m2) and 20 Y faces on 50 m cells (0.5 m x dx = 12.5 m2): weights 25 / (25/100) =
