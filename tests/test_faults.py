@@ -274,3 +274,55 @@ def test_plot_section_and_to_pyvista_draw_faulted_models():
     from resmill.export import to_pyvista
     grid = to_pyvista(layer, faults=faults)
     assert grid.n_cells == NX * NY * NZ
+
+
+def lateral_contacts(side, zc):
+    """Brute force: (face, i, j, k) of every cell meeting a cell of the other side across its + face, each shared face
+    sampled at 201 points between its pillars."""
+    t = np.linspace(0.0, 1.0, 201)[:, None]
+    out = set()
+    nx, ny, _ = side.shape
+    for axis, face in ((0, "X"), (1, "Y")):
+        for i in range(nx - (axis == 0)):
+            for j in range(ny - (axis == 1)):
+                lo, hi = side[i, j], side[i + 1, j] if axis == 0 else side[i, j + 1]
+                other = lo[:, None] * hi[None, :] == -1
+                if not other.any():
+                    continue
+                if axis == 0:
+                    a, b = zc[2 * i + 1, 2 * j:2 * j + 2], zc[2 * i + 2, 2 * j:2 * j + 2]
+                else:
+                    a, b = zc[2 * i:2 * i + 2, 2 * j + 1], zc[2 * i:2 * i + 2, 2 * j + 2]
+                A, B = a[0] + t * (a[1] - a[0]), b[0] + t * (b[1] - b[0])     # (201, nk)
+                overlap = (np.minimum(A[:, 1:, None], B[:, None, 1:]) - np.maximum(A[:, :-1, None], B[:, None, :-1]))
+                for k in np.flatnonzero(((overlap > 1e-6).any(axis=0) & other).any(axis=1)):
+                    out.add((face, i, j, int(k)))
+    return out
+
+
+@pytest.mark.parametrize("case", ["twisted", "crossing faults and erosion"])
+def test_faults_lists_every_contact_across_each_fault(tmp_path, case):
+    """Every face on which a cell meets the fault's other side, wherever along the face (a twisted face may touch only
+    between its pillars), and every cell resting on one of the other side, are listed, for each of several faults on
+    the final geometry (here also cut by erosion)."""
+    layer = thin_stack()
+    if case == "twisted":
+        faults, kw = [Fault(**TWISTED, name="F1")], {}
+    else:
+        faults = [Fault(center=(1500.0, 1500.0), strike=20.0, length=2500.0, throw=15.0, dip=55.0, name="F1"),
+                  Fault(center=(1400.0, 1600.0), strike=110.0, length=2000.0, throw=10.0, dip=50.0, hanging_wall=-1,
+                        reverse=True, name="F2")]
+        kw = dict(erode_above=TOP + 12.0)
+    faces = []
+    _, _, zc, act = _build_geometry([layer], faults=faults, _faces=faces, **kw)
+    to_grdecl(layer, tmp_path / "m.grdecl", faults=faults, **kw)
+    rows = [r.split() for r in (tmp_path / "m.grdecl").read_text().split("\nFAULTS\n")[1].split("\n/\n")[0].splitlines()]
+    for fault, side in faces:
+        listed = {(r[7].strip("'"), int(r[1]) - 1, int(r[3]) - 1, k) for r in rows if r[0] == f"'{fault.name}'"
+                  for k in range(int(r[5]) - 1, int(r[6]))}
+        assert lateral_contacts(side, zc) <= listed
+        for i, j in zip(*np.nonzero((side > 0).any(axis=2) & (side < 0).any(axis=2))):
+            live = [k for k in range(side.shape[2]) if act[i, j, k]]
+            for a, b in zip(live, live[1:]):
+                if side[i, j, a] * side[i, j, b] == -1:
+                    assert ("Z", i, j, a) in listed

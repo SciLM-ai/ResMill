@@ -152,6 +152,24 @@ def apply_fault(fault, Xc, Yc, Zc):
     return np.maximum.accumulate(Znew, axis=2), side
 
 
+def _face_overlap(a, b):
+    """Largest overlap (m) of every pair of cells, k on one side and k' on the other, along a shared face whose pillar
+    depths are ``a`` and ``b`` (2, nk). Between the pillars the overlap is concave and piecewise linear, so its maximum
+    lies at a pillar or where the two tops or the two bases cross."""
+    at, ab, bt, bb = a[:, :-1, None], a[:, 1:, None], b[:, None, :-1], b[:, None, 1:]
+
+    def overlap(t):
+        lerp = lambda p: p[0] + t * (p[1] - p[0])
+        return np.minimum(lerp(ab), lerp(bb)) - np.maximum(lerp(at), lerp(bt))
+
+    best = np.maximum(overlap(0.0), overlap(1.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for p, q in ((at, bt), (ab, bb)):
+            cross = np.nan_to_num((q[0] - p[0]) / ((p[1] - p[0]) - (q[1] - q[0])))
+            best = np.maximum(best, overlap(np.clip(cross, 0.0, 1.0)))
+    return best
+
+
 def face_records(name, side, zc, act):
     """``FAULTS`` records (1-based I1 I2 J1 J2 K1 K2 and face) of every cell face on which a cell meets a cell of the
     fault's other side, on the final interface stack ``zc`` (2nx, 2ny, nk) with active cells ``act`` (nx, ny, nz).
@@ -170,10 +188,8 @@ def face_records(name, side, zc, act):
                 a, b = zc[2 * i + 1, 2 * j:2 * j + 2], zc[2 * i + 2, 2 * j:2 * j + 2]
             else:
                 a, b = zc[2 * i:2 * i + 2, 2 * j + 1], zc[2 * i:2 * i + 2, 2 * j + 2]
-            a, b = np.vstack([a, a.mean(axis=0)]), np.vstack([b, b.mean(axis=0)])   # both pillars and the middle
-            overlap = np.minimum(a[:, 1:, None], b[:, None, 1:]) - np.maximum(a[:, :-1, None], b[:, None, :-1])
             other = lo[i, j][:, None] * hi[i, j][None, :] == -1
-            ks = np.flatnonzero(((overlap > 1e-6).any(axis=0) & other).any(axis=1))
+            ks = np.flatnonzero(((_face_overlap(a, b) > 1e-6) & other).any(axis=1))
             for run in np.split(ks, np.flatnonzero(np.diff(ks) > 1) + 1) if ks.size else ():
                 records.append((name, i + 1, i + 1, j + 1, j + 1, int(run[0]) + 1, int(run[-1]) + 1, face))
     for i, j in zip(*np.nonzero((side > 0).any(axis=2) & (side < 0).any(axis=2))):
