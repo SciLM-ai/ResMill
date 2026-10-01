@@ -5,8 +5,9 @@ ratio SGR = sum(Vsh dz) / throw over the beds that slid past the face (Yielding,
 rock's permeability, log10 k_f = -4 SGR - 1/4 log10(D) (1 - SGR)^5 (mD; D the displacement in m), and its thickness
 t_f = D / 66, the median ratio (Manzocchi, Walsh, Nell & Yielding 1999). The face's transmissibility multiplier is then
 T = [1 + t_f (2/k_f - 1/k_i - 1/k_j) / (L_i/k_i + L_j/k_j)]^-1 between the cells on either side (permeabilities k_i and
-k_j across the face, half-lengths L_i and L_j), at most 1, so every face lies somewhere between open and sealed. The
-throw at a face is read off the grid, as the offset of the same layer across it, so the throws of several faults add.
+k_j across the face, L_i and L_j the whole cells' lengths across it), at most 1, so every face lies somewhere between
+open and sealed. The throw at a face is read off the grid, as the offset of the same layer across it, so the throws of
+several faults add.
 The physics shapes each fault but explains none of the spread of real ones (on Norne the predicted and the
 history-matched multipliers are uncorrelated), so all faces of a fault also share one log-normal factor 10^(``offset`` +
 N(0, ``scatter``)), calibrated on Norne's history match (``scatter`` 0.9 and ``offset`` -0.6 on its own grid, the mean
@@ -194,7 +195,7 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     if not below:
                         continue
                     other, mid = (i, j, below[0]), bots[i, j, k]
-                    li, lj = 0.5 * (bots[i, j, k] - tops[i, j, k]), 0.5 * (bots[other] - tops[other])
+                    li, lj = bots[i, j, k] - tops[i, j, k], bots[other] - tops[other]
                     cols = [(tops[i, j], bots[i, j], vsh[i, j])]
                     key, area = "MULTZ", dx * dy
                 else:
@@ -204,7 +205,7 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     o = np.clip(np.minimum(bb, ba[k]) - np.maximum(tb, ta[k]), 0.0, None)
                     i2, j2 = (i + 1, j) if face == "X" else (i, j + 1)
                     other = (i2, j2, int(np.argmax(o)) if o.max() > 0.0 else k)
-                    li = lj = 0.5 * (dx if face == "X" else dy)
+                    li = lj = dx if face == "X" else dy
                     cols = [(ta, ba, vsh[i, j]), (tb, bb, vsh[i2, j2])]
                     key = "MULTX" if face == "X" else "MULTY"
                     area = float(o.sum()) * (dy if face == "X" else dx)
@@ -226,7 +227,7 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                 sgrs.append(sgr)
                 mults.append(mult)
                 rows.append((n, "XY".index(near[0]), near[1] - 1, near[2] - 1, mid, sgr, min(ki, kj)))
-                weights.append(area / (max(li, 1e-6) / ki + max(lj, 1e-6) / kj))
+                weights.append(area / (0.5 * max(li, 1e-6) / ki + 0.5 * max(lj, 1e-6) / kj))      # T0, centre to face
         info.append(dict(name=fault.name, mode=mode, dn=dn, sgr=sgrs, mult=mults,
                          effective=float(np.dot(weights, mults) / sum(weights)) if sum(weights) > 0.0 else 1.0))
     out["faults"] = info

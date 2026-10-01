@@ -51,8 +51,9 @@ def test_sgr_is_the_clay_of_the_beds_that_slid_past(throw, expected):
 
 
 def test_the_face_multiplier_follows_manzocchis_transmissibility():
-    """T = [1 + t_f (2/k_f - 1/k_i - 1/k_j) / (L_i/k_i + L_j/k_j)]^-1 with t_f = D/66: for SGR 0.5, 10 m of displacement
-    between 100 mD cells 25 m wide, and no fault (multipliers 1) away from the fault."""
+    """On a fault of the real geometry: for SGR 0.5, 10 m of displacement between 100 mD cells 25 m wide the multiplier
+    is 0.01595 (k_f 0.00982 mD, t_f 0.1515 m, resistance 15.68 against 0.25: the hand calculation of
+    ``test_fault_seal_references``), and 1 (no fault) away from the fault."""
     layer, vsh = cake(sand_vsh=0.5, shale_vsh=0.5)
     layer.perm_mat[:] = 100.0
     f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=10.0, dip=90.0, drag=(0.0, 0.0), name="F1")
@@ -60,11 +61,9 @@ def test_the_face_multiplier_follows_manzocchis_transmissibility():
     _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
     perm = np.asarray(layer.perm_mat)[:, :, ::-1]
     out = face_multipliers(faces, zc, act, vsh, (perm, perm, perm), DX, DX, Seal())
-    kf = fault_rock_permeability(0.5, 10.0)
-    expected = 1.0 / (1.0 + 10.0 / 66.0 * (2.0 / kf - 2.0 / 100.0) / (2.0 * 12.5 / 100.0))
     mx = out["MULTX"]
     listed = mx < 1.0
-    assert listed.any() and np.median(mx[listed]) == pytest.approx(expected, rel=0.15)
+    assert listed.any() and np.median(mx[listed]) == pytest.approx(0.01595, rel=0.01)
     assert np.all(mx[:5] == 1.0) and np.all(mx[-5:] == 1.0)
 
 
@@ -126,12 +125,11 @@ def many_faults(seal, n):
 
 
 def test_the_spread_options_off_reproduce_the_physics_and_draw_nothing(monkeypatch):
-    """With the defaults every face keeps its physics multiplier, as before the spread existed (the sum is that of the
-    code at 9b23681), and a fixed offset shifts the faults without drawing a random number."""
+    """With the defaults every face keeps its physics multiplier, as before the spread existed, and a fixed offset
+    shifts the faults without drawing a random number."""
     faces, rest = tiny_fault()
     base = face_multipliers(faces, *rest, Seal())["faults"][0]
     assert base["mode"] == "seal" and len(base["mult"]) == 28
-    assert sum(base["mult"]) == pytest.approx(2.789068201551789, rel=1e-12)
 
     class Silent:
         def __getattr__(self, name):
@@ -158,11 +156,13 @@ def test_each_fault_has_one_factor_with_the_asked_median_and_spread():
 
 
 def test_scatter_alone_draws_one_normal_per_fault_as_it_always_did():
-    """With no open or enhancing share the stream is what it was: one normal per fault, in the order of the faults."""
+    """With no open or enhancing share the stream is what it was: one normal per fault, in the order of the faults
+    (read on the face with the lowest multiplier, which the cap at 1 does not touch)."""
     base = np.array(many_faults(Seal(), 1)[0]["mult"])
+    low = int(np.argmin(base))
     rng = np.random.default_rng(9)
     for info in many_faults(Seal(scatter=0.3, seed=9), 5):
-        assert np.array(info["mult"])[0] / base[0] == pytest.approx(10.0 ** rng.normal(0.0, 0.3), rel=1e-12)
+        assert np.array(info["mult"])[low] / base[low] == pytest.approx(10.0 ** rng.normal(0.0, 0.3), rel=1e-12)
 
 
 def test_open_and_enhancing_faults_follow_their_shares():
