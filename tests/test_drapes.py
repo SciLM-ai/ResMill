@@ -238,6 +238,17 @@ def test_only_the_base_of_a_younger_fill_is_a_base_and_unknown_storeys_make_no_d
     assert np.all(mx[1] == 1.0)                         # unknown beside known: nothing
 
 
+def test_without_a_known_storey_nothing_is_draped_and_nothing_fails():
+    """With no event record every storey is unknown (-1), so no cell is a younger fill over older sand: no column is draped
+    and no face gets a multiplier (it used to raise an IndexError on the empty storey axis)."""
+    f, _ = _stack_cube()
+    unknown = np.full(f.shape, -1)
+    draped = draped_columns((f == 3) | (f == 4), unknown, np.full(f.shape, 0.5, dtype=np.float32), 0.5, 0.0, (1.0, 1.0),
+                            np.random.default_rng(0))
+    out = drape_faces(f, unknown, draped, _perms(f.shape), SIZE, T, KD)
+    assert not draped.any() and all(np.all(a == 1.0) for a in out)
+
+
 def test_each_draped_column_decides_for_its_own_storey():
     """The drape of a face is read off the map of the younger cell's storey and column: with the map covering only
     columns 3-4, the base of columns 2 stays open while 3 and 4 are draped, and the wall against column 1 (column 2's

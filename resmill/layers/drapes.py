@@ -127,7 +127,8 @@ def _local_coverage(axis_ness, coverage, margin_bias):
 
 
 def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng) -> np.ndarray:
-    """Which columns of each storey's base are draped: bool ``(n_storeys, nx, ny)``, ``n_storeys`` the top level + 1.
+    """Which columns of each storey's base are draped: bool ``(n_storeys, nx, ny)``, ``n_storeys`` the top level + 1 (at
+    least 1, an undraped level 0, when no storey is known).
 
     ``fill`` marks the channel-fill cells, ``storey`` their levels, ``depth_norm`` the engine's position in the
     channel (its lowest fill cell in a column gives the axis-ness) and ``sigma`` the smoothing (cells along x and y) of
@@ -136,7 +137,7 @@ def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng) 
     below it.
     """
     nx, ny, _ = fill.shape
-    draped = np.zeros((int(storey.max()) + 1, nx, ny), dtype=bool)
+    draped = np.zeros((max(int(storey.max()), 0) + 1, nx, ny), dtype=bool)
     for level in np.unique(storey[fill]):
         if level < 0:
             continue
