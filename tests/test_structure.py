@@ -186,3 +186,81 @@ def test_closure_warp_makes_the_outline_lobate():
                                              center=(0.0, 0.0)))
     assert lobate > 1.1 * plain
     assert stats["area"] == pytest.approx(8e6, rel=0.03) and stats["height"] == pytest.approx(120.0, rel=0.02)
+
+
+def _walled_bowl(gate):
+    """A 5 x 5 map, depth 20 on its edge and 10 inside, every edge into the inner 3 x 3 sealed but one (between the
+    edge cell (0, 2) and the inner cell (1, 2)), which passes at ``gate``: ``(depth, wall_x, wall_y)``."""
+    depth = np.full((5, 5), 10.0)
+    depth[[0, -1], :] = depth[:, [0, -1]] = 20.0
+    wall_x, wall_y = np.zeros((4, 5)) - np.inf, np.zeros((5, 4)) - np.inf
+    wall_x[[0, 3], 1:4] = np.inf
+    wall_y[1:4, [0, 3]] = np.inf
+    wall_x[0, 2] = gate
+    return depth, wall_x, wall_y
+
+
+@pytest.mark.parametrize("gate,level", [(50.0, 50.0), (5.0, 20.0), (-np.inf, 20.0), (np.inf, np.inf)])
+def test_the_spill_flood_crosses_an_edge_at_its_pass_level(gate, level):
+    """A path crosses a cell edge at the highest of the level so far, the next cell's depth and the edge's pass level:
+    sealed (+inf) it reaches nothing, free (-inf) or below the cells' depth it changes nothing."""
+    depth, wall_x, wall_y = _walled_bowl(gate)
+    spill = st._spill_levels(depth, wall_x, wall_y)
+    assert np.all(spill[1:4, 1:4] == level) and np.all(spill[[0, -1], :] == 20.0)
+
+
+def test_the_spill_flood_takes_the_cheaper_way_in_when_it_comes_later():
+    """A cell next to a low edge cell over a high pass level and to a higher edge cell over a free edge takes the
+    cheaper of the two, though the low neighbour is reached first: 30, not 100."""
+    depth = np.full((3, 3), 30.0)
+    depth[0, 1], depth[1, 1] = 10.0, 5.0
+    wall_x = np.full((2, 3), -np.inf)
+    wall_x[0, 1] = 100.0
+    assert st._spill_levels(depth, wall_x)[1, 1] == 30.0
+
+
+def test_the_spill_flood_is_the_shallowest_path_for_any_pass_levels():
+    """Against plain relaxation to the fixed point: the level of every cell is the least, over paths from the edge, of
+    the highest depth or pass level along the path, whatever the pass levels (free, sealed or between)."""
+    def relax(depth, wall_x, wall_y):
+        level = np.full(depth.shape, np.inf)
+        edge = np.zeros(depth.shape, dtype=bool)
+        edge[[0, -1], :] = edge[:, [0, -1]] = True
+        level[edge] = depth[edge]
+        while True:
+            new = level.copy()
+            for wall, lo, hi in ((wall_x, np.s_[:-1], np.s_[1:]), (wall_y, np.s_[:, :-1], np.s_[:, 1:])):
+                new[hi] = np.minimum(new[hi], np.maximum(np.maximum(depth[hi], level[lo]), wall))
+                new[lo] = np.minimum(new[lo], np.maximum(np.maximum(depth[lo], level[hi]), wall))
+            if np.array_equal(new, level):
+                return level
+            level = new
+
+    rng = np.random.default_rng(8)
+    for _ in range(6):
+        depth = ndimage.gaussian_filter(rng.normal(size=(18, 14)), 1.5) * 40.0 + 2000.0
+        walls = [np.where(rng.random(shape) < 0.3, np.inf, 2000.0 + 20.0 * rng.normal(size=shape))
+                 for shape in ((17, 14), (18, 13))]
+        assert np.array_equal(st._spill_levels(depth, *walls), relax(depth, *walls))
+
+
+def test_the_spill_flood_reads_a_boolean_wall_as_sealed_and_open():
+    """A boolean wall array is the same as pass levels of +inf (True) and -inf (False)."""
+    rng = np.random.default_rng(3)
+    depth = ndimage.gaussian_filter(rng.normal(size=(30, 25)), 2.0) * 30.0 + 2000.0
+    wall_x, wall_y = rng.random((29, 25)) < 0.3, rng.random((30, 24)) < 0.3
+    levels = lambda w: np.where(w, np.inf, -np.inf)
+    assert np.array_equal(st._spill_levels(depth, wall_x, wall_y),
+                          st._spill_levels(depth, levels(wall_x), levels(wall_y)))
+    assert np.array_equal(st._spill_levels(depth, wall_x), st._spill_levels(depth, levels(wall_x), None))
+    assert np.array_equal(st._spill_levels(depth), st._spill_levels(depth, np.zeros((29, 25), bool)))
+
+
+def test_the_spill_flood_ends_on_columns_of_infinite_depth():
+    """Dead columns (infinite depth) neither hang the flood nor let oil through: the pocket a ring of them closes off
+    keeps an infinite level, as behind a wall."""
+    i, j = np.indices((9, 9))
+    ring = np.maximum(abs(i - 4), abs(j - 4))
+    depth = np.where(ring == 2, np.inf, 10.0)
+    spill = st._spill_levels(depth)
+    assert np.all(spill[ring <= 2] == np.inf) and np.all(spill[ring > 2] == 10.0)
