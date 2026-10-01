@@ -313,3 +313,26 @@ def test_a_fault_rock_a_little_better_than_the_cells_gives_more_than_1_which_the
     assert len(base) == 20 and np.all(np.array(base) == 1.0)
     bracket = 1.0 + (10.0 / 66.0) * (2.0 / fault_rock_k(0.0, 10.0) - 2.0 / 0.01) / (2.0 * 25.0 / 0.01)
     assert 0.99 < bracket < 1.0 and np.allclose(scaled, 10.0 ** -0.6 / bracket, rtol=1e-9)
+
+
+@pytest.mark.parametrize("along", ["x", "y"])
+def test_a_cells_net_status_is_its_horizontal_permeability_on_every_lateral_face(along):
+    """Net reservoir is a property of the bed, not of the face's direction: the record's permeability, which
+    ``Capillary.net_perm`` is tested against, is the lower of the two cells' horizontal permeabilities, the geometric
+    mean of PERMX and PERMY (sqrt(25 x 4) = 10 mD in both columns here, on X and on Y faces alike, however low PERMZ
+    is), and the lower of the two columns' where they differ."""
+    rec = mults(step(10.0, True, along, perm=(25.0, 4.0, 0.001)))["face_records"]
+    assert len(rec) == 20 and np.all(rec["perm"] == 10.0)
+    two = np.array([[25.0] * 40, [1.0] * 40])
+    rec = mults(step(10.0, True, along, perm=(per_column(two, along), per_column(two[::-1], along), 0.001)))
+    assert len(rec["face_records"]) == 20 and np.all(rec["face_records"]["perm"] == 5.0)
+
+
+def test_a_tread_is_net_on_the_horizontal_permeability_of_its_cells():
+    """The tread's cells have PERMZ 20 mD against 100 mD horizontally (and 0.1 mD against 100 below): they are net
+    reservoir on every face they have, the tread included."""
+    for kz in (20.0, 0.1):
+        c = tread_columns()
+        c["perms"] = (c["perms"][0], c["perms"][1], np.full(c["vsh"].shape, kz))
+        rec = mults(c, 25.0, 50.0)["face_records"]
+        assert len(rec) == 6 and np.all(rec["perm"] == 100.0)

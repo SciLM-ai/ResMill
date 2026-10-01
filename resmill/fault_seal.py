@@ -23,14 +23,14 @@ log-uniform value (enhancing) or one normal (seal, with a ``scatter``); with the
 
 Juxtaposition needs nothing here: the simulator connects only the cells that touch. Over geological time a fault holds
 oil back only up to the column its capillary seal supports, however low its multiplier (which sets flow in production),
-and :func:`fault_blocks` takes the contacts of the fault blocks from that. A face between two net cells (permeability
-from ``Capillary.net_perm``) holds the pressure :func:`seal_capacity` gives from its SGR and its burial below the
-mudline: the upper envelope of Bretan, Yielding & Jones (2003), :func:`bretan_pressure`, 10^(100 SGR/27 - C) bar with C
-= 0.5, 0.25 and 0 below 3, at 3-3.5 and above 3.5 km, capped at a plateau (oil: near 3 bar in their data, 6 bar or more
-in Childs et al. 2009; above 3.5 km oil is uncalibrated, so the plateau holds there), with a floor below an SGR onset
-(sand on sand, 0.15-0.25: the juxtaposition leak) or without the membrane (juxtaposition only, as Murray et al. 2019
-back-analyse). A bed against a non-net one seals whatever the SGR. That pressure is an oil column H = 1e5 P / (g
-delta_rho) m, so a face at depth z leaks once the contact lies below z + H, and an edge between two map columns below
+and :func:`fault_blocks` takes the contacts of the fault blocks from that. A face between two net cells (horizontal
+permeability from ``Capillary.net_perm``) holds the pressure :func:`seal_capacity` gives from its SGR and its burial
+below the mudline: the upper envelope of Bretan, Yielding & Jones (2003), :func:`bretan_pressure`, 10^(100 SGR/27 - C)
+bar with C = 0.5, 0.25 and 0 below 3, at 3-3.5 and above 3.5 km, capped at a plateau (oil: near 3 bar in their data, 6
+bar or more in Childs et al. 2009; above 3.5 km oil is uncalibrated, so the plateau holds there), with a floor below an
+SGR onset (sand on sand, 0.15-0.25: the juxtaposition leak) or without the membrane (juxtaposition only, as Murray et
+al. 2019 back-analyse). A bed against a non-net one seals whatever the SGR. That pressure is an oil column H = 1e5 P /
+(g delta_rho) m, so a face at depth z leaks once the contact lies below z + H, and an edge between two map columns below
 the lowest such level of its faces (a wall when it has none: a throw beyond the reservoir, or only sand against shale).
 A priority flood from the map's edge crosses a faulted edge at the higher of that level and the next column's depth, so
 the level it reaches at a block's crest is the block's contact, the shallower of its spill and its leak point (the
@@ -85,7 +85,7 @@ class Capillary:
     floor: float = 0.5              # what a face holds below the onset or without the membrane (bar)
     plateau: float = 4.0            # the most a face holds (bar)
     membrane: bool = True           # False: juxtaposition only, every face holds the floor
-    net_perm: float = 1.0           # permeability from which a cell is net reservoir (mD)
+    net_perm: float = 1.0           # horizontal permeability (geometric mean of PERMX and PERMY) of a net cell (mD)
 
     def __post_init__(self):
         problems = [msg for bad, msg in (
@@ -181,7 +181,8 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
     row per face with a multiplier, for :func:`fault_blocks`: its ``fault`` (index in ``faces``), the map edge it counts
     for (``axis`` 0 for X, 1 for Y, and the lower-index column ``i``, ``j``; a Z face, a tread inside one column, counts
     for the nearest lateral edge of its fault, as for its throw), its ``depth`` (m, mid), its ``sgr`` and ``perm``, the
-    lower of the two cells' permeabilities across the face's direction (mD).
+    lower of the two cells' horizontal permeabilities (mD; the geometric mean of PERMX and PERMY, the same on a Z face
+    as on a lateral one: a cell is net reservoir or not for all its faces).
     """
     nx, ny, nz = act.shape
     rng = np.random.default_rng(seal.seed)
@@ -258,7 +259,8 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     listed[key][i, j, k] = True
                 sgrs.append(sgr)
                 mults.append(mult)
-                rows.append((n, "XY".index(near[0]), near[1] - 1, near[2] - 1, mid, sgr, min(ki, kj)))
+                net = min(max(math.sqrt(float(perms[0][c]) * float(perms[1][c])), 1e-9) for c in ((i, j, k), other))
+                rows.append((n, "XY".index(near[0]), near[1] - 1, near[2] - 1, mid, sgr, net))
                 weights.append(area / (0.5 * max(li, 1e-6) / ki + 0.5 * max(lj, 1e-6) / kj))      # T0, centre to face
         info.append(dict(name=fault.name, mode=mode, dn=dn, sgr=sgrs, mult=mults,
                          effective=float(np.dot(weights, mults) / sum(weights)) if sum(weights) > 0.0 else 1.0))
