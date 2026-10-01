@@ -203,16 +203,9 @@ def surface(arr, x_len, y_len):
     return Structure(fn)
 
 
-def closure_stats(depth, dx, dy, crest=None):
-    """The trap around ``crest`` on a top-surface depth map (m, positive down, shape ``(nx, ny)``).
-
-    Hydrocarbons fill a structural high down to its spill point: the deepest point of the
-    shallowest path from the crest to the map's edge. A priority flood from the edge gives that
-    depth for every cell (4-connected). Returns ``area`` (m2: the cells shallower than the spill
-    depth connected to the crest), ``height`` (m: spill depth minus crest depth),
-    ``spill_depth``, ``crest`` (i, j; the shallowest cell unless given) and ``mask``.
-    """
-    depth = np.asarray(depth, dtype=float)
+def _spill_levels(depth):
+    """Each cell's spill depth: the deepest point of the shallowest path from it to the map's edge (a priority
+    flood from the edge, 4-connected)."""
     nx, ny = depth.shape
     spill = np.full(depth.shape, np.inf)
     heap = []
@@ -228,6 +221,20 @@ def closure_stats(depth, dx, dy, crest=None):
             if 0 <= a < nx and 0 <= b < ny and spill[a, b] == np.inf:
                 spill[a, b] = max(depth[a, b], level)
                 heapq.heappush(heap, (spill[a, b], a, b))
+    return spill
+
+
+def closure_stats(depth, dx, dy, crest=None):
+    """The trap around ``crest`` on a top-surface depth map (m, positive down, shape ``(nx, ny)``).
+
+    Hydrocarbons fill a structural high down to its spill point: the deepest point of the
+    shallowest path from the crest to the map's edge. A priority flood from the edge gives that
+    depth for every cell (4-connected). Returns ``area`` (m2: the cells shallower than the spill
+    depth connected to the crest), ``height`` (m: spill depth minus crest depth),
+    ``spill_depth``, ``crest`` (i, j; the shallowest cell unless given) and ``mask``.
+    """
+    depth = np.asarray(depth, dtype=float)
+    spill = _spill_levels(depth)
     if crest is None:
         crest = np.unravel_index(int(np.argmin(depth)), depth.shape)
     crest = (int(crest[0]), int(crest[1]))

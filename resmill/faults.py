@@ -45,6 +45,7 @@ class Fault:
     name: str = ""
     bends: float = 0.0             # rms wander of the trace about its chord or arc, x length (0: none)
     seed: int | None = None        # draws the bends (required with them)
+    kind: str = ""                 # the set a fault pattern drew it from (a label only)
 
     def __post_init__(self):
         problems = [msg for bad, msg in (
