@@ -60,7 +60,7 @@ def _corner_axis(n, d):
 
 def _build_geometry(layers, structure=None, top=None, base=None,
                     erode_above=None, erode_below=None, isochore=None, onlap=False,
-                    faults=None, _faces=None):
+                    faults=None, _faces=None, salt=None):
     """Assemble deformed interface depths on the doubled corner grid.
 
     Returns ``(Xc, Yc, Zc, actnum)``: corner coordinates ``(2nx, 2ny)``,
@@ -72,10 +72,15 @@ def _build_geometry(layers, structure=None, top=None, base=None,
     so younger layers end against it, instead of the default incision.
     ``faults`` (:class:`resmill.faults.Fault`) displace the stack in 3-D
     after the structure and before erosion; ``_faces``, when a list, gets
-    one ``(fault, side)`` pair per fault for the FAULTS export.
+    one ``(fault, side)`` pair per fault for the FAULTS export. ``salt``
+    (:class:`resmill.salt.SaltBody`) makes every cell whose centre lies in
+    the body, at the cell's own depth, inactive, after the erosion.
     """
     L0 = layers[0]
     nx, ny = L0.nx, L0.ny
+    if salt is not None and max(L0.dx, L0.dy) > salt.max_cell:
+        raise ValueError(f"cells of {max(L0.dx, L0.dy):g} m are wider than half the upturn's folding zone "
+                         f"({salt.max_cell:g} m): the salt flank would not be resolved")
     x_len, y_len = L0.x_len, L0.y_len
     Xn, Yn = L0.X, L0.Y  # (nx+1, ny+1) node grids
 
@@ -182,6 +187,9 @@ def _build_geometry(layers, structure=None, top=None, base=None,
     thick = Zc[:, :, 1:] - Zc[:, :, :-1]
     cell_thick = thick.reshape(nx, 2, ny, 2, -1).max(axis=(1, 3))
     actnum = (cell_thick > _MIN_THICKNESS).astype(np.int32)
+    if salt is not None:
+        from .salt import salt_cells
+        actnum[salt_cells(salt, Xc, Yc, Zc)] = 0
     return Xc, Yc, Zc, actnum
 
 
@@ -252,7 +260,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
               erode_above=None, erode_below=None, facies=False, isochore=None, onlap=False,
               faults=None,
               poro_floor=None, perm_floor=None,
-              fmt_z="%.2f", fmt_prop="%.6g", seal=None):
+              fmt_z="%.2f", fmt_prop="%.6g", seal=None, salt=None):
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
 
     The file carries SPECGRID, COORD, ZCORN, ACTNUM, PORO, PERMX, PERMY
@@ -306,6 +314,11 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         transmissibility multiplier from its shale gouge ratio
         (:mod:`resmill.fault_seal`); ``seal.vsh`` holds the clay fraction per
         cell or per facies code.
+    salt : resmill.salt.SaltBody, optional
+        Salt body: its cells are written ACTNUM = 0, so the contact is sealed
+        (no pore volume, no connection); the wall is a staircase on cell
+        faces, and cells must be at most ``salt.max_cell`` wide (half the
+        narrowest upturn zone built on it). PORO and PERM keep their values.
     """
     layers = list(getattr(model, "layers", [model]))
     L0 = layers[0]
@@ -314,7 +327,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
 
     faces = []
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, faces)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, faces, salt)
     names = [fault.name or f"F{n + 1:02d}" for n, (fault, _) in enumerate(faces)]
     if len(set(names)) < len(names) or any(len(nm) > 8 for nm in names):
         raise ValueError(f"fault names must be unique within 8 characters (OPM keeps 8): {names}")
@@ -388,7 +401,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
 
 
 def to_pyvista(model, structure=None, top=None, base=None,
-               erode_above=None, erode_below=None, isochore=None, onlap=False, faults=None):
+               erode_above=None, erode_below=None, isochore=None, onlap=False, faults=None, salt=None):
     """Build a ``pyvista.ExplicitStructuredGrid`` of the deformed model.
 
     Cell data carries PORO, PERMX (and PERMY where the layers' kx/ky makes it
@@ -405,7 +418,7 @@ def to_pyvista(model, structure=None, top=None, base=None,
     layers = list(getattr(model, "layers", [model]))
     nx, ny = layers[0].nx, layers[0].ny
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, salt=salt)
 
     # pyvista wants the corners as a global F-order ravel of the doubled
     # corner arrays (the same layout as ZCORN). The grid's k axis points
