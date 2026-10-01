@@ -244,6 +244,25 @@ def test_growth_dies_along_strike_with_the_throw_profile():
 
 
 @pytest.mark.parametrize("detach", [None, 4500.0])
+def test_growth_without_a_width_steps_up_over_the_horizons_heave(detach):
+    """``width=None``: the zone thickens over the horizon's heave at the fault's centre line (the distance between its
+    footwall and hanging-wall cutoffs), so the hanging wall begins at the full expansion. The heave of 50 m of throw is
+    50 / tan(60) = 28.9 m for a 60 degree plane, and R (sin(dip there) - sin(dip 50 m deeper)) for the circle of a 40 degree
+    fault flattening at 4,500 m; half way across it the factor is half way up."""
+    dip = 60.0 if detach is None else 40.0
+    f = growth_fault(detach=detach, dip=dip, z_center=2000.0)                  # throw 50 m at the centre line, trace at x = 1,000
+    if detach is None:
+        heave = 50.0 / np.tan(np.radians(dip))
+    else:
+        radius = (detach - 2000.0) / (1.0 - np.cos(np.radians(dip)))
+        theta = lambda z: np.arccos(1.0 - (detach - z) / radius)
+        heave = radius * (np.sin(theta(2000.0)) - np.sin(theta(2050.0)))
+    x = 1000.0 + heave * np.array([-0.2, 0.0, 0.5, 1.0, 1.5])
+    assert st.growth(f, 2.0, None, 2000.0)(x, np.full(5, 1000.0)) == pytest.approx([1.0, 1.0, 1.5, 2.0, 2.0], abs=1e-6)
+    assert st.growth(f, 2.0, None, 9000.0)(np.array([5000.0]), np.array([1000.0])) == pytest.approx(1.0)   # no throw there
+
+
+@pytest.mark.parametrize("detach", [None, 4500.0])
 def test_growth_thickens_the_zone_by_the_expansion_in_the_hanging_wall_only(detach):
     """As the isochore of a 40 m zone cut by a fault whose hanging wall moves rigidly (a plane) or by vertical shear (listric,
     toward its flat): 5 m cells are EI x 5 m in the hanging wall far from the fault and 5 m in the footwall, none negative."""

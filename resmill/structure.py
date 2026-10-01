@@ -372,7 +372,8 @@ def growth(fault, expansion, width, depth):
 
     1 in the footwall, ``expansion`` (the growth or expansion index: downthrown over upthrown thickness; Ewing et al. 1986,
     Xiao & Suppe 1992: 1.1-2.5 per fault) in the hanging wall. The factor rises as a smooth step from 1 at the fault's trace
-    at ``depth`` (the plane's footwall cutoff there) to ``expansion`` ``width`` m toward the hanging wall, and its excess
+    at ``depth`` (the plane's footwall cutoff there) to ``expansion`` ``width`` m toward the hanging wall (``None``: the
+    horizon's heave at the fault's centre line, so that the hanging wall begins at the full factor), and its excess
     is tapered along the strike by the throw profile (the fault's tip ellipse at ``depth``, relative to its centre line):
     no growth where the fault has no throw at that depth. Pass it to ``to_grdecl(isochore=[...])``; it needs
     ``fault.z_center``, the depth scale of the tip ellipse.
@@ -381,13 +382,16 @@ def growth(fault, expansion, width, depth):
 
     if fault.z_center is None:
         raise ValueError("growth needs fault.z_center, the depth scale of the fault's tip ellipse")
-    if not (width > 0.0 and expansion > 0.0):
+    if not (width is None or width > 0.0) or not expansion > 0.0:
         raise ValueError(f"growth needs a width and an expansion above 0, got {width!r} and {expansion!r}")
     zc = float(fault.z_center)
-    h0 = float(_plane(fault, zc)[1](depth))
+    trace = _plane(fault, zc)[1]
+    h0 = float(trace(depth))
     lx = 0.5 * fault.length
     rz = (depth - zc) / np.sin(np.radians(fault.dip)) / (lx / fault.aspect)
     centre = float(ww_profile(abs(rz)))
+    if width is None:
+        width = max(float(trace(depth + fault.throw * centre)) - h0, 1.0)
 
     def fn(x, y):
         s, h = _frame(fault, np.asarray(x, dtype=float), np.asarray(y, dtype=float))
