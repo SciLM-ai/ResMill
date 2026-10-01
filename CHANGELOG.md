@@ -36,7 +36,8 @@
   `to_grdecl` writes `mult_x`, `mult_y` and `mult_z` as MULTX, MULTY and
   MULTZ, times a fault seal's where both exist (OPM Flow replaces a MULTX
   given twice for one cell, so each keyword is written once, and a later
-  BOX / MULTX over draped cells would erase their drapes). `sample_drapes` draws a
+  BOX / MULTX over draped cells would erase their drapes, while a MULTIPLY
+  'MULTX' multiplies them). `sample_drapes` draws a
   reservoir's settings: coverage from the Beta(1.52, 1.21) of Barton's
   outcrop means cut to 0.05-0.92, the contrast uniform 0-0.34, thickness
   log-uniform 0.1-1.5 m. A cell's storey (levee fading uses it too) is now
