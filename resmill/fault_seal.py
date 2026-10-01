@@ -71,8 +71,9 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
     ``faces`` holds ``(fault, side)`` pairs (from the geometry builder), ``zc`` the final interface stack, ``act`` the
     active cells, ``vsh`` the clay fraction per cell and ``perms`` (PERMX, PERMY, PERMZ), all (nx, ny, nz) in K-down
     order. Returns ``MULTX``, ``MULTY``, ``MULTZ`` (nx, ny, nz; a cell's + face, as the GRDECL keywords mean), the
-    faces each fault listed (``listed``), and per fault its ``dn``, ``sgr`` and ``mult`` per face and ``effective``
-    (the faces' geometric mean).
+    faces each fault listed (``listed``), and per fault its ``dn``, ``sgr`` and ``mult`` per face and ``effective``,
+    the faces' mean weighted by the transmissibility each would have without the fault: the one multiplier for the
+    whole fault (a MULTFLT) that passes the same flow.
     """
     nx, ny, nz = act.shape
     rng = np.random.default_rng(seal.seed)
@@ -93,7 +94,7 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
         dn = float(throws.max()) / max(gross, 1e-6)
         factor = 10.0 ** rng.normal(0.0, seal.scatter) if seal.scatter > 0.0 else 1.0
         sin_d = max(math.sin(math.radians(fault.dip)), 1e-3)
-        sgrs, mults = [], []
+        sgrs, mults, weights = [], [], []
         for _, i1, _, j1, _, k1, k2, face in records:
             i, j = i1 - 1, j1 - 1
             if face == "Z":
@@ -109,7 +110,7 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     other, mid = (i, j, below[0]), bots[i, j, k]
                     li, lj = 0.5 * (bots[i, j, k] - tops[i, j, k]), 0.5 * (bots[other] - tops[other])
                     cols = [(tops[i, j], bots[i, j], vsh[i, j])]
-                    key = "MULTZ"
+                    key, area = "MULTZ", dx * dy
                 else:
                     a, b = _column_pair(zc, i, j, face)
                     ta, ba, tb, bb = a[:, :-1].mean(axis=0), a[:, 1:].mean(axis=0), b[:, :-1].mean(axis=0), b[:, 1:].mean(axis=0)
@@ -120,6 +121,7 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     li = lj = 0.5 * (dx if face == "X" else dy)
                     cols = [(ta, ba, vsh[i, j]), (tb, bb, vsh[i2, j2])]
                     key = "MULTX" if face == "X" else "MULTY"
+                    area = float(o.sum()) * (dy if face == "X" else dx)
                 if throw <= 0.0:
                     continue
                 parts = [_window_vsh(t, b_, v, mid - 0.5 * throw, mid + 0.5 * throw) for t, b_, v in cols]
@@ -137,8 +139,9 @@ def face_multipliers(faces, zc, act, vsh, perms, dx, dy, seal, thickness=None):
                     listed[key][i, j, k] = True
                 sgrs.append(sgr)
                 mults.append(mult)
+                weights.append(area / (max(li, 1e-6) / ki + max(lj, 1e-6) / kj))
         info.append(dict(name=fault.name, dn=dn, sgr=sgrs, mult=mults,
-                         effective=float(10.0 ** np.mean(np.log10(mults))) if mults else 1.0))
+                         effective=float(np.dot(weights, mults) / sum(weights)) if sum(weights) > 0.0 else 1.0))
     out["faults"] = info
     out["listed"] = listed
     return out

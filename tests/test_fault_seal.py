@@ -88,6 +88,21 @@ def test_faces_lie_between_open_and_sealed_by_the_clay_that_slid_past():
     assert np.corrcoef(np.argsort(np.argsort(sgr)), np.argsort(np.argsort(mult)))[0, 1] < -0.9
 
 
+def test_a_faults_effective_multiplier_follows_the_faces_that_carry_flow():
+    """Faces between tight shales carry almost no flow, so the fault's one equivalent multiplier (a MULTFLT passing the
+    same flow) follows its sand faces (0.08-0.3 here), not the plain mean of all faces, which the shale faces (near 1
+    against the shale's own permeability) pull up."""
+    layer, vsh = cake(beds=4)
+    f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=6.0, dip=70.0, name="F1")
+    faces = []
+    _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
+    perm = np.asarray(layer.perm_mat)[:, :, ::-1]
+    info = face_multipliers(faces, zc, act, vsh, (perm, perm, perm), DX, DX, Seal())["faults"][0]
+    mult = np.array(info["mult"])
+    assert 0.08 < info["effective"] < 0.3
+    assert 10.0 ** np.mean(np.log10(mult)) > 2.0 * info["effective"]
+
+
 def test_to_grdecl_writes_the_face_multipliers(tmp_path):
     layer, vsh = cake()
     f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=12.0, dip=60.0, name="F1")
