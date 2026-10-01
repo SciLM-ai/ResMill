@@ -2,8 +2,9 @@
 
 A channel element often lies on a thin mud drape (a few centimetres to a few metres of thin-bedded mudstone) that covers
 part of its base: a median 60 % of it, from under 5 % to over 90 % over 17 outcrops and 154 elements (Barton et al.
-2010). Where it covers the base, the element does not touch the older sand beneath it, and in sector models recovery
-falls from 0.60 without drapes to 0.53 at 60 % coverage and 0.20 at 90 % (Barton et al. 2010; Ruetten 2021).
+2010). Where it covers the base, the element does not touch the older sand beneath it, and in Barton's sector model
+recovery falls from 0.60 without drapes to 0.53 at 60 % coverage and 0.20 at 90 % (Ruetten 2021 finds the same fall at
+breakthrough).
 
 A drape is far thinner than a cell (0.1-1.5 m in cells of 0.5-5 m), so painting mud cells would remove up to fifty times
 the sand the drape displaces and could not draw one thinner than a cell at all. It is put where it is, on the faces: the
@@ -15,9 +16,10 @@ of size ``h`` and permeability ``k1`` and ``k2`` across the face. In series, wit
     M = [1 + (t / h) (ks / kd - 1)]^-1        (t at most h; kept between 1e-12 and 1)
 
 Facies, porosity and permeability stay as they were; the writers turn the multipliers into MULTX, MULTY and MULTZ. A
-mud drape (``kd`` 4e-6 to 1e-3 mD) seals its face (M below 2e-4) for any thickness; only silty drapes of 0.2-8 mD
-leave a leak that depends on thickness and cell size. The sector models of the literature do the same (Li 2008;
-Ruetten 2021) and Alpak & van der Vlugt (2014) lay the drape on the whole surface and cut holes in it.
+mud drape (``kd`` 4e-6 to 1e-3 mD) seals its face against sand of 400 mD (M below 2e-4, for any thickness from 0.1 m in
+cells up to 5 m); only silty drapes of 0.2-8 mD leave a leak that depends on thickness and cell size. The sector models
+of the literature do the same (Li 2008; Ruetten 2021) and Alpak & van der Vlugt (2014) lay the drape on the whole
+surface and cut holes in it.
 
 Where, per storey (a level of the layer's aggradation):
 

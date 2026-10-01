@@ -396,6 +396,21 @@ def test_drapes_cover_about_the_coverage_of_the_contacts():
     assert 0.4 < draped.sum() / possible.sum() < 0.8
 
 
+def test_the_margin_bias_moves_drapes_from_the_axis_to_the_margin_on_a_real_layer():
+    """At coverage 0.5, a bias of 0.34 leaves the draped share of the base contacts near the axis (the top third of the
+    engine's axis-ness) well below that near the margin (the bottom third), about the bias times the terciles'
+    difference in axis-ness (0.5 or so); with no bias the thirds are alike. The share of all contacts stays near 0.5."""
+    possible = np.asarray(_layer(coverage=1.0).mult_z) < 1.0
+    axis_ness = np.asarray(_layer(coverage=1.0)._engine.depth_norm)[possible]
+    low, high = np.quantile(axis_ness, [1 / 3, 2 / 3])
+    contrast = {}
+    for bias in (0.0, 0.34):
+        draped = (np.asarray(_layer(coverage=0.5, margin_bias=bias, hole_range_m=30.0).mult_z) < 1.0)[possible]
+        contrast[bias] = draped[axis_ness <= low].mean() - draped[axis_ness > high].mean()
+        assert draped.mean() == pytest.approx(0.5, abs=0.05)
+    assert abs(contrast[0.0]) < 0.05 and 0.1 < contrast[0.34] < 0.34 * 0.7
+
+
 def test_unknown_or_bad_drape_settings_are_refused_before_any_geology_is_made():
     """A typo in a setting name, a missing coverage or a value out of range would silently change the geology."""
     for bad in (dict(coverge=0.5), dict(margin_bias=0.1), dict(coverage=1.2), dict(coverage=0.5, thickness=0.0),
