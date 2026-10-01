@@ -143,15 +143,15 @@ def test_ring_faults_only_over_a_flank_dipping_60_degrees_or_less():
     """N21 (Rowan et al. 1999): major faults are tangential where the flank dips up to about 60 degrees; none off
     vertical plugs. The flank leans outward by cot(dip) m per metre of depth."""
     f = fold()
-    assert not pooled(f, stock(f, radius=1500.0), kinds=("ring",), seeds=range(40))             # a vertical plug
+    assert not pooled(f, stock(f, radius=1500.0), kinds=("ring",), seeds=range(40), density=0.2)             # a vertical plug
     assert not pooled(f, stock(f, radius=1500.0, lean=(0.0, 0.0), flare=-0.2), kinds=("ring",))  # an overhang
     for dip, expected in ((45.0, True), (75.0, False)):
         body = stock(f, radius=1500.0, flare=1.0 / math.tan(math.radians(dip)))                 # wider with depth: dips outward
-        ring = pooled(f, body, kinds=("ring",), seeds=range(40))
+        ring = pooled(f, body, kinds=("ring",), seeds=range(40), density=0.2)
         assert bool(ring) == expected
     cx, cy = body.center
     body = stock(f, radius=1500.0, flare=1.0)
-    ring = pooled(f, body, kinds=("ring",), seeds=range(40))
+    ring = pooled(f, body, kinds=("ring",), seeds=range(40), density=0.2)
     assert ring and len(ring) <= 2 * 40
     for g in ring:
         trace, normal = unit(g.strike)
@@ -160,6 +160,24 @@ def test_ring_faults_only_over_a_flank_dipping_60_degrees_or_less():
         assert abs(float(trace @ outward(body, *g.center))) < 0.2                                # tangential to the contact
         assert g.length <= math.pi * abs(g.radius) + 1e-6
     assert {g.hanging_wall * np.sign(g.radius) for g in ring} == {1.0, -1.0}                      # toward the salt and away
+
+
+def test_radial_faults_sit_on_the_reservoir_that_the_upturn_lifts():
+    """The grid adds the upturn to the fold before it applies the faults, so beside the contact the reservoir lies up to
+    A m shallower than the fold alone puts it. With ``upturn=`` the faults centre their tip lines on that lifted reservoir
+    and each still has MIN_THROW of throw in it; drawn against the fold alone, the same faults miss it."""
+    f = fold()
+    body = stock(f, radius=1500.0)
+    up = sl.salt_upturn(body, 40.0, 1200.0)                                   # lifts the beds 1200 x tan 40 / 2 = 500 m
+    assert float(up(*body.outline()[0])) == pytest.approx(-1200.0 * math.tan(math.radians(40.0)) / 2.0, rel=1e-3)
+    lifted = lambda g: TOP + float((f + up)(np.array([g.center[0]]), np.array([g.center[1]]))[0])
+    fits = lambda g: g.throw * _in_reservoir(g.z_center, lifted(g), THICK, 0.5 * g.length / 1.9 * math.sin(math.radians(g.dip)))
+    placed = pooled(f, body, density=2.0, seeds=range(24), upturn=up)
+    blind = pooled(f, body, density=2.0, seeds=range(24))
+    assert len(placed) > 60 and all(fits(g) >= MIN_THROW - 1e-9 for g in placed)
+    assert np.mean([fits(g) >= MIN_THROW for g in blind]) < 0.5                # the fold alone puts them 500 m too deep
+    with pytest.raises(ValueError, match="upturn"):
+        fold_faults("four_way", f, X_LEN, Y_LEN, DX, 1.0, TOP, THICK, seed=1, upturn=up)
 
 
 def test_the_density_counts_the_visible_trap_and_the_salt_faults_are_part_of_it():
@@ -195,7 +213,7 @@ def test_the_style_is_reproducible_and_its_faults_are_valid_for_the_export(tmp_p
     f = fold()
     body = flank(f, lobes=0.1, seed=4, flare=-0.1)
     sl.salt_upturn(body, 40.0, 400.0)
-    a, b = faults_of(f, body, 5), faults_of(f, body, 5)
+    a, b = faults_of(f, body, 5, 0.5), faults_of(f, body, 5, 0.5)
     assert a and a == b
     assert len({g.name for g in a}) == len(a) and all(len(g.name) <= 8 for g in a)
     nx, ny, nz = 160, 120, 4

@@ -172,7 +172,7 @@ def _kind(angle, axis):
 
 
 def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, regional=None, over_salt=False,
-                max_faults=300, salt=None):
+                max_faults=300, salt=None, upturn=None):
     """The faults of one folded trap (a list of :class:`resmill.faults.Fault`, in genetic order).
 
     ``style`` is one of :data:`STYLES`; ``fold`` the trap's structure without roughness (depth shift, m, positive
@@ -187,11 +187,14 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     farthest from the trap first. The ``"salt_flank"`` style takes the :class:`resmill.salt.SaltBody` as ``salt``
     (and only it does): the trap is the fold's closure less the salt, ``density`` counts that area, and the radial
     and ring faults at the contact (at its reference depth) are part of the count, as the fold's own sets are.
+    ``upturn`` (with ``salt``) is the :func:`resmill.salt.salt_upturn` term the grid adds to the fold: the faults are
+    applied after it, so their tip lines centre on the reservoir as it lies lifted beside the salt (the trap itself
+    stays the fold's closure).
     """
     if style not in STYLES:
         raise ValueError(f"style must be one of {STYLES}, got {style!r}")
-    if (style == "salt_flank") != (salt is not None):
-        raise ValueError("the salt_flank style needs a salt body (salt=), and only it takes one")
+    if (style == "salt_flank") != (salt is not None) or (upturn is not None and salt is None):
+        raise ValueError("the salt_flank style needs a salt body (salt=), and only it takes one (and its upturn=)")
     rng = np.random.default_rng(seed)
     fr = _frame(fold, x_len, y_len, dx)
     if fr is None:
@@ -209,7 +212,9 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     ux, uy, wx, wy = math.cos(axis), math.sin(axis), -math.sin(axis), math.cos(axis)
 
     def top_at(x, y):
-        return top + float(np.asarray(fold(np.array([x]), np.array([y])), dtype=float).ravel()[0])
+        at = (np.array([x]), np.array([y]))
+        return top + float(np.asarray(fold(*at), dtype=float).ravel()[0]) + (
+            0.0 if upturn is None else float(np.asarray(upturn(*at), dtype=float).ravel()[0]))
 
     def below():                                                         # growth faults, thrusts: throw grows downward
         u = rng.uniform(0.25, 0.5)                                                                # [J] (E9, E10)
