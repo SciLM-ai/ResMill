@@ -4,8 +4,9 @@ A :class:`Fault` is a normal (or reverse) fault of finite extent. Its displaceme
 centre and dies out to zero at an elliptical tip line ``length`` long and ``length / aspect`` high,
 following Walsh & Watterson (1987), D = Dmax (1 - r)^1.5 (1 + 3 r)^0.5, with a tip-line aspect of 2.15
 (Nicol et al. 1996). The displacement is split between the hanging wall (``hw_share``) and the footwall,
-and bends the layers next to the fault (reverse drag) with a taper (1 - d / reach)^2 over ``drag`` times
-the length on each side (Georgsen et al. 2012; Wu et al. 2020). The fault dips at ``dip`` toward its
+and bends the layers next to the fault (reverse drag) with a taper (1 - d / reach)^2, d measured from the
+fault plane at each horizon's own depth, over ``drag`` times the length on each side (Georgsen et al.
+2012; Wu et al. 2020). The fault dips at ``dip`` toward its
 hanging wall, so its trace moves with depth (a reverse fault's does not: a column, ordered in k, cannot
 repeat a section, so each column goes whole to one side), and its trace may curve (``radius``) and wander about its
 chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surfaces across their slip
@@ -113,7 +114,7 @@ def apply_fault(fault, Xc, Yc, Zc):
     if fault.z_center is None:
         i0 = int(np.clip(np.argmin(np.abs(Xm[:, 0] - fault.center[0])), 0, nx - 1))
         j0 = int(np.clip(np.argmin(np.abs(Ym[0, :] - fault.center[1])), 0, ny - 1))
-        zc = float(Zcell[i0, j0, Zc.shape[2] // 2])
+        zc = float(0.5 * (Zcell[i0, j0, 0] + Zcell[i0, j0, -1]))
     else:
         zc = float(fault.z_center)
     lx = 0.5 * fault.length
@@ -122,13 +123,10 @@ def apply_fault(fault, Xc, Yc, Zc):
     def displacement(s, h, z):
         r = np.sqrt((s[..., None] / lx) ** 2 + ((z - zc) / sin_d / ly) ** 2)
         d = fault.throw * ww_profile(r)
-        taper = []
-        for reach in fault.drag:
-            if reach > 0.0:
-                taper.append(np.clip(1.0 - np.abs(h) / (reach * fault.length), 0.0, None) ** 2)
-            else:
-                taper.append(np.ones_like(h))
-        return fault.hw_share * d * taper[0][..., None], (1.0 - fault.hw_share) * d * taper[1][..., None]
+        hp = np.abs(h[..., None] if fault.reverse else h[..., None] - (z - zc) / tan_d)   # from the plane at depth z
+        taper = [np.clip(1.0 - hp / (reach * fault.length), 0.0, None) ** 2 if reach > 0.0 else 1.0
+                 for reach in fault.drag]
+        return fault.hw_share * d * taper[0], (1.0 - fault.hw_share) * d * taper[1]
 
     sign = -1.0 if fault.reverse else 1.0
     s_k, h_k = _frame(fault, Xc, Yc)
@@ -136,14 +134,16 @@ def apply_fault(fault, Xc, Yc, Zc):
     dhw_k, dfw_k = displacement(s_k, h_k, Zc)
     dhw_c, dfw_c = displacement(s_c, h_c, Zcell)
     zp = zc + h_c * tan_d                                         # the fault plane's depth under each column
+    zpk = _corners(zp)[..., None]
     if fault.reverse:                     # a k-ordered column cannot repeat a section: whole columns to one side
         hw = np.broadcast_to((h_c > 0.0)[..., None], Zcell.shape)
         fw = ~hw
-    else:
+        hwk, fwk = _corners(hw), _corners(fw)
+    else:                                 # each corner against the column's flat tread, with its own displacement
         hw = Zcell + dhw_c <= zp[..., None]
         fw = Zcell - dfw_c >= zp[..., None]
-    Znew = np.where(_corners(hw), Zc + sign * dhw_k,
-                    np.where(_corners(fw), Zc - sign * dfw_k, _corners(zp)[..., None]))
+        hwk, fwk = Zc + dhw_k <= zpk, Zc - dfw_k >= zpk
+    Znew = np.where(hwk, Zc + sign * dhw_k, np.where(fwk, Zc - sign * dfw_k, zpk))
     reach = (dhw_c + dfw_c) > 1e-9
     mid = 0.5 * (hw[..., 1:].astype(int) + hw[..., :-1] - fw[..., 1:] - fw[..., :-1].astype(int))
     above = 0.5 * (Zcell[..., 1:] + Zcell[..., :-1]) <= zp[..., None]      # a cell the plane cuts: its middle's side

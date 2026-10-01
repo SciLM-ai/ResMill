@@ -1,4 +1,6 @@
 """Finite faults: throw dying out at an elliptical tip line, reverse drag, dip, curved traces, FAULTS/MULTFLT."""
+import math
+
 import numpy as np
 import pytest
 
@@ -65,7 +67,7 @@ def test_the_grdecl_lists_the_faults_faces_and_its_multiplier(tmp_path):
     assert "\nFAULTS\n" in text and "\nMULTFLT\n" in text
     assert "'F1' 0.01 /" in text
     rows = [line.split() for line in text.split("\nFAULTS\n")[1].split("\n/\n")[0].splitlines() if line.strip()]
-    assert len(rows) > 5 and all(r[0] == "'F1'" and r[7] in ("'X'", "'Y'") for r in rows)
+    assert len(rows) > 5 and all(r[0] == "'F1'" and r[7] in ("'X'", "'Y'", "'Z'") for r in rows)
     i_cols = {int(r[1]) for r in rows}
     assert i_cols <= set(range(28, 34))                              # the faces sit along x = 1.5 km (+ dip shift)
 
@@ -182,3 +184,93 @@ def test_faults_lists_the_tread_where_the_hanging_wall_sits_on_the_footwall(tmp_
             live = [k for k in range(NZ) if act[i, j, k]]
             treads |= {(i, j, a) for a, b in zip(live, live[1:]) if side[i, j, a] * side[i, j, b] == -1}
     assert treads and treads <= listed
+
+
+def thin_stack(nx=60, ny=60, nz=50, dx=50.0, dz=1.0):
+    layer = Layer(nx, ny, nz, nx * dx, ny * dx, nz * dz, top_depth=TOP, kzkx=0.1)
+    layer.poro_mat = np.full((nx, ny, nz), 0.2)
+    layer.perm_mat = np.full((nx, ny, nz), 100.0)
+    return layer
+
+
+TWISTED = dict(center=(1510.0, 1500.0), strike=75.0, length=1000.0, throw=40.0, dip=60.0)
+
+
+def test_no_cell_is_stretched_next_to_a_normal_faults_tread():
+    """Hanging wall, footwall and cut-out are decided at every corner, since the throw changes across a column
+    (tip-line profile, drag); a column-wide choice stretched the cell beside the tread (1 m cells to 4.6 m)."""
+    _, _, zc, act = _build_geometry([thin_stack()], faults=[Fault(**TWISTED)])
+    thick = np.diff(zc, axis=2).reshape(60, 2, 60, 2, 50).max(axis=(1, 3))
+    assert thick[act > 0].max() < 1.5
+
+
+def test_reverse_drag_peaks_at_the_fault_at_every_depth():
+    """The drag taper is measured from the plane at each horizon's own depth: on top of a 300 m stack the hanging
+    wall drops most right at the fault, and at its base the footwall rises most there (both peaked 80 m inside)."""
+    nx, ny, nz = 300, 6, 60
+    layer = Layer(nx, ny, nz, nx * 10.0, ny * 10.0, nz * 5.0, top_depth=TOP, kzkx=0.1)
+    faces = []
+    _, _, zc, _ = _build_geometry([layer], faults=[Fault(center=(1500.0, 30.0), strike=90.0, length=4000.0, throw=40.0,
+                                                         dip=60.0)], _faces=faces)
+    side, j = faces[0][1], ny // 2
+    drop = (zc[0::2, 2 * j, 0] - TOP)[side[:, j, 0] > 0]                      # top, hanging wall, from the fault east
+    rise = (TOP + nz * 5.0 - zc[0::2, 2 * j, nz])[side[:, j, nz - 1] < 0][::-1]   # base, footwall, from the fault west
+    for move, least in ((drop, 20.0), (rise, 12.0)):      # past the column or two where the plane meets the horizon
+        k = int(np.argmax(move[:30]))
+        assert k <= 2 and move[k] > least and np.all(np.diff(move[k:k + 20]) <= 1e-6)
+
+
+def test_the_default_tip_line_centre_is_the_stacks_middle_by_depth():
+    """Over a 50 m zone of 0.5 m cells and a 200 m zone of 20 m cells, the tip ellipse centres on the stack's middle
+    depth (125 m down), not on its middle interface by count (27.5 m down)."""
+    upper = Layer(NX, NY, 100, NX * DX, NY * DX, 50.0, top_depth=TOP, kzkx=0.1)
+    lower = Layer(NX, NY, 10, NX * DX, NY * DX, 200.0, top_depth=TOP + 50.0, kzkx=0.1)
+    f = Fault(center=(1520.0, 1000.0), strike=90.0, length=400.0, throw=10.0, dip=60.0, drag=(0.0, 0.0))
+    _, _, zc, _ = _build_geometry([upper, lower], faults=[f])
+    j = 2 * int(1000.0 // DX)
+    assert top_offset(zc, j) == pytest.approx(0.0, abs=1e-6)
+    assert np.ptp(zc[:, j, 104]) == pytest.approx(10.0, rel=0.15)        # the interface at 2130 m
+
+
+@pytest.mark.parametrize("hanging_wall,radius,strike,reverse",
+                         [(1, math.inf, 90.0, False), (-1, math.inf, 90.0, False), (1, -2500.0, 30.0, False),
+                          (-1, 2500.0, 135.0, True)])
+def test_the_hanging_wall_lies_where_asked_and_moves_down_or_up_if_reverse(hanging_wall, radius, strike, reverse):
+    """Whole hanging-wall cells move down (up on a reverse fault), whole footwall cells up (down), and the hanging wall
+    lies on the side hanging_wall x the strike's normal points to. (A cell the plane truncates is thinner, and its
+    middle may move either way.)"""
+    layer = flat_layer()
+    f = Fault(center=(1520.0, 1000.0), strike=strike, length=3000.0, throw=20.0, dip=60.0, hanging_wall=hanging_wall,
+              radius=radius, reverse=reverse)
+    faces = []
+    xc, yc, z0, _ = _build_geometry([layer])
+    _, _, zc, _ = _build_geometry([layer], faults=[f], _faces=faces)
+    side = faces[0][1]
+    centre = lambda z: (0.5 * (z[..., 1:] + z[..., :-1])).reshape(NX, 2, NY, 2, NZ).mean(axis=(1, 3))
+    move = (centre(zc) - centre(z0)) * (-1.0 if reverse else 1.0)
+    whole = np.diff(zc, axis=2).reshape(NX, 2, NY, 2, NZ).min(axis=(1, 3)) > 0.9 * DZ
+    assert move[whole & (side > 0)].min() > -1e-9 and move[side > 0].max() > 5.0
+    assert move[whole & (side < 0)].max() < 1e-9 and move[side < 0].min() < -2.0
+    n = np.array([math.sin(math.radians(strike)), math.cos(math.radians(strike))])
+    xm, ym = xc.reshape(NX, 2, NY, 2).mean(axis=(1, 3)), yc.reshape(NX, 2, NY, 2).mean(axis=(1, 3))
+    along_n = (xm * n[0] + ym * n[1])[..., None] * np.ones(NZ)
+    assert hanging_wall * (along_n[side > 0].mean() - along_n[side < 0].mean()) > 0.0
+
+
+def test_plot_section_and_to_pyvista_draw_faulted_models():
+    """Both drawing paths take faults (several, crossing)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from resmill.plotting import plot_section
+    layer = flat_layer()
+    faults = [Fault(center=(1500.0, 1000.0), strike=90.0, length=1500.0, throw=15.0),
+              Fault(center=(1500.0, 1000.0), strike=0.0, length=1500.0, throw=10.0, reverse=True)]
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots()
+    plot_section(layer, prop="poro_mat", faults=faults, ax=ax)
+    assert ax.collections
+    plt.close(fig)
+    pv = pytest.importorskip("pyvista")
+    from resmill.export import to_pyvista
+    grid = to_pyvista(layer, faults=faults)
+    assert grid.n_cells == NX * NY * NZ
