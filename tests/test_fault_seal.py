@@ -244,6 +244,34 @@ def test_to_grdecl_writes_the_spread_of_the_faults(tmp_path):
     assert np.all(multx(Seal(vsh=vsh, p_open=1.0, seed=1)) == 1.0)
 
 
+def test_seal_vsh_by_facies_code_gives_the_file_that_the_array_does(tmp_path):
+    """The clay fraction per facies code is the same as per cell, to the byte."""
+    layer, vsh = cake()
+    sand = (np.arange(NZ)[::-1] // 2) % 2 == 0                         # ResMill order, bottom-up, as in cake()
+    layer.facies = np.ones((NX, NY, NZ), dtype=int) * np.where(sand, 3, -1)
+    f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=12.0, dip=60.0, name="F1")
+    to_grdecl(layer, tmp_path / "array.grdecl", faults=[f], seal=Seal(vsh=vsh))
+    to_grdecl(layer, tmp_path / "dict.grdecl", faults=[f], seal=Seal(vsh={3: 0.1, -1: 0.9}))
+    assert (tmp_path / "array.grdecl").read_bytes() == (tmp_path / "dict.grdecl").read_bytes()
+
+
+@pytest.mark.parametrize("vsh,message", [
+    (None, "Seal.vsh is required"),
+    (0.2, r"Seal.vsh must be an array of shape \(40, 20, 20\).*not shape \(\)"),
+    (np.ones((NX, NY, NZ + 1)), r"Seal.vsh must be an array of shape \(40, 20, 20\).*not shape \(40, 20, 21\)"),
+    ({3: 0.1}, r"Seal.vsh has no clay fraction for facies code\(s\) \[-1\]"),
+])
+def test_seal_vsh_that_cannot_be_used_says_what_is_wrong_before_a_file_is_written(tmp_path, vsh, message):
+    """No clay fraction, a number for the whole grid, an array of the wrong shape, or a facies dict without a code the
+    layers hold (here -1, the shale) each stop the export with a message naming Seal.vsh, and leave no file."""
+    layer, _ = cake()
+    layer.facies = np.ones((NX, NY, NZ), dtype=int) * np.where((np.arange(NZ)[::-1] // 2) % 2 == 0, 3, -1)
+    f = Fault(center=(510.0, 250.0), strike=90.0, length=20000.0, throw=12.0, dip=60.0, name="F1")
+    with pytest.raises(ValueError, match=message):
+        to_grdecl(layer, tmp_path / "m.grdecl", faults=[f], seal=Seal(vsh=vsh))
+    assert not (tmp_path / "m.grdecl").exists()
+
+
 def dome_model(nx=80, ny=60, dx=50.0, top=TOP):
     layer = Layer(nx, ny, 10, nx * dx, ny * dx, 30.0, top_depth=top, kzkx=0.1)
     layer.poro_mat = np.full((nx, ny, 10), 0.2)
