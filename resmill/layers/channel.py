@@ -26,6 +26,7 @@ from __future__ import annotations
 import numpy as np
 
 from .base import Layer
+from .drapes import check_drapes, place_drapes, storey_map
 
 __all__ = [
     "ChannelLayer",
@@ -102,7 +103,9 @@ class ChannelLayer(Layer):
                                fining_top_kvkh: float | None = None,
                                event_group: dict | None = None,
                                levee_ntg_decay_m: float | None = None,
-                               flow_angle: np.ndarray | None = None):
+                               flow_angle: np.ndarray | None = None,
+                               drapes: dict | None = None,
+                               drape_seed: int | None = None):
         """Build ``self.facies / active / poro_mat / perm_mat`` from engine outputs.
 
         Inputs:
@@ -190,6 +193,12 @@ class ChannelLayer(Layer):
           ``self.kx_mult`` = sqrt(a) cos^2 + sin^2 / sqrt(a) and ``self.ky_mult``
           with cos and sin swapped, written as PERMX = kx_mult x k and PERMY =
           ky_mult x k. No ``kxky``: both None and PERMY = PERMX.
+        * ``drapes`` — mud drapes at the bases of storeys (settings in ``create_geology``, method in
+          :mod:`resmill.layers.drapes`): sets ``self.mult_x`` / ``mult_y`` / ``mult_z``, the transmissibility
+          multiplier across each cell's +x, +y and lower face (k - 1), from the permeabilities PERMX, PERMY and
+          PERMZ the export will write and the FF mud's, with the storeys from ``event_group`` and the axis-ness from
+          ``depth_norm``. ``drape_seed`` seeds their own random stream. Facies, porosity and permeability stay as
+          they are, and nothing is drawn from the global stream. No ``drapes``: all three None.
 
         Combined formula per cell::
 
@@ -254,11 +263,7 @@ class ChannelLayer(Layer):
             fill = (self.facies == 3) | (self.facies == 4)
             # Each levee cell is measured from the channels of its own storey (the level of the flow
             # event that built it, from ``event_group``), not from channels above or below it.
-            storey = np.full(self.facies.shape, -1, dtype=np.int64)
-            if event_group:
-                idx = np.nonzero(lv | fill)
-                storey[idx] = [event_group.get((a, b), -1)
-                               for a, b in zip(poro_mult_field[idx], log_perm_offset_field[idx])]
+            storey = storey_map(lv | fill, poro_mult_field, log_perm_offset_field, event_group)
             dist = np.zeros(self.facies.shape)
             for level in np.unique(storey[lv]):
                 belt = (fill & ((storey == level) if level >= 0 else True)).any(axis=2)
@@ -428,6 +433,17 @@ class ChannelLayer(Layer):
                 self.kx_mult[mask] = root * cos2 + (1.0 - cos2) / root
                 self.ky_mult[mask] = root * (1.0 - cos2) + cos2 / root
 
+        # Opt-in mud drapes at the bases of storeys: face multipliers, the rock above untouched.
+        self.mult_x = self.mult_y = self.mult_z = None
+        if drapes is not None:
+            perms = (self.perm_mat * (1.0 if self.kx_mult is None else self.kx_mult),
+                     self.perm_mat * (1.0 if self.ky_mult is None else self.ky_mult),
+                     self.perm_mat * (self.kzkx if self.kvkh_mat is None else self.kvkh_mat))
+            storey = storey_map(self.facies >= 1, poro_mult_field, log_perm_offset_field, event_group)
+            self.mult_x, self.mult_y, self.mult_z = place_drapes(
+                self.facies, storey, depth_norm, perms, (self.dx, self.dy, self.dz), drapes,
+                10.0 ** float(props[-1]["log10_perm"]), drape_seed)
+
 
     def create_geology(
         self,
@@ -550,6 +566,8 @@ class ChannelLayer(Layer):
         fining_top_kvkh: float | None = None,
         # Levee fading: decay length (m) of the levee cells' sand fraction away from the channel belt
         levee_ntg_decay_m: float | None = None,
+        # Mud drapes at the bases of storeys as face multipliers (None: none); see the docstring
+        drapes: dict | None = None,
         seed: int | None = None,
     ):
         """Generate channel geology with Alluvsim-faithful semantics.
@@ -570,8 +588,24 @@ class ChannelLayer(Layer):
         * Output: ``self.facies`` is the full Alluvsim 6-class array
           (-1..4); ``self.active`` is the binary 0/1 sand mask
           (``self.facies >= 1``).
+        * ``drapes`` — mud drapes on the bases of channel storeys (levels), as transmissibility
+          multipliers on the faces between a channel-fill cell and the older-storey sand next to it
+          (``self.mult_x`` / ``mult_y`` / ``mult_z``, written by ``to_grdecl`` as MULTX, MULTY and
+          MULTZ; facies, porosity and permeability do not change). A dict: ``coverage`` (required),
+          the mean share of each storey's base covered (Barton et al. 2010: 0.05-0.92 over 17
+          outcrops); ``margin_bias`` (0), how much more of the margin than of the axis is covered
+          (0 random, 0.34 Vento 2020); ``thickness`` (0.5 m); ``perm`` (mD, None: the FF mud's
+          ``facies_props[-1]``, which seals the face); ``hole_range_m`` (practical range of the
+          holes; None: half a channel, ``mCHdepth`` x ``mCHwdratio`` / 2). Method and sources:
+          :mod:`resmill.layers.drapes`. None (default): no drapes, outputs bit-identical, no
+          random number drawn.
         """
         from ._fluvial import fluvial
+
+        if drapes is not None:
+            drapes = check_drapes(drapes)
+            if drapes["hole_range_m"] is None:
+                drapes["hole_range_m"] = 0.5 * mCHdepth * mCHwdratio          # half an element wide [J]
 
         engine = fluvial(
             nx=self.nx, ny=self.ny, nz=self.nz,
@@ -637,6 +671,7 @@ class ChannelLayer(Layer):
             event_group=engine.event_levels,
             levee_ntg_decay_m=levee_ntg_decay_m,
             flow_angle=engine.flow_angle,
+            drapes=drapes, drape_seed=seed,
         )
         # Stash for downstream tooling (parquet writers can record the
         # engine-level multiplier std values, generate.py uses these to
