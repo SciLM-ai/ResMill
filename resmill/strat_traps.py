@@ -20,7 +20,7 @@ from . import structure as st
 from .export import _build_geometry
 from .structure import _spill_levels
 
-KINDS = ("pinchout", "facies_change", "lens")
+KINDS = ("pinchout", "facies_change", "lens", "truncation", "onlap")
 
 GRAVITY = 9.81                      # m/s2
 # Berg's packing of the grains as uniform spheres, rhombohedral (porosity 26 %; Graton and Fraser 1935): the pores
@@ -108,12 +108,18 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
       complement of the sand's so that the interval keeps its thickness. The barrier's cells stay active and are the
       seal, by their capillary entry pressure (:func:`barrier_column`).
     * ``"lens"``: a lens of sand enclosed all round (by walls, or with ``barrier=True`` by a barrier zone).
+    * ``"truncation"``: beds cut from above by an erosion surface that dips the same way less steeply, the older beds
+      reaching farthest updip (``erode_above``: the top of the sand is the erosion surface in the subcrop strip, the
+      sand's base is the bed's). ``taper_angle`` is the discordance, so it may not exceed ``dip``.
+    * ``"onlap"``: layers that follow the top and end against an older surface that dips more steeply
+      (``erode_below``), the younger layers reaching farthest updip.
 
     ``x_len``, ``y_len`` (m) is the model, ``top`` the depth (m) of its stack's top at its centre, ``thicknesses`` the
     layers' thicknesses (m, top to bottom: the model's ``z_len``), ``dip`` the plane's dip (degrees) deepening along
     ``azimuth``'s normal (as :func:`resmill.structure.ramp`) and ``seed`` fixes the lobes and the wander. The sand's
     thickness ``T`` tapers to nothing over ``T / tan(taper_angle)`` m (a wedge 10 m thick at 0.3 degrees thins over
-    1.9 km: outcrop and field slopes of 0.006-0.6 degrees, step 6 research P9-P12).
+    1.9 km: outcrop and field slopes of 0.006-0.6 degrees, step 6 research P9-P12); that is also the width of the
+    subcrop strip of a truncation (discordance) and the length over which layers onlap (onlap angle).
 
     A straight updip line has no closure, so the line has a tongue of sand ``area`` (m2) and ``aspect`` (strike over
     dip length) protruding updip from it, a lobate half-ellipse (``warp``, :func:`resmill.structure.closure`), the
@@ -132,6 +138,9 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
         raise ValueError(f"a barrier zone is what a facies change needs and a lens may have, not a {kind}")
     if kind == "lens" and area is None:
         raise ValueError("a lens needs an area")
+    if kind == "truncation" and taper_angle > dip:
+        raise ValueError(f"the erosion surface must dip the same way as the beds, less steeply: the discordance "
+                         f"taper_angle ({taper_angle}) cannot exceed the bed dip ({dip})")
     thicknesses = [float(t) for t in thicknesses]
     n_net = len(thicknesses) - bool(barrier)
     if n_net < 1:
@@ -158,14 +167,23 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     f = st.taper(line, taper_m, azimuth, wander=0.0 if lens else wander, range_m=range_m, seed=seeds[1],
                  outline=outline, x_len=x_len, y_len=y_len)
     ratio = t_sand / thicknesses[-1]
-    isochore = [f] * n_net + ([st.Structure(lambda x, y: 1.0 + ratio * (1.0 - f(x, y)))] if barrier else [])
+    complement = st.Structure(lambda x, y: 1.0 + ratio * (1.0 - f(x, y)))      # the barrier takes what the sand loses
+    ramp = st.ramp(dip, azimuth, center=centre)
+    kwargs = dict(structure=ramp)
+    if kind == "truncation":                                           # the sand cut from above: the top is the surface
+        kwargs["erode_above"] = st.Structure(lambda x, y: top + ramp(x, y) + t_sand * (1.0 - f(x, y)))
+    elif kind == "onlap":                                              # the layers cut from below: the base is
+        kwargs["erode_below"] = st.Structure(lambda x, y: top + ramp(x, y) + t_sand * f(x, y))
+    else:
+        kwargs["isochore"] = [f] * n_net + ([complement] if barrier else [])
     tan_dip = np.tan(np.radians(dip))
     meta = dict(kind=kind, dip=dip, azimuth=azimuth, taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
                 area=area, aspect=aspect, warp=warp, wander=wander, range_m=range_m, length=length, line=line,
                 barrier=bool(barrier), net_layers=n_net, closure_expected=tan_dip * length, seed=seed,
-                crest_expected=top + tan_dip * (shift - (0.0 if lens else length) - (0.5 * length if lens else 0.0)),
-                spill_expected=None if lens else top + tan_dip * shift)
-    return dict(kwargs=dict(structure=st.ramp(dip, azimuth, center=centre), isochore=isochore), meta=meta)
+                crest_expected=top + tan_dip * (shift - (0.0 if lens else length) - (0.5 * length if lens else 0.0))
+                + (t_sand if kind == "truncation" else 0.0),
+                spill_expected=None if lens else top + tan_dip * shift + (t_sand if kind == "truncation" else 0.0))
+    return dict(kwargs=kwargs, meta=meta)
 
 
 def trap_report(model, built, column=None):

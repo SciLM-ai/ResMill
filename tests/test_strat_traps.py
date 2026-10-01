@@ -275,3 +275,90 @@ def test_strat_trap_refuses_what_it_cannot_build(args, kw, message):
     kw = dict(dict(x_len=8000.0, y_len=6000.0, top=2000.0, thicknesses=[10.0, 8.0], seed=1), **kw)
     with pytest.raises(ValueError, match=message):
         strat_trap(args[0], **kw)
+
+
+def _profile(layers, built, i=None):
+    """A column of cells along dip (azimuth 0) in the middle of the model: the number of active cells per column, the
+    depth of the top of the first active cell (nan where none), the index of the first row each layer is active in
+    (top-down; -1 if never) and the cell width along dip. The geometry is what ``to_grdecl`` writes."""
+    _, _, zc, act = _build_geometry(layers, **built["kwargs"])
+    i = act.shape[0] // 2 if i is None else i
+    column = act[i]                                                        # (ny, nz)
+    interface = 0.25 * (zc[2 * i, 0::2] + zc[2 * i, 1::2] + zc[2 * i + 1, 0::2] + zc[2 * i + 1, 1::2])   # (ny, nz + 1)
+    first = column.argmax(axis=1)
+    depth = np.where(column.any(axis=1), interface[np.arange(len(first)), first], np.nan)
+    starts = [int(np.argmax(column[:, k])) if column[:, k].any() else -1 for k in range(column.shape[1])]
+    return column.sum(axis=1), depth, starts, layers[0].dy
+
+
+@pytest.mark.parametrize("angle,width", [(0.25, 2290.0), (1.0, 573.0), (3.0, 191.0)])
+def test_the_subcrop_strip_of_a_truncation_is_as_wide_as_the_thickness_over_the_tangent_of_the_discordance(angle,
+                                                                                                           width):
+    """Beds of 3.5 degrees dip cut by an erosion surface that dips less: for a 10 m sand the beds are cut away from
+    the top over a strip of T / tan(discordance), the research note's 2.29 km at 0.25 degrees, 573 m at 1 and 191 m at
+    3. The discordance is measured on the exported grid, as the angle between the slope of the top where the beds
+    survive whole and where they are cut; the top follows the bed top there and the erosion surface in the strip."""
+    layers = _layers(4000.0, 6000.0, 25.0, [10.0], dz=1.0)
+    built = strat_trap("truncation", 4000.0, 6000.0, 2000.0, [10.0], seed=1, dip=3.5, taper_angle=angle, area=None)
+    count, top, _, dy = _profile(layers, built)
+    nz = 10
+    plane = 2000.0 + ((np.arange(len(top)) + 0.5) * dy - 3000.0) * np.tan(np.radians(3.5))   # the bed top
+    strip = np.nan_to_num(top - plane) > 1e-3                              # the top is the erosion surface
+    assert strip.sum() * dy == pytest.approx(width, rel=0.05, abs=2 * dy)
+    slope = np.diff(top) / dy
+    whole = count[:-1] == nz
+    inside = (count >= 2) & (count <= nz - 2)                               # columns well inside the strip
+    cut = inside[:-1] & inside[1:]
+    assert np.allclose(top[count == nz][~strip[count == nz]], plane[count == nz][~strip[count == nz]], atol=1e-6)
+    measured = np.degrees(np.arctan(np.median(slope[whole & ~strip[:-1]])) - np.arctan(np.median(slope[cut])))
+    assert measured == pytest.approx(angle, rel=0.03)
+    assert strip.sum() * dy == pytest.approx(10.0 / np.tan(np.radians(measured)), rel=0.05, abs=2 * dy)
+
+
+@pytest.mark.parametrize("kind", ["truncation", "onlap"])
+def test_layers_end_against_the_surface_over_the_thickness_over_the_tangent_of_the_angle(kind):
+    """With n layers of a stack of thickness T the strip is T / tan(angle) long and layer k (top-down) is first
+    present a share k / n of the way along it where the older surface cuts the layers from below (onlap: the top layer
+    first, the oldest last), (n - k - 1) / n where the erosion surface cuts them from above (truncation: the oldest
+    layer reaches farthest updip), each to a column and a half."""
+    layers = _layers(4000.0, 6000.0, 25.0, [10.0], dz=1.0)
+    built = strat_trap(kind, 4000.0, 6000.0, 2000.0, [10.0], seed=1, dip=3.5, taper_angle=1.0, area=None)
+    count, top, starts, dy = _profile(layers, built)
+    line, strip = built["meta"]["line"], 10.0 / np.tan(np.radians(1.0))
+    assert strip == pytest.approx(573.0, abs=1.0) and built["meta"]["taper_m"] == pytest.approx(strip)
+    for k, row in enumerate(starts):
+        share = k / 10.0 if kind == "onlap" else 1.0 - (k + 1) / 10.0
+        assert (row + 0.5) * dy == pytest.approx(line + share * strip, abs=1.5 * dy)
+    assert np.all(np.diff(count[count > 0]) >= 0) and count.max() == 10     # layers only join as the strip deepens
+    if kind == "onlap":                                                     # the younger layers keep the bed top
+        whole = np.nonzero(count > 0)[0]
+        rows = (whole + 0.5) * dy
+        assert np.allclose(top[whole], 2000.0 + (rows - 3000.0) * np.tan(np.radians(3.5)), atol=1e-6)
+
+
+@pytest.mark.parametrize("kind", ["pinchout", "truncation", "onlap"])
+def test_a_tongue_closes_by_the_dip_times_its_length_whichever_surface_cuts_the_sand(kind):
+    """Pinched out, truncated or onlapped, the tongue protruding updip from the sheet holds tan(dip) times its length
+    (27 m at 1.1 degrees for 3.4 km2 and aspect 2.2); a truncation's top is the erosion surface, so its crest and
+    spill lie T = 10 m deeper than the pinch-out's, the base of the sand at its edge, and its trap is larger than the
+    tongue: where the sand is whole across the base of the tongue its top is the bed top, T above the surface at the
+    tongue's edge, so the trap reaches downdip of the line by up to T / tan(dip) there."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    built = strat_trap(kind, x_len, y_len, 2000.0, [10.0], seed=1, dip=1.1, taper_angle=0.5, area=3.4e6, aspect=2.2,
+                       warp=0.0)
+    (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
+    cell = np.tan(np.radians(1.1)) * dx
+    assert trap["limited_by"] == "spill" and trap["height"] == pytest.approx(27.0, abs=cell + 0.5)
+    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=cell)
+    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_expected"], abs=cell)
+    assert built["meta"]["spill_expected"] == pytest.approx(1980.9 + (10.0 if kind == "truncation" else 0.0), abs=0.1)
+    length = _length(3.4e6, 2.2)
+    shoulder = 10.0 / np.tan(np.radians(1.1)) / length if kind == "truncation" else 0.1
+    assert 3.4e6 * 0.97 < trap["area"] < 3.4e6 * (1.0 + shoulder)
+    assert (trap["area"] > 3.4e6 * 1.1) == (kind == "truncation")
+
+
+def test_truncation_needs_the_erosion_surface_to_dip_the_same_way_as_the_beds_and_no_barrier():
+    for kw, message in ((dict(dip=0.4, taper_angle=0.5), "dip"), (dict(dip=2.0, barrier=True), "barrier")):
+        with pytest.raises(ValueError, match=message):
+            strat_trap("truncation", 8000.0, 6000.0, 2000.0, [10.0, 5.0], seed=1, **kw)
