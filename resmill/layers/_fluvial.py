@@ -26,6 +26,8 @@ Conventions inside the engine match Alluvsim:
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from numba import njit
 from scipy.interpolate import CubicSpline
@@ -359,6 +361,13 @@ class fluvial:
         merge_branches: bool = True,
         width_exp: float = 0.5,
         depth_exp: float = 0.4,
+        # ``after_tree(engine)`` is called after every network a level grows
+        # (``bifurcate`` mode) and a True ends that level's networks, so
+        # ``n_trees`` is only the cap. With it no network is abandoned and
+        # mud-filled: each is stamped as sand, the older ones too. DeltaLayer's
+        # ``tree_ntg_stop`` uses it. None: ``n_trees`` networks, the older
+        # ones abandoned.
+        after_tree: Callable[[fluvial], bool] | None = None,
         # When ``True``, ``ntime`` is interpreted as the per-level event
         # cap and the global event counter is reset at the top of every
         # level — so each of the ``nlevel`` levels gets its own full
@@ -578,6 +587,7 @@ class fluvial:
         self.merge_branches = bool(merge_branches)
         self.width_exp = float(width_exp)
         self.depth_exp = float(depth_exp)
+        self.after_tree = after_tree
         self.tree_branches: list[dict] = []
         if mCHentry_x_offset_per_level is None:
             self.mCHentry_x_offset_per_level = None
@@ -1863,7 +1873,9 @@ class fluvial:
                         if not self._draw_from_pool():
                             break
                         self.cal_curv()
-                    self._simulate_tree(old=itree < self.n_trees - 1)
+                    self._simulate_tree(old=itree < self.n_trees - 1 and self.after_tree is None)
+                    if self.after_tree is not None and self.after_tree(self):
+                        break
                 continue
 
             level_cap = self.ntime[ilevel] if isinstance(self.ntime, list) else self.ntime

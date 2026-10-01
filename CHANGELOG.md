@@ -217,6 +217,19 @@
   sand at the axis to 20-50 % at the fringe (Spychala et al. 2017); faded lobes have no cell below
   `f` of the sand's permeability. Facies are 3 (sand fraction of 0.5 or more) and 2 (thin-bedded
   fringe); `sand_fraction` holds the fraction. Default `None`: outputs are bit-identical to before.
+- `tree_ntg_stop=True` (`DeltaLayer`, with `bifurcate=True`): grow distributary networks in each
+  generation until the layer holds its cumulative share of `NTGtarget` (sand cells, facies 1 or more,
+  mouth bars included; generation g of `n_generations` asks for (g + 1) / `n_generations` of it, counted
+  once over the layer's cells), `n_trees` being only the cap. The branching delta ignores `NTGtarget`,
+  grows a fixed `n_trees` networks per generation and abandons every one but the last, mud-filling it
+  with `mFFCHprop` (nothing at all is painted with the preset's 0), so at field scale it realizes 2-15 %
+  sand whatever `n_trees` (1-12), `n_bifurcations` (16-128) or trunk width (70-450 m), and the mouth bars
+  of the vanished networks float where they were. With the stop every network is stamped as sand, the
+  older ones too, and each network's mouth bars are painted right after it so they count. A 48 x 48 x 12
+  test delta ends at 0.053, 0.150 and 0.300 for targets of 0.05, 0.15 and 0.30; a 4 x 4 km, 36 m thick
+  one at 0.501 for 0.5 (bars 4 x 1.5). The engine takes the stop as a hook, `after_tree(engine)`, called
+  after each network: a True ends the level's networks and none is abandoned. Off by default: outputs
+  are bit-identical.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);
   `examples/anticline_meander.py` and `examples/angular_unconformity.py`.
 

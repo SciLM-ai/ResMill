@@ -161,3 +161,92 @@ def test_delta_passes_splay_step_and_max_sinuosity_to_every_generation(monkeypat
     layer = DeltaLayer(nx=32, ny=32, nz=8, x_len=512, y_len=512, z_len=16, top_depth=0.0)
     layer.create_geology(seed=1, n_generations=2, ntime_per_gen=3, splay_step=20.0, max_sinuosity=2.2)
     assert seen == [(20.0, 2.2)] * 2
+
+
+# --------------------------------------------------------------------------
+# opt-in stop at the net-to-gross: trees are added until the level holds its sand
+# --------------------------------------------------------------------------
+
+TREE = dict(bifurcate=True, n_generations=3, n_bifurcations=12, mCHdepth=4.0, mCHwdratio=20.0, stdevCHdepth=0.4,
+            stdevCHwdratio=1.0, mCHsinu=1.08, trunk_length_fraction=0.3, paint_mouth_bars=True,
+            mouth_bar_length_factor=2.5, mouth_bar_width_factor=1.0, q_min=0.03, front_radius=1.0,
+            azimuth=0.0, seed=3)
+
+
+def _tree_delta(**extra):
+    layer = DeltaLayer(nx=48, ny=48, nz=12, x_len=1920.0, y_len=1920.0, z_len=24.0, top_depth=1000)
+    layer.create_geology(**{**TREE, **extra})
+    return layer
+
+
+def _tree_calls(**fluvial_args):
+    """Run the engine of one level with a spy on every tree it grows; returns the ``old`` flag of each."""
+    from resmill.layers._fluvial import fluvial
+
+    class Spy(fluvial):
+        calls = []
+
+        def _simulate_tree(self, old=False):
+            self.calls.append(old)
+            super()._simulate_tree(old=old)
+
+    engine = Spy(nx=48, ny=48, nz=12, xsiz=40.0, ysiz=40.0, zsiz=2.0, xmn=20.0, ymn=20.0, nlevel=1, level_z=[24.0],
+                 NTGtarget=0.99, bifurcate=True, n_bifurcations=12, mCHdepth=4.0, mCHwdratio=20.0, q_min=0.03,
+                 stdevCHsource=0.2, seed=3, **fluvial_args)
+    engine.calls = []
+    engine.simulation()
+    return engine.calls
+
+
+def test_the_after_tree_hook_ends_a_levels_trees_and_leaves_none_abandoned():
+    """Without it ``n_trees`` networks are grown and every one but the last is abandoned (``old``); with it
+    the hook is asked after each tree and the first True ends the level, no tree being abandoned."""
+    assert _tree_calls(n_trees=3) == [True, True, False]
+    asked = []
+    assert _tree_calls(n_trees=5, after_tree=lambda e: asked.append(e) or len(asked) == 2) == [False, False]
+    assert len(asked) == 2
+
+
+def test_the_stop_at_ntg_adds_networks_until_the_sand_share_is_reached():
+    """NTGtarget is the sand share of the whole layer (facies 1 or more, mouth bars included): generation g of 3
+    asks for (g + 1) / 3 of it, counted once over the layer, so the layer ends at its target plus at most
+    the last network, a fraction of a percent here; ``n_trees`` is only the cap."""
+    shares = {}
+    for target in (0.15, 0.30):
+        layer = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=target)
+        shares[target] = float((layer.facies >= 1).mean())
+        assert target <= shares[target] < target + 0.015, (target, shares[target])
+        if target == 0.15:     # the cap would be 3 generations of 200 networks, 3000 branches or more
+            assert len(layer.tree_branches) < 3 * 200 * 5
+    assert shares[0.30] > shares[0.15] + 0.12
+
+
+def test_the_stop_at_ntg_counts_sand_once_where_bars_cross_generations():
+    """Bars 0.35 of their half-width thick (four times the default) reach down through several generations; a
+    generation's own sand then overstates what it adds to the layer, and the share still ends at the target."""
+    layer = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=0.25, mouth_bar_hw_ratio=0.15, mouth_bar_dw_ratio=0.2)
+    assert 0.25 <= (layer.facies >= 1).mean() < 0.27
+
+
+def test_the_stop_at_ntg_stamps_older_networks_as_sand_not_mud_fill():
+    """With mFFCHprop = 1 the default mud-fills every abandoned network (FFCH cells); the stop leaves none."""
+    default = _tree_delta(n_trees=6, mFFCHprop=1.0, stdevFFCHprop=0.0)
+    stopped = _tree_delta(tree_ntg_stop=True, n_trees=6, NTGtarget=0.99, mFFCHprop=1.0, stdevFFCHprop=0.0)
+    assert (default.facies == 0).sum() > 0 and (stopped.facies == 0).sum() == 0
+    assert (stopped.facies >= 1).mean() > (default.facies >= 1).mean()
+
+
+def test_the_stop_at_ntg_counts_the_mouth_bars():
+    """Bars are painted after every tree, so bigger bars reach the same share with fewer networks: the same
+    target is met by a network share about the size of a bar's."""
+    small = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=0.2, mouth_bar_length_factor=1.0, mouth_bar_width_factor=0.5)
+    large = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=0.2, mouth_bar_length_factor=4.0, mouth_bar_width_factor=1.5)
+    for layer in (small, large):
+        assert 0.18 < (layer.facies >= 1).mean() < 0.3
+    assert (large.facies == 3).sum() > (small.facies == 3).sum()
+    assert len(large.tree_branches) < len(small.tree_branches)
+
+
+def test_the_stop_at_ntg_needs_the_tree_mode():
+    with pytest.raises(ValueError, match="bifurcate"):
+        _tree_delta(tree_ntg_stop=True, bifurcate=False)

@@ -166,6 +166,24 @@ def _paint_mouth_bar_into_engine(engine, tip_x, tip_y, tip_z, heading,
                     engine.facies[ix, iy, iz] = facies_code
 
 
+def _paint_mouth_bars(canvas, tips, length_factor, width_factor, hw_ratio, dw_ratio, fallback):
+    """Paint a mouth bar at every tip into ``canvas`` (anything with the engine's ``facies``,
+    ``x``, ``y`` and cell sizes).
+
+    A tree tip carries its own channel width and its bar is sized by it (length
+    ``2 * length_factor * width``, half-width ``width_factor * width``); a tip without
+    one takes the bar size ``fallback = (length, half-width)``.
+    """
+    for tip in tips:
+        tx, ty, tz, head = tip[:4]
+        length, half_width = fallback if len(tip) < 5 else (
+            length_factor * float(tip[4]) * 2.0, width_factor * float(tip[4]))
+        _paint_mouth_bar_into_engine(
+            canvas, tx, ty, tz, head, length, half_width, hw_ratio, dw_ratio,
+            facies_code=3,   # LA = lateral-accretion / bar
+        )
+
+
 class DeltaLayer(ChannelLayer):
     """Distributary-fan delta — Alluvsim-faithful event-loop simulation.
 
@@ -198,6 +216,27 @@ class DeltaLayer(ChannelLayer):
     (override DELTA_FAN).
     """
 
+    @staticmethod
+    def _ntg_stop(target_cells, sand_cells, paint_bars, length_factor, width_factor, hw_ratio, dw_ratio, fallback):
+        """The engine's ``after_tree`` hook of ``tree_ntg_stop`` for one generation.
+
+        After each network it paints the mouth bars of the tips that network recorded (when
+        ``paint_bars``) and says whether the layer so far holds ``target_cells`` of sand:
+        ``sand_cells(engine)`` counts the sand of this generation and of the ones below it, so
+        bars that cross generations are counted once.
+        """
+        painted = 0
+
+        def after_tree(engine):
+            nonlocal painted
+            if paint_bars:
+                _paint_mouth_bars(engine, engine.distal_tips[painted:], length_factor, width_factor,
+                                  hw_ratio, dw_ratio, fallback)
+                painted = len(engine.distal_tips)
+            return sand_cells(engine) >= target_cells
+
+        return after_tree
+
     def create_geology(self, *,
                        trunk_length_fraction: float = 0.4,
                        progradation_fraction: float = 0.0,
@@ -222,6 +261,7 @@ class DeltaLayer(ChannelLayer):
                        fining_probability: float = 1.0,
                        noise_range_m: tuple | None = None,
                        fining_top_kvkh: float | None = None,
+                       tree_ntg_stop: bool = False,
                        seed: int | None = None,
                        **kwargs):
         """Generate a prograding distributary-fan delta.
@@ -275,6 +315,20 @@ class DeltaLayer(ChannelLayer):
         mouth_bar_hw_ratio / mouth_bar_dw_ratio :
             Dimensionless bar thickness above / depth below the
             channel datum at the bar axis.
+        tree_ntg_stop : bool
+            Only with ``bifurcate=True``, which ignores ``NTGtarget``: grow
+            networks in every generation until the layer holds its cumulative
+            share of ``NTGtarget`` (sand cells, facies 1 or more, mouth bars
+            included, generation ``g`` of ``n_generations`` asking for
+            ``(g + 1) / n_generations`` of it, counted over the layer's cells
+            once even where generations overlap), at most ``n_trees`` per
+            generation. Every network is stamped as sand, the older ones too
+            (``mFFCHprop`` is not used), and each network's mouth bars are
+            painted right after it so they count. The layer's net-to-gross
+            then comes out at ``NTGtarget`` plus at most the last network's
+            share (less only if ``n_trees`` runs out) instead of at what
+            ``n_trees`` happens to give. ``False``: ``n_trees`` networks, the
+            older ones abandoned.
         seed : int | None
             Master seed; each generation seeds with ``seed + igen`` so
             generations are independent but reproducible.
@@ -292,6 +346,9 @@ class DeltaLayer(ChannelLayer):
         ntime_per_gen = int(cfg.pop('ntime_per_gen', 80))
         scour_factor = cfg.pop('scour_factor', 10.0)
         gradient = cfg.pop('gradient', 0.001)
+
+        if tree_ntg_stop and not cfg.get('bifurcate'):
+            raise ValueError("tree_ntg_stop needs the distributary tree: pass bifurcate=True")
 
         # Wire direct branch-spread control
         cfg['stdev_branch_azi'] = float(max(branch_spread_deg, 0.0))
@@ -362,6 +419,15 @@ class DeltaLayer(ChannelLayer):
                 # the front progrades: each generation's lobes end further out
                 cfg_gen['front_radius'] = float(cfg.get('front_radius', 1.5)) * (
                     1.0 + progradation_fraction * igen / (n_generations - 1))
+            after_tree = None
+            if tree_ntg_stop:
+                after_tree = self._ntg_stop(
+                    float(cfg_gen['NTGtarget']) * nx_ * ny_ * nz_ * (igen + 1) / n_generations,
+                    lambda engine: np.count_nonzero((accum_facies >= 1) | (engine.facies >= 1)),
+                    paint_mouth_bars, mouth_bar_length_factor, mouth_bar_width_factor,
+                    mouth_bar_hw_ratio, mouth_bar_dw_ratio,
+                    fallback=(mouth_bar_length_factor * 2.0 * cfg_gen['mCHwdratio'] * cfg_gen['mCHdepth'],
+                              mouth_bar_width_factor * cfg_gen['mCHwdratio'] * cfg_gen['mCHdepth']))
             engine = fluvial(
                 nx=nx_, ny=ny_, nz=nz_,
                 xsiz=self.dx, ysiz=self.dy, zsiz=self.dz,
@@ -369,7 +435,7 @@ class DeltaLayer(ChannelLayer):
                 nlevel=1, level_z=[chelev], ntime=ntime_per_gen,
                 A=scour_factor, I=gradient,
                 min_avul_node_frac=float(trunk_per_gen[igen]),
-                seed=gen_seed,
+                seed=gen_seed, after_tree=after_tree,
                 **cfg_gen,
             )
             engine.simulation()
@@ -386,8 +452,9 @@ class DeltaLayer(ChannelLayer):
             self.tree_branches.extend(dict(gen=igen, **b) for b in getattr(engine, 'tree_branches', []))
             last_engine = engine
 
-        # Optional mouth-bar painting at every recorded distal tip
-        if paint_mouth_bars and accum_distal_tips and last_engine is not None:
+        # Optional mouth-bar painting at every recorded distal tip (tree_ntg_stop
+        # painted each network's bars as it went)
+        if paint_mouth_bars and accum_distal_tips and last_engine is not None and not tree_ntg_stop:
             leaf_full_width = last_engine.mCHwdratio * last_engine.mCHdepth
             MB_L = mouth_bar_length_factor * leaf_full_width * 2.0
             MB_W = mouth_bar_width_factor * leaf_full_width
@@ -398,16 +465,8 @@ class DeltaLayer(ChannelLayer):
             shim.facies = accum_facies
             shim.x = last_engine.x; shim.y = last_engine.y
             shim.xsiz = self.dx; shim.ysiz = self.dy; shim.zsiz = self.dz
-            for tip in accum_distal_tips:
-                tx, ty, tz, head = tip[:4]
-                # a tree tip carries its own channel width; size its bar by it
-                L_i, W_i = (MB_L, MB_W) if len(tip) < 5 else (
-                    mouth_bar_length_factor * float(tip[4]) * 2.0, mouth_bar_width_factor * float(tip[4]))
-                _paint_mouth_bar_into_engine(
-                    shim, tx, ty, tz, head, L_i, W_i,
-                    mouth_bar_hw_ratio, mouth_bar_dw_ratio,
-                    facies_code=3,   # LA = lateral-accretion / bar
-                )
+            _paint_mouth_bars(shim, accum_distal_tips, mouth_bar_length_factor, mouth_bar_width_factor,
+                              mouth_bar_hw_ratio, mouth_bar_dw_ratio, fallback=(MB_L, MB_W))
 
         self._finalize_facies_table(
             accum_facies, facies_props=facies_props,
