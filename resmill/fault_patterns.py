@@ -16,6 +16,11 @@ set (R-1 to R-14 of ``fold_fault_relations.md``):
 * the style's own sets: crestal grabens or step faults (throw at most 0.2-0.6 of the trap's relief), break thrusts on
   the steeper limb, tear faults (strike-slip faults as steep low-throw faults), a bounding fault through the spill
   point with minor faults in its hanging wall; inherited faults in some cases; relays where the grid resolves them;
+* the salt-flank style adds the faults round a salt contact (``salt``, :mod:`resmill.salt`): radial faults of the Santos
+  stock (N19-N23 of ``step5_salt.md``), centred on the contact so that half of each is hidden in the salt, striking
+  along its normal, 3-6 groups round the body and more at the ends of an elongate one, and, where the flank dips 60
+  degrees or less, a few ring faults concentric with it; the fold-related and regional sets then follow the trap
+  the salt leaves;
 * throw 0.03 L^0.92 sin(dip) 10^N(0, 0.27) on Norne's lengths, dips by kind, curvature, wander.
 
 Each fault's tip ellipse is placed from the reservoir's depth at the fault (the datum ``top`` plus the fold there). The
@@ -32,10 +37,10 @@ from scipy import ndimage
 from .faults import Fault, ww_profile
 from .structure import _spill_levels
 
-STYLES = ("four_way", "turtle", "faulted_anticline", "fold_belt", "fault_bounded", "low_relief")
+STYLES = ("four_way", "turtle", "faulted_anticline", "fold_belt", "fault_bounded", "low_relief", "salt_flank")
 MIN_THROW = 5.0                     # m in the reservoir: the faults S6's densities count
-ORDER = ("inherited", "bounding", "major", "regional", "longitudinal", "oblique", "transverse", "minor", "graben",
-         "step", "thrust", "tear")  # genetic order [J]
+ORDER = ("inherited", "bounding", "major", "regional", "ring", "radial", "longitudinal", "oblique", "transverse", "minor",
+         "graben", "step", "thrust", "tear")  # genetic order [J]
 
 
 def _strike(angle):
@@ -167,7 +172,7 @@ def _kind(angle, axis):
 
 
 def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, regional=None, over_salt=False,
-                max_faults=300):
+                max_faults=300, salt=None):
     """The faults of one folded trap (a list of :class:`resmill.faults.Fault`, in genetic order).
 
     ``style`` is one of :data:`STYLES`; ``fold`` the trap's structure without roughness (depth shift, m, positive
@@ -179,14 +184,23 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     the style's draw (n's azimuth in degrees clockwise from +x; for a fault-bounded trap it then also replaces the
     bounding fault's direction for the regional set); ``over_salt`` marks a dome over deep salt or a salt-cored fold.
     A density of 0 still draws the style's own sets; ``max_faults`` caps the total, dropping the regional faults
-    farthest from the trap first.
+    farthest from the trap first. The ``"salt_flank"`` style takes the :class:`resmill.salt.SaltBody` as ``salt``
+    (and only it does): the trap is the fold's closure less the salt, ``density`` counts that area, and the radial
+    and ring faults at the contact (at its reference depth) are part of the count, as the fold's own sets are.
     """
     if style not in STYLES:
         raise ValueError(f"style must be one of {STYLES}, got {style!r}")
+    if (style == "salt_flank") != (salt is not None):
+        raise ValueError("the salt_flank style needs a salt body (salt=), and only it takes one")
     rng = np.random.default_rng(seed)
     fr = _frame(fold, x_len, y_len, dx)
     if fr is None:
         return []
+    if salt is not None:                                       # the trap the salt leaves, at the reservoir's depth
+        fr["mask"] = fr["mask"] & ~salt.inside(fr["X"], fr["Y"], top + fr["depth"] + 0.5 * thickness)
+        if fr["mask"].sum() < 4:
+            return []
+        fr["crest"] = np.unravel_index(int(np.argmin(np.where(fr["mask"], fr["depth"], np.inf))), fr["depth"].shape)
     axis, a, b, cell = fr["axis"], fr["a"], fr["b"], fr["dx"]
     away = ndimage.distance_transform_edt(~fr["mask"], sampling=(fr["dx"], fr["dy"]))   # distance from the trap (m)
     allowed = away <= 0.3 * b                                                                     # [J] (E6)
@@ -205,7 +219,7 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
         R, n_angle = float(regional[0]), -math.radians(float(regional[1]))
     elif style in ("four_way", "turtle"):
         R, n_angle = 0.0, axis
-    elif style in ("faulted_anticline", "low_relief"):                   # Gulf type: n at any angle to the axis
+    elif style in ("faulted_anticline", "low_relief", "salt_flank"):      # Gulf type: n at any angle to the axis
         R, n_angle = rng.uniform(0.5, 2.0), axis + rng.choice((-1.0, 1.0)) * math.radians(rng.uniform(0.0, 90.0))
         down_x, down_y, slope = _regional_dip(fr)
         if (math.cos(n_angle) * down_x + math.sin(n_angle) * down_y < 0.0) if slope > 1e-3 else rng.uniform() < 0.5:
@@ -215,12 +229,13 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     else:                                                                # fault-bounded: set by the bounding fault
         R, n_angle = rng.uniform(0.5, 2.0), None
     smooth = rng.uniform(0.1, 0.25)                                                               # [J] (A1)
+    p = R / (1.0 + R) if R > 0.0 else 0.0                                                         # [J] (E2)
     under_range = (math.log10(0.1), math.log10(0.6)) if style == "low_relief" else (0.0, 0.0)     # [J] (Burgan)
 
     faults = []
 
     def add(cx, cy, angle, length, kind, dip=None, hw=None, r_over_l=None, reverse=False, throw=None, dl=None,
-            cap=None, z=None, clip=True, relay=True, factor=None, min_res=0.0):
+            cap=None, z=None, clip=True, relay=True, factor=None, min_res=0.0, aspect=2.15):
         """Append one fault, or a relay pair; return its throw in the reservoir, None when it could not be placed,
         or "small" when that throw falls short of ``min_res`` (then nothing is appended)."""
         if len(faults) >= max_faults:
@@ -246,20 +261,20 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
         if not throw > 0.0:
             return None
         t_loc = top_at(cx, cy)
-        half = 0.5 * length / 2.15 * sin_d
+        half = 0.5 * length / aspect * sin_d
         zc = t_loc + 0.5 * thickness + rng.normal(0.0, 0.6 * half) if z is None else z(half, t_loc)   # A16
         res = throw * _in_reservoir(zc, t_loc, thickness, half)
         if res < min_res:
             return "small"
         common = dict(dip=dip, hanging_wall=hw, hw_share=rng.uniform(0.5, 0.8),                  # [J] (A15)
                       drag=(rng.uniform(0.3, 0.5), rng.uniform(0.15, 0.3)), reverse=reverse, z_center=zc,
-                      bends=rng.uniform(0.015, 0.03), kind=kind)                                 # [J]
+                      bends=rng.uniform(0.015, 0.03), kind=kind, aspect=aspect)                  # [J]
         q, ratio = rng.uniform(0.15, 0.3), rng.uniform(3.0, 5.0)        # overlap 15-30 % of a segment, ~4 x sep
         seg = length / (2.0 - q)                                         # two segments spanning the trace exactly
         sep, seg_throw = q * seg / ratio, throw * (seg / length) ** 0.92
         t, n = np.array([math.cos(angle), math.sin(angle)]), np.array([-math.sin(angle), math.cos(angle)])
         centres = [np.array([cx, cy]) + sgn * (0.5 * length - 0.5 * seg) * t + sgn * 0.5 * sep * n for sgn in (-1, 1)]
-        seg_res = min(seg_throw * _in_reservoir(zc, top_at(*c), thickness, 0.5 * seg / 2.15 * sin_d)
+        seg_res = min(seg_throw * _in_reservoir(zc, top_at(*c), thickness, 0.5 * seg / aspect * sin_d)
                       for c in centres)                                  # each segment at its own centre
         tips = [c + sgn * 0.5 * seg * t for c in centres for sgn in (-1, 1)]
         if (relay and length > 600.0 and sep >= 2.0 * cell and rng.uniform() < 0.25 and seg_res >= MIN_THROW  # R-11
@@ -333,6 +348,50 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
                     template(mc[0], mc[1], m_angle, length, "minor", hw=hw if synthetic else -hw, clip=False)
                     break
                 length *= 0.5
+    if salt is not None:                                 # radial and ring faults at the contact, at its reference depth
+        poly = salt.outline()
+        seg = np.hypot(*(np.roll(poly, -1, axis=0) - poly).T)
+        near = _inside(fr, allowed, poly[:, 0], poly[:, 1])                      # the contact within reach of the trap
+        if near.sum() > 1:
+            tang = np.roll(poly, -1, axis=0) - np.roll(poly, 1, axis=0)
+            normals = np.column_stack([tang[:, 1], -tang[:, 0]]) / np.hypot(*tang.T)[:, None]   # out of the salt
+            az = math.radians(salt.azimuth)
+            u = ((poly[:, 0] - salt.center[0]) * math.cos(az) - (poly[:, 1] - salt.center[1]) * math.sin(az)) / salt.axes[0]
+            elongate = salt.axes[0] >= 1.5 * salt.axes[1]
+            weight = np.where(near, seg * (1.0 + 3.0 * u ** 2 * elongate), 0.0)                  # more at the ends (N20) [J]
+            n_group = max(1, round(int(rng.integers(3, 7)) * seg[near].sum() / seg.sum()))      # 3-6 round the body (N20)
+            groups = np.searchsorted(np.cumsum(weight) / weight.sum(),                           # spread out, not on top of
+                                     (np.arange(n_group) + rng.uniform(0.15, 0.85, n_group)) / n_group)   # one another [J]
+            groups = np.minimum(groups, len(poly) - 1)
+            radial_length = lambda: float(np.clip(10.0 ** rng.normal(math.log10(1100.0), 0.205), 400.0, 3700.0))  # N19
+            own = int(round(density * area)) - int(round(density * p * area))                    # the trap's own count
+            for _ in range(int(round(rng.uniform(0.4, 0.8) * own))):                              # their share of it [J]
+                for _try in range(20):                                               # about 300 m about a group's centre [J]
+                    j = (int(rng.choice(groups)) + int(round(rng.normal(0.0, 300.0 / seg.mean())))) % len(poly)
+                    if near[j]:
+                        break
+                else:
+                    continue
+                angle = math.atan2(normals[j, 1], normals[j, 0]) + math.radians(rng.normal(0.0, 10.0))   # along the normal [J]
+                counted += drawn(poly[j, 0], poly[j, 1], angle, "radial", radial_length, dip=rng.uniform(50.0, 60.0),
+                                 cap=80.0, aspect=1.9, clip=False, relay=False) is not None   # N19: 50-60 degrees, < 80 m
+            for _ in range(int(rng.integers(0, 3))):                                             # ring faults: few [J]
+                j = int(rng.choice(np.flatnonzero(near)))
+                try:                                     # the flank's dip from how far the contact moves out per metre down
+                    run = (salt.distance(*poly[j], salt.z_ref - 50.0) - salt.distance(*poly[j], salt.z_ref + 50.0)) / 100.0
+                except ValueError:
+                    continue
+                if run < 1.0 / math.tan(math.radians(60.0)):                         # N21: only over flanks of 60 degrees or less
+                    continue
+                p_out = poly[j] + rng.uniform(300.0, 1200.0) * normals[j]                        # outside the contact [J]
+                to_salt = np.array(salt.center) - p_out
+                angle = math.atan2(normals[j, 1], normals[j, 0]) + 0.5 * math.pi                 # the tangent: concentric
+                toward = 1 if to_salt @ np.array([-math.sin(angle), math.cos(angle)]) > 0.0 else -1
+                rho = float(np.hypot(*to_salt))
+                length = min(10.0 ** rng.uniform(math.log10(1500.0), math.log10(4000.0)), 0.9 * math.pi * rho)   # major [J]
+                template(p_out[0], p_out[1], angle, length, "ring", dip=rng.uniform(50.0, 70.0),
+                         hw=toward if rng.uniform() < 0.7 else -toward, r_over_l=toward * rho / length,
+                         clip=False, relay=False)                          # concave toward the salt, a collapse mostly [J]
     graben = {"four_way": (0.6, 0.25) if over_salt else (0.2, 0.1), "turtle": (0.8, 0.0),       # E6, E7, E28 [J]
               "faulted_anticline": (0.6, 0.0), "fold_belt": (0.5, 0.0)}.get(style, (0.0, 0.0))
     u = rng.uniform()
@@ -375,7 +434,6 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     # The populations (R-4, R-13): regional faults at their share of the density over the whole model, and the rest of
     # the trap's count beyond its own sets and the regional faults expected in it.
     eps1, eps2, theta1 = _strain(fr, R, axis if n_angle is None else n_angle, smooth)
-    p = R / (1.0 + R) if R > 0.0 else 0.0                                                         # [J] (E2)
     n_regional = int(round(density * p * x_len * y_len / 1e6))
     rest = max(int(round(density * area)) - counted - int(round(density * p * area)), 0)
     n_inherited = int(round(rng.uniform(0.1, 0.3) * rest)) if rng.uniform() < 0.4 else 0         # R-12 [J]
