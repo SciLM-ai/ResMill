@@ -1,8 +1,10 @@
 """The export of mud drapes: MULTX, MULTY and MULTZ in Eclipse order, times a fault seal's, none without drapes."""
+import tracemalloc
+
 import numpy as np
 import pytest
 
-from resmill.export import to_grdecl
+from resmill.export import drape_multipliers, to_grdecl
 from resmill.fault_seal import Seal
 from resmill.faults import Fault
 from resmill.layers.base import Layer
@@ -90,3 +92,16 @@ def test_export_stacks_the_multipliers_of_layers_and_one_without(tmp_path):
     to_grdecl(Reservoir([top, bottom]), tmp_path / "s.grdecl")
     mz = _multiplier(tmp_path / "s.grdecl", "MULTZ", (4, 3, 7))
     assert mz[0, 0, 4] == pytest.approx(0.1) and (mz != 1.0).sum() == 1
+
+
+def test_a_model_without_drapes_builds_nothing_for_them():
+    """Without a multiplier on any layer the helper returns None at once: no full-grid cube of ones (three of them would
+    be 12 MB on this grid and 240 MB on a 10 M cell one) is built for an export that has no drapes."""
+    layer = _plain_layer(nx=100, ny=100, nz=50)
+    tracemalloc.start()
+    try:
+        assert drape_multipliers(layer) is None
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 100_000

@@ -228,9 +228,12 @@ def drape_multipliers(model):
 
     A channel layer made with ``drapes`` carries ``mult_x``, ``mult_y`` and ``mult_z``, the transmissibility multiplier
     across each cell's +x, +y and lower face (k up); in K-down order the lower face is the + z face, which MULTZ
-    multiplies. A layer without them counts as 1. None when no layer has a multiplier below 1.
+    multiplies. A layer without them counts as 1. None when no layer has a multiplier below 1; a model none of whose
+    layers has the attributes returns before it builds anything.
     """
     layers = list(getattr(model, "layers", [model]))
+    if all(getattr(L, name, None) is None for L in layers for name in ("mult_x", "mult_y", "mult_z")):
+        return None
     out = {key: np.concatenate(
         [np.ones((L.nx, L.ny, L.nz)) if getattr(L, name, None) is None
          else np.asarray(getattr(L, name), dtype=float)[:, :, ::-1] for L in layers], axis=2)
