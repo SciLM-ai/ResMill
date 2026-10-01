@@ -2,6 +2,8 @@
 against it or folded beneath a cover, the thickness draw (N30), and the labels an episode carries (mask, thickness, base
 of salt)."""
 import math
+import signal
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
@@ -34,10 +36,51 @@ def top_map(zc, act):
     return np.where(act.any(axis=2), np.take_along_axis(cell[..., :-1], k[..., None], axis=2)[..., 0], np.nan)
 
 
+@contextmanager
+def finishes_within(seconds):
+    """Fail instead of hanging: a flood that never ends (the dead columns of a salt wall once did that, with memory
+    growing by tens of MB a second) raises TimeoutError after ``seconds``."""
+    if not hasattr(signal, "SIGALRM"):                                       # no alarm on this platform: unguarded
+        yield
+        return
+
+    def stop(*_):
+        raise TimeoutError(f"did not finish within {seconds} s")
+
+    old = signal.signal(signal.SIGALRM, stop)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
 def blocks_of(zc, act):
     perm = np.full(act.shape, 100.0)
     mults = face_multipliers([], zc, act, np.full(act.shape, 0.1), (perm, perm, perm), DX, DX, Seal())
-    return fault_blocks(zc, act, [], mults, DX, DX)
+    with finishes_within(30):
+        return fault_blocks(zc, act, [], mults, DX, DX)
+
+
+def test_the_spill_flood_ends_on_a_wall_of_dead_columns():
+    """A salt wall is a line of columns with no active cell, which fault_blocks gives infinite depth. The flood once kept
+    two such neighbours on its queue for ever (memory grew by 13 GB in five minutes): it must end, give the pocket behind
+    a closed wall an infinite level, and leave every level on the near side as it is without the wall."""
+    n = 21
+    i, j = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
+    depth = 2000.0 + 0.5 * np.hypot(i - 10, j - 10) ** 2                       # a bowl turned over: a crest in the middle
+    plain = st._spill_levels(depth)
+    across = depth.copy()
+    across[14:16, :] = np.inf                                                  # a wall two columns wide across the map
+    with finishes_within(5):
+        levels = st._spill_levels(across)
+    assert np.isinf(levels[14:16, :]).all() and np.array_equal(levels[:14], plain[:14])
+    assert np.isfinite(levels[16:]).all()                                      # the far side still reaches the edge
+    pocket = depth.copy()
+    pocket[4:7, 4:7] = np.inf                                                  # a closed pocket of dead cells inside
+    with finishes_within(5):
+        assert np.array_equal(st._spill_levels(pocket)[:3], plain[:3])
 
 
 def test_base_of_salt_is_a_plane_at_the_depth_and_dip_plus_roughness_and_a_high():
