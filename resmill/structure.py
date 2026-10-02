@@ -383,6 +383,31 @@ def roughness(sd, range_m, x_len, y_len, seed=None):
     return surface(float(sd) * (field - field.mean()) / field.std(), x_len, y_len)
 
 
+def relief(sd, range_m, x_len, y_len, hurst=0.75, floor_m=None, seed=None):
+    """A multi-scale random surface (m) with standard deviation ``sd`` over ``[0, x_len] x [0, y_len]``.
+
+    Octaves of :func:`roughness` whose ranges halve from ``range_m`` to ``floor_m`` (default a 32nd of the range) and
+    whose SDs fall as range ** ``hurst``, scaled so that the sum has SD ``sd`` (to a few per cent: the octaves are
+    independent only on average). Between those scales the surface is self-affine: its structure function
+    S(lag) = mean (z(x + lag) - z(x))^2 rises as lag ** (2 hurst), ``hurst`` being the Hurst exponent, 0 to 1 (the
+    Gaussian covariance of each octave rounds the realized exponent off a little from 0.6 up). Each octave has its own
+    stream of ``seed``. The contour of a Gaussian surface of Hurst exponent H has the fractal dimension 1.5 - H / 2
+    (Kondev and Henley 1995, Phys. Rev. Lett. 74:4580), so the coasts' 1.02-1.25 (Mandelbrot 1967) are exponents of
+    0.5-0.96.
+    """
+    floor_m = range_m / 32.0 if floor_m is None else float(floor_m)
+    if not 0.0 <= hurst <= 1.0:
+        raise ValueError(f"hurst must lie between 0 and 1, not {hurst}")
+    if not 0.0 < floor_m <= range_m:
+        raise ValueError(f"floor_m must lie between 0 and range_m ({range_m}), not {floor_m}")
+    ranges = range_m / 2.0 ** np.arange(int(np.log2(range_m / floor_m) + 1e-9) + 1)
+    sds = ranges ** hurst
+    sds *= float(sd) / np.sqrt((sds ** 2).sum())
+    seq = np.random.default_rng(seed).bit_generator.seed_seq        # the octaves' streams, without spawning from it
+    return sum(roughness(s, r, x_len, y_len, seed=np.random.SeedSequence(seq.entropy, spawn_key=(*seq.spawn_key, i)))
+               for i, (s, r) in enumerate(zip(sds, ranges)))
+
+
 def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):
     """A zone-thickness factor field with mean 1 over ``[0, x_len] x [0, y_len]``: 1 + a l + e.
 
@@ -442,5 +467,76 @@ def growth(fault, expansion, width, depth):
         t = np.clip((h - h0) / width, 0.0, 1.0)
         taper = ww_profile(np.sqrt((s / lx) ** 2 + rz ** 2)) / centre if centre > 0.0 else 0.0
         return 1.0 + (expansion - 1.0) * t * t * (3.0 - 2.0 * t) * taper
+
+    return Structure(fn)
+
+
+def _signed_distance(solid, x_len, y_len):
+    """The signed distance (m) from the edge of the region where ``solid(x, y)`` holds, positive inside it and negative
+    outside, as a surface over ``[0, x_len] x [0, y_len]``: Euclidean distance transforms of the region and of the rest
+    on a grid of 1/800 of the longer side, taken to the edge between two pixels. A region that fills the model, or is
+    not in it, has no edge to measure from and is far from it everywhere."""
+    step = max(x_len, y_len) / 800.0
+    xs = np.linspace(0.0, x_len, int(np.ceil(x_len / step)) + 1)
+    ys = np.linspace(0.0, y_len, int(np.ceil(y_len / step)) + 1)
+    inside = np.asarray(solid(*np.meshgrid(xs, ys, indexing="ij")), dtype=bool)
+    if inside.all() or not inside.any():
+        return surface(np.full(inside.shape, 1e12 if inside.all() else -1e12), x_len, y_len)
+    sx, sy = xs[1] - xs[0], ys[1] - ys[0]
+
+    def distance(mask):
+        return ndimage.distance_transform_edt(np.pad(mask, 1, mode="edge"), sampling=(sx, sy))[1:-1, 1:-1]
+
+    half = 0.5 * min(sx, sy)
+    return surface(np.where(inside, distance(inside) - half, half - distance(~inside)), x_len, y_len)
+
+
+def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, edge=None, grow=0.0):
+    """A thickness factor for ``to_grdecl(isochore=[...])``: 0 where the sand is absent, rising to 1 over ``taper_m``
+    metres in from the edge of the sand as u (2 - u), u the share of the taper: a wedge whose slope is zero where it
+    reaches full thickness, so there is no hinge or step there, and which ends at the edge at twice the mean slope, a
+    body ``T`` thick tapering at ``atan(T / taper_m)`` on average (a lens of that factor is a parabolic mound).
+
+    The sand is the side of a pinch-out line that the azimuth normal points to (the dip direction of :func:`ramp`),
+    the line lying ``position`` m along it from the model's origin; and/or the footprint of ``outline``, a Structure
+    that is negative inside it (a :func:`closure` without tilt, or any other; the union of several is their minimum).
+    With both the sand is their union: an outline centred on the line is a tongue protruding updip from a sheet; with
+    the outline alone (``position`` None) it is an enclosed lens. The factor rises with the distance in from the edge
+    of the sand, so the taper is as long all round a lobate lens, or at the base of a tongue, as it is across a
+    straight line. The footprint is measured on a grid of 1/800 of the longer side, so ``x_len`` and ``y_len`` (the
+    model's size) are needed with an outline.
+
+    ``edge`` (a Structure, m, e.g. :func:`relief`) is added to that distance, fading out linearly over the taper:
+    where it is +R the sand's limit reaches R m farther out and the contour of the factor at a share u of the taper
+    (1 - u) R, so the thick part of the sand is smooth and its edge is rough. All zones of an interval take the same
+    factor to thin together; the thin cells of the outer ``T f`` below 5 mm collapse (ACTNUM 0), so the factor is 0
+    exactly where the sand is absent. ``grow`` (m) widens the sand all round by that much before the distance is
+    measured, so that a factor of ``grow`` as the taper is 1 wherever the sand is and thins to 0 over the ``grow``
+    beyond it: a rim.
+    """
+    if not taper_m > 0.0:
+        raise ValueError(f"taper_m must be positive, not {taper_m}")
+    if position is None and outline is None:
+        raise ValueError("taper needs a pinch-out line (position) or an outline")
+    if outline is not None and (x_len is None or y_len is None):
+        raise ValueError("x_len and y_len (the model's size) are needed with an outline")
+    nx_, ny_ = _axes(azimuth)
+
+    def along(x, y):
+        return x * nx_ + y * ny_
+
+    if outline is None:
+        signed = lambda x, y: along(x, y) - position
+    else:
+        signed = _signed_distance(lambda x, y: (np.asarray(outline(x, y)) < 0.0)
+                                  | (False if position is None else along(x, y) > position), x_len, y_len)
+
+    def fn(x, y):
+        x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+        d = signed(x, y) + grow
+        if edge is not None:
+            d = d + edge(x, y) * np.clip(1.0 - d / taper_m, 0.0, 1.0)
+        u = np.clip(d / taper_m, 0.0, 1.0)
+        return u * (2.0 - u)
 
     return Structure(fn)

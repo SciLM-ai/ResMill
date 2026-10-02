@@ -430,3 +430,221 @@ def test_growth_refuses_what_has_no_meaning():
     for kw in (dict(width=0.0), dict(width=-5.0), dict(expansion=0.0)):
         with pytest.raises(ValueError):
             st.growth(growth_fault(), **{**dict(expansion=1.5, width=100.0, depth=2000.0), **kw})
+
+
+def _wedge(u):
+    """The profile of the thickness factor: u (2 - u) on [0, 1], flat where it reaches full thickness."""
+    u = np.clip(u, 0.0, 1.0)
+    return u * (2.0 - u)
+
+
+def test_relief_has_the_sd_it_was_given_and_a_structure_function_that_rises_as_lag_to_the_two_hurst():
+    """Octaves of ``roughness`` whose ranges halve from ``range_m`` to ``floor_m`` and whose SDs fall as range^H, so
+    that the surface is self-affine between them: the SD is the one asked for (to 8 %: the octaves are independent
+    only on average) and the structure function S(lag) = mean (z(x + lag) - z(x))^2 rises as lag^(2H) between 100
+    and 800 m (the fitted exponent within 0.3 of 2H, the Gaussian covariance of each octave rounding it off at the
+    largest H)."""
+    x_len, y_len, dx = 8000.0, 6000.0, 25.0
+    X, Y = np.meshgrid(np.arange(0.0, x_len, dx), np.arange(0.0, y_len, dx), indexing="ij")
+    lags = np.array([4, 6, 8, 12, 16, 24, 32])
+    for hurst in (0.3, 0.5, 0.75):
+        z = st.relief(10.0, 2000.0, x_len, y_len, hurst=hurst, floor_m=50.0, seed=3)(X, Y)
+        assert z.std() == pytest.approx(10.0, rel=0.08)
+        s = [np.mean((z[lag:] - z[:-lag]) ** 2) for lag in lags]
+        slope = np.polyfit(np.log(lags * dx), np.log(s), 1)[0]
+        assert slope == pytest.approx(2.0 * hurst, abs=0.3)
+
+
+def test_relief_is_one_surface_per_seed_and_a_single_octave_when_the_floor_is_the_range():
+    args = (10.0, 1500.0, 6000.0, 4000.0)
+    a, b, c = (st.relief(*args, seed=s)(1234.5, 2345.6) for s in (7, 7, 8))
+    assert a == b and a != c
+    one = st.relief(*args, floor_m=1500.0, seed=7)
+    octave = st.roughness(10.0, 1500.0, 6000.0, 4000.0, seed=np.random.SeedSequence(7).spawn(1)[0])
+    assert one(1234.5, 2345.6) == pytest.approx(octave(1234.5, 2345.6))
+
+
+def test_relief_does_not_use_up_the_seed_sequence_it_is_given():
+    """A ``SeedSequence`` is the stream a caller hands out once: relief reads its entropy and spawn key and derives the
+    octaves' streams from them, so it returns the same surface however often it is asked, and the caller's sequence
+    still hands out the children it would have (``spawn`` counts them, and a relief that spawned would change them).
+    An integer seed gives the same octaves as the spawn of ``SeedSequence(seed)``."""
+    args = (10.0, 1500.0, 6000.0, 4000.0)
+    ss = np.random.SeedSequence(5)
+    a, b = (st.relief(*args, seed=ss)(1234.5, 2345.6) for _ in range(2))
+    assert a == b and ss.n_children_spawned == 0
+    assert ss.spawn(1)[0].spawn_key == (0,)
+    assert st.relief(*args, seed=5)(1234.5, 2345.6) == a
+    ranges = 1500.0 / 2.0 ** np.arange(6)                         # the default floor, a 32nd of the range: 6 octaves
+    sds = ranges ** 0.75
+    sds *= 10.0 / np.sqrt((sds ** 2).sum())
+    octaves = [st.roughness(s, r, 6000.0, 4000.0, seed=k)(1234.5, 2345.6)
+               for s, r, k in zip(sds, ranges, np.random.SeedSequence(5).spawn(6))]
+    assert a == pytest.approx(sum(octaves))
+
+
+@pytest.mark.parametrize("kw,message", [(dict(hurst=1.2), "hurst"), (dict(hurst=-0.1), "hurst"),
+                                        (dict(floor_m=3000.0), "floor_m")])
+def test_relief_refuses_what_has_no_octaves(kw, message):
+    with pytest.raises(ValueError, match=message):
+        st.relief(10.0, 1500.0, 6000.0, 4000.0, **kw)
+
+
+def test_taper_is_a_wedge_that_reaches_full_thickness_without_a_hinge():
+    """The factor is 0 at and beyond the line and 1 once ``taper_m`` in from it, with u (2 - u) between (u the share
+    of the taper): 0.4375 / 0.75 / 1 at 100 / 200 / 400 m for a line at 1,000 m along the dip direction (+y, azimuth 0)
+    and 400 m of taper, whatever x is. Its slope is 0 where it reaches full thickness: a linear ramp would still
+    be rising there at 2.5e-3 per m."""
+    f = st.taper(position=1000.0, taper_m=400.0)
+    y = np.array([0.0, 999.0, 1000.0, 1100.0, 1200.0, 1399.0, 1400.0, 5000.0])
+    expected = _wedge((y - 1000.0) / 400.0)
+    assert expected[3] == pytest.approx(0.4375) and expected[4] == 0.75
+    for x in (0.0, 123.4, 7000.0):
+        assert f(x + 0.0 * y, y) == pytest.approx(expected)
+    ys = np.array([1399.99, 1400.0])
+    assert np.diff(f(0.0 * ys, ys))[0] / 0.01 < 1e-6
+
+
+def test_taper_follows_the_azimuth_normal():
+    """The line lies across the azimuth normal ``(sin az, cos az)``, the dip direction of ``ramp``: at azimuth 90 the
+    factor depends on x alone, and at 30 degrees it is the profile of (x sin 30 + y cos 30 - position) / taper_m."""
+    f = st.taper(position=200.0, taper_m=1000.0, azimuth=90.0)
+    assert f(700.0, 0.0) == pytest.approx(0.75) and f(700.0, 4321.0) == pytest.approx(0.75)
+    g = st.taper(position=200.0, taper_m=1000.0, azimuth=30.0)
+    x, y = 500.0, 600.0
+    assert g(x, y) == pytest.approx(_wedge((x * 0.5 + y * np.sqrt(3.0) / 2.0 - 200.0) / 1000.0))
+    assert g(x, y) == pytest.approx(0.8148, abs=1e-3)
+
+
+def test_taper_gradient_averages_the_drawn_angle_and_is_steepest_at_the_tip():
+    """Thickness T times the factor rises by T over the taper, so its mean slope is the drawn angle (tan, 10 m over
+    573 m for 1 degree) and its steepest, at the pinch-out, twice that; it never decreases downdip."""
+    t_m, angle = 10.0, 1.0
+    f = st.taper(position=1500.0, taper_m=t_m / np.tan(np.radians(angle)))
+    y = np.linspace(0.0, 4000.0, 8001)
+    thickness = t_m * f(0.0 * y, y)
+    slope = np.diff(thickness) / np.diff(y)
+    assert slope.max() == pytest.approx(2.0 * np.tan(np.radians(angle)), rel=1e-3)
+    assert thickness.max() / (y[thickness >= thickness.max()][0] - y[thickness > 0][0]) == pytest.approx(
+        np.tan(np.radians(angle)), rel=0.02)
+    assert np.all(np.diff(thickness) >= 0.0) and thickness.min() == 0.0 and thickness.max() == t_m
+
+
+def test_taper_edge_moves_the_limit_by_the_relief_it_is_given_and_less_as_the_sand_thickens():
+    """``edge`` (a Structure, metres) is added to the distance in from the line d, fading out over the taper: where it
+    is +R the sand reaches R m farther updip, and the factor is the profile of (d + R (1 - d / taper_m)) / taper_m
+    for d in the taper, so that the full thickness is as smooth as the line."""
+    kw = dict(position=1500.0, taper_m=500.0)
+    rough = st.roughness(60.0, 1200.0, 6000.0, 4000.0, seed=5)
+    f = st.taper(**kw, edge=rough)
+    X, Y = np.meshgrid(np.linspace(0.0, 6000.0, 61), np.linspace(0.0, 4000.0, 41), indexing="ij")
+    d = Y - 1500.0
+    assert np.allclose(f(X, Y), _wedge((d + rough(X, Y) * np.clip(1.0 - d / 500.0, 0.0, 1.0)) / 500.0), atol=1e-12)
+    assert np.array_equal(f(X, Y)[:, d[0] >= 500.0], np.ones(f(X, Y)[:, d[0] >= 500.0].shape))
+    first = (f(X, Y) > 0.0).argmax(axis=1)                                # the first row of sand in each column
+    assert first.max() > first.min()                                      # the limit really is not straight
+
+
+def _disc(cx, cy, radius):
+    """An outline of a disc: negative inside, as ``closure`` is (a distance, so its footprint is exact)."""
+    return st.Structure(lambda x, y: np.hypot(np.asarray(x) - cx, np.asarray(y) - cy) - radius)
+
+
+def test_taper_outline_tapers_from_the_footprint_edge():
+    """With an ``outline`` the sand is its footprint (where the outline is below ``level``) and the factor is the
+    profile of the distance in from its edge over ``taper_m``: a disc of radius 1,000 m with 400 m of taper has
+    (1000 - r) / 400 up to 1 and is 0 outside it, to within the raster step (about 8 m here)."""
+    f = st.taper(None, 400.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0)
+    r = np.array([0.0, 300.0, 599.0, 700.0, 900.0, 990.0, 1010.0, 1500.0])
+    assert f(3000.0 + r, 2000.0 + 0.0 * r) == pytest.approx(_wedge((1000.0 - r) / 400.0), abs=0.03)
+    assert f(3000.0, 2000.0 + r[0]) == 1.0 and f(0.0, 0.0) == 0.0 and f(5500.0, 3900.0) == 0.0
+
+
+def test_taper_outline_unites_with_the_line():
+    """A line and an outline together are the sand of both: a disc centred on the line is a tongue protruding updip
+    from the sheet (downdip of the line the sheet's ramp, updip of it the disc's), the distance measured from the
+    edge of the union, so the taper is as long round the tongue's base as along the sheet."""
+    f = st.taper(2000.0, 400.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0)
+    assert f(500.0, 2100.0) == pytest.approx(_wedge(0.25), abs=0.02)       # the sheet, 100 m down from the line
+    assert f(500.0, 1900.0) == 0.0                                          # updip of the line, outside the disc
+    assert f(3000.0, 1000.0) == pytest.approx(0.0, abs=0.03)                # the disc's tip, 1,000 m updip
+    assert f(3000.0, 1200.0) == pytest.approx(_wedge(0.5), abs=0.03)       # 200 m in from it
+    assert f(3000.0, 1500.0) == pytest.approx(1.0, abs=0.03)                # 500 m in from it: full thickness
+    assert f(3000.0, 2600.0) == 1.0                                         # downdip of the line, inside both
+
+
+@pytest.mark.parametrize("kw,message", [
+    (dict(position=1000.0, taper_m=0.0), "taper_m"),
+    (dict(position=None, taper_m=100.0), "position"),
+    (dict(position=None, taper_m=100.0, outline=_disc(0.0, 0.0, 5.0)), "x_len"),
+])
+def test_taper_refuses_what_it_cannot_draw(kw, message):
+    with pytest.raises(ValueError, match=message):
+        st.taper(**kw)
+
+
+def test_taper_with_isochore_gives_thickness_times_factor_and_collapses_where_it_is_zero():
+    """As an isochore the factor scales a zone: at every node the zone is T f thick, and a column is inactive exactly
+    where all four of its corners hold less than the 5 mm that ``to_grdecl`` counts as a cell."""
+    from resmill.export import _build_geometry
+    nx, ny, nz, dx = 30, 24, 4, 50.0
+    layer = Layer(nx, ny, nz, nx * dx, ny * dx, 20.0, top_depth=1500.0)
+    f = st.taper(position=500.0, taper_m=300.0, azimuth=0.0)
+    Xc, Yc, zc, act = _build_geometry([layer], isochore=[f])
+    thick = zc[:, :, -1] - zc[:, :, 0]
+    assert np.allclose(thick, 20.0 * f(Xc, Yc), atol=1e-6) and thick.min() == 0.0
+    layer_thick = (thick / nz).reshape(nx, 2, ny, 2).max(axis=(1, 3))
+    assert np.array_equal(act.any(axis=2), layer_thick > 5e-3)
+    assert not act[:, :10].any() and act[:, 12:].all()
+
+
+def test_taper_grow_widens_the_sand_all_round_before_the_taper_is_measured():
+    """``grow`` (m) moves the edge of the sand out by that much: a line grown by 300 m is the line 300 m farther out, and
+    a disc of radius 1,000 m grown by 300 m with 300 m of taper is 1 within 1,000 m of its centre and the wedge of
+    (1,300 - r) / 300 beyond it, 0 from 1,300 m: the rim of a barrier that must be there wherever the sand is, and a
+    little beyond."""
+    f = st.taper(position=1000.0, taper_m=300.0, grow=300.0)
+    g = st.taper(position=700.0, taper_m=300.0)
+    y = np.linspace(500.0, 1500.0, 21)
+    assert np.allclose(f(0.0 * y, y), g(0.0 * y, y)) and f(0.0, 400.0) == 0.0 and f(0.0, 1000.0) == 1.0
+    h = st.taper(None, 300.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0, grow=300.0)
+    r = np.array([0.0, 800.0, 1000.0, 1100.0, 1200.0, 1290.0, 1310.0, 1600.0])
+    assert h(3000.0 + r, 2000.0 + 0.0 * r) == pytest.approx(_wedge((1300.0 - r) / 300.0), abs=0.03)
+    assert st.taper(position=1000.0, taper_m=300.0)(0.0, 1100.0) == st.taper(position=1000.0, taper_m=300.0, grow=0.0)(
+        0.0, 1100.0)
+
+
+@pytest.mark.parametrize("grow,lo,hi,band", [(0.0, 620.0, 990.0, (-0.009, -0.002)), (300.0, 1005.0, 1290.0, (0.003, 0.012))],
+                         ids=["inside", "the rim outside"])
+def test_taper_outline_distance_is_taken_to_the_edge_between_pixels_and_its_bias_is_small(grow, lo, hi, band):
+    """The distance from the footprint's edge is taken to the edge between two pixels, on both sides. Over 400 points
+    spread round a disc of 1,000 m, inside it (radius 620 to 990 m) and in a rim of 300 m outside it, the factor's mean
+    error against the exact wedge is the digital disc's own (-0.005 inside, +0.007 outside: a fifth to a third of a
+    7.5 m pixel), and not the 0.01-0.02 more or less that a distance measured to the pixel's centre on either side
+    would carry."""
+    taper_m = 400.0 if grow == 0.0 else 300.0
+    f = st.taper(None, taper_m, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0, grow=grow)
+    rng = np.random.default_rng(3)
+    r, a = rng.uniform(lo, hi, 400), rng.uniform(0.0, 2.0 * np.pi, 400)
+    exact = _wedge((1000.0 - r + grow) / taper_m)
+    error = f(3000.0 + r * np.cos(a), 2000.0 + r * np.sin(a)) - exact
+    assert band[0] < error.mean() < band[1] and np.abs(error).max() < 0.05
+
+
+def test_relief_octaves_halve_from_the_range_to_the_floor_whose_streams_are_the_seeds_children(monkeypatch):
+    """The octaves of ``relief`` are ranges that halve from ``range_m`` to the last one not below ``floor_m``, as many
+    as the floor leaves (6 for the default 32nd of the range, 3 for 400 m of 1,500), each of the SD range ** hurst
+    scaled to ``sd``: seen through ``roughness``, so that an octave below the floor, or at 3 times its neighbour (which
+    would also cost gigabytes), is caught at once."""
+    calls = []
+    monkeypatch.setattr(st, "roughness", lambda sd, r, x_len, y_len, seed=None: calls.append((sd, r, seed)) or st.Structure(
+        lambda x, y: 0.0 * np.asarray(x)))
+    for floor, n in ((None, 6), (400.0, 2), (1500.0, 1)):
+        calls.clear()
+        st.relief(10.0, 1500.0, 6000.0, 4000.0, hurst=0.6, floor_m=floor, seed=7)
+        ranges = np.array([c[1] for c in calls])
+        assert len(calls) == n and np.allclose(ranges, 1500.0 / 2.0 ** np.arange(n))
+        assert ranges.min() >= (1500.0 / 32.0 if floor is None else floor) - 1e-9
+        sds = np.array([c[0] for c in calls])
+        assert np.sqrt((sds ** 2).sum()) == pytest.approx(10.0) and np.allclose(sds[1:] / sds[:-1], 0.5 ** 0.6)
+        assert [c[2].spawn_key for c in calls] == [(i,) for i in range(n)]

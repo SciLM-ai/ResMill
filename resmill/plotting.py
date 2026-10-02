@@ -538,7 +538,7 @@ def plot_reservoir(reservoir, prop='poro_mat', **kwargs):
 def plot_section(model, prop='poro_mat', axis='y', index=None,
                  structure=None, top=None, base=None,
                  erode_above=None, erode_below=None, isochore=None, onlap=False, faults=None,
-                 cmap=None, vmin=None, vmax=None, ax=None, title=None, salt=None):
+                 cmap=None, vmin=None, vmax=None, ax=None, title=None, salt=None, min_thickness=None):
     """True-depth vertical cross-section of a (possibly deformed) model.
 
     Draws every cell of one section as its own quadrilateral using the
@@ -554,7 +554,7 @@ def plot_section(model, prop='poro_mat', axis='y', index=None,
     axis : 'y' | 'x'
         ``'y'``: an XZ section at cell row ``index`` (default the middle
         row); ``'x'``: a YZ section at cell column ``index``.
-    structure, top, base, erode_above, erode_below, isochore, onlap, faults, salt :
+    structure, top, base, erode_above, erode_below, isochore, onlap, faults, salt, min_thickness :
         Same shaping arguments as :func:`resmill.export.to_grdecl`; salt cells
         (inactive) are not drawn.
     """
@@ -562,7 +562,8 @@ def plot_section(model, prop='poro_mat', axis='y', index=None,
 
     layers = list(getattr(model, 'layers', [model]))
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, salt=salt)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, salt=salt,
+        min_thickness=min_thickness)
     vals = _stack_prop(layers, prop).astype(float)
     nz = vals.shape[2]
 
