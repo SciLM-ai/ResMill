@@ -694,3 +694,57 @@ def test_the_fault_seal_takes_a_block_model_listric_masters_and_growth_included(
         values = np.array(values)
         assert values.size == nx * ny * nz and values.min() >= 0.0 and values.max() <= 1.0
         assert 0.0 < np.mean(values < 0.999) < 0.5
+
+
+# ----- the simulation outline (ResSimMill step 7, ruling 2: cells beyond the closure plus a rim are inactive) -----
+
+@pytest.mark.parametrize("make", [tilted_blocks, rollover])
+def test_a_rim_cuts_the_outline_round_the_measured_trap_and_no_rim_cuts_nothing(make):
+    """With ``rim`` the model also holds the columns kept: those within ``rim`` m (column centre to column centre) of the
+    trap the model measured (its largest, every fault sealing), found here with the brute-force distances of every column
+    to every trap column; without, ``outline`` is None and the model is what it was."""
+    from resmill.block_styles import _measure
+    args = (6000.0, 4500.0, 150.0, TOP, THICK, 5)
+    plain, cut = make(*args), make(*args, rim=700.0)
+    assert plain.outline is None and plain.labels == {k: v for k, v in cut.labels.items() if k not in ("rim", "outline_columns")}
+    trap = _measure(6000.0, 4500.0, 150.0, TOP, cut.structure, cut.faults)
+    nx, ny = 40, 30
+    assert cut.outline.shape == (nx, ny) and cut.outline.dtype == bool
+    cells = (np.indices((nx, ny)).reshape(2, -1).T + 0.5) * 150.0
+    inside = cells[trap["mask"].ravel()]
+    nearest = np.sqrt(((cells[:, None, :] - inside[None, :, :]) ** 2).sum(axis=2)).min(axis=1).reshape(nx, ny)
+    assert (cut.outline == (nearest <= 700.0)).all() and cut.outline[trap["mask"]].all() and cut.outline.sum() > trap["mask"].sum()
+    assert cut.labels["rim"] == 700.0 and cut.labels["outline_columns"] == int(cut.outline.sum())
+
+
+def test_a_planning_grid_coarser_than_the_cells_is_read_at_the_cells_columns(monkeypatch):
+    """A map of more than ``PLAN_CELLS`` cells across is measured on a coarser planning grid: the outline still has the
+    model's own columns, each kept when the planning cell holding its centre is."""
+    from resmill import block_styles
+    from resmill import structure as st
+    from resmill.block_styles import _measure
+    monkeypatch.setattr(block_styles, "PLAN_CELLS", 30)                    # 6 km / 30 = 200 m planning cells over 100 m columns
+    m = rollover(6000.0, 4800.0, 100.0, TOP, THICK, 5, rim=500.0)
+    trap = _measure(6000.0, 4800.0, 200.0, TOP, m.structure, m.faults)
+    assert trap["cell"] == (200.0, 200.0) and m.outline.shape == (60, 48)
+    planning = st.outline(trap["mask"], 200.0, 200.0, 500.0)
+    columns = np.indices((60, 48)).reshape(2, -1).T
+    expected = planning[((columns[:, 0] + 0.5) * 100.0 // 200.0).astype(int), ((columns[:, 1] + 0.5) * 100.0 // 200.0).astype(int)]
+    assert (m.outline.ravel() == expected).all() and m.outline.any() and not m.outline.all()
+
+
+def test_the_outline_goes_to_the_exporter_which_writes_every_other_column_inactive(tmp_path):
+    m = rollover(6000.0, 4500.0, 150.0, TOP, THICK, 5, rim=600.0)
+    nx, ny, nz = 40, 30, 3
+    layer = Layer(nx, ny, nz, 6000.0, 4500.0, THICK, top_depth=TOP, kzkx=0.1)
+    layer.poro_mat, layer.perm_mat = np.full((nx, ny, nz), 0.2), np.full((nx, ny, nz), 100.0)
+    _, _, _, act = _build_geometry([layer], structure=m.structure, faults=m.faults, isochore=m.isochore)
+    to_grdecl(layer, tmp_path / "m.grdecl", structure=m.structure, faults=m.faults, isochore=m.isochore, outline=m.outline)
+    assert (tmp_path / "m.grdecl").exists() and act.any(axis=2)[m.outline].any()
+
+
+def test_a_rim_and_no_trap_to_cut_around_is_refused(monkeypatch):
+    from resmill import block_styles
+    monkeypatch.setattr(block_styles, "_measure", lambda *args: None)
+    with pytest.raises(ValueError, match="no trap"):
+        tilted_blocks(6000.0, 4500.0, 150.0, TOP, THICK, 5, rim=500.0)

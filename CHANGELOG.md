@@ -22,6 +22,13 @@
 
 ### Added
 
+- `block_styles.tilted_blocks(..., rim=None)` and `rollover(..., rim=None)`: with a `rim` (m) the model also carries
+  `BlockModel.outline`, the `(nx, ny)` bool map of the columns within `rim` of the trap the model measured
+  (`labels["trap"]`), as `fold_trap` cuts a fold's: pass it to `to_grdecl(outline=)`. The trap is read on the planning
+  grid, which may be coarser than the columns of `dx`, and each column is kept when the planning cell holding its centre
+  is; `labels` gain `rim` and `outline_columns`. A `rim` and no trap to cut around raises `ValueError`. Nothing is drawn
+  for it: without `rim` the model, its labels and every draw are those of before (eight models, four seeds of each
+  style, identical byte for byte in structure, labels, faults and growth isochores).
 - `to_grdecl(outline=)` and `structure.outline`: a simulation outline cut around a trap, as full field decks cut their
   models. `outline(trap, dx, dy, rim)` is the `(nx, ny)` bool map of the columns within `rim` m (centre to centre) of
   a trap's columns (the `mask` of `closure_stats`, or any other trap's); `to_grdecl(outline=map)` writes every cell of

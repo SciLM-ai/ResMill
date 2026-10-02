@@ -74,13 +74,15 @@ class BlockModel:
     """A block-style model: what ``to_grdecl`` takes (``structure``, ``faults``, ``isochore``) and what was drawn.
 
     ``isochore`` is one growth thickness-factor field per zone (or None); ``labels`` holds every drawn value, the faults'
-    counts and the measured traps, plain numbers for the episode record.
+    counts and the measured traps, plain numbers for the episode record. ``outline`` is the ``(nx, ny)`` bool map of the
+    columns a simulation keeps (``to_grdecl(outline=)``), None unless the model was made with a ``rim``.
     """
 
     structure: Structure
     faults: list
     isochore: list | None
     labels: dict = field(default_factory=dict)
+    outline: np.ndarray | None = None
 
 
 def _log_uniform(rng, lo, hi):
@@ -192,21 +194,41 @@ def _population(style, trap, x_len, y_len, dx, top, thickness, density, seed, re
     return faults
 
 
-def _finish(faults, structure, isochore, x_len, y_len, grid, top, labels, structure_trap):
-    """Name the faults in order, measure the trap on the finished model and label both traps."""
+def _outline(trap, x_len, y_len, dx, rim):
+    """The columns of the simulation outline of a model: those within ``rim`` m (column centre to column centre) of the
+    measured ``trap`` (:func:`_measure`), the closure and a rim as a field deck cuts its model. The trap is read on the planning
+    grid, which may be coarser than the model's columns of ``dx`` m: each column is kept when the planning cell holding its
+    centre is."""
+    if trap is None:
+        raise ValueError("the model holds no trap to cut an outline around (a rim was given)")
+    cx, cy = trap["cell"]
+    planning = st.outline(trap["mask"], cx, cy, rim)
+    nx, ny = int(round(x_len / dx)), int(round(y_len / dx))
+    i = np.minimum(((np.arange(nx) + 0.5) * (x_len / nx) // cx).astype(int), planning.shape[0] - 1)
+    j = np.minimum(((np.arange(ny) + 0.5) * (y_len / ny) // cy).astype(int), planning.shape[1] - 1)
+    return planning[np.ix_(i, j)]
+
+
+def _finish(faults, structure, isochore, x_len, y_len, grid, top, labels, structure_trap, dx, rim=None):
+    """Name the faults in order, measure the trap on the finished model and label both traps, and with a ``rim`` cut the
+    outline round the trap measured."""
     for n, f in enumerate(faults):
         f.name = f"F{n + 1:03d}"
     kinds = {}
     for f in faults:
         kinds[f.kind] = kinds.get(f.kind, 0) + 1
+    trap = _measure(x_len, y_len, grid, top, structure, faults)
     labels.update(n_faults=len(faults), fault_kinds=kinds, planning_dx_m=float(grid), trap_assumes_sealing_faults=True,
-                  structure_trap=_trap_label(structure_trap),
-                  trap=_trap_label(_measure(x_len, y_len, grid, top, structure, faults)))
-    return BlockModel(structure, faults, isochore, labels)
+                  structure_trap=_trap_label(structure_trap), trap=_trap_label(trap))
+    outline = None
+    if rim is not None:
+        outline = _outline(trap, x_len, y_len, dx, rim)
+        labels.update(rim=float(rim), outline_columns=int(outline.sum()))
+    return BlockModel(structure, faults, isochore, labels, outline)
 
 
 def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, azimuth=None, tilt=None, dip=None,
-                  width=None, density=None, scatter=0.1):
+                  width=None, density=None, scatter=0.1, rim=None):
     """A tilted-fault-block model (see the module docstring).
 
     ``x_len``, ``y_len`` the model's size and ``dx`` its cell size (m); ``top`` the reservoir top's datum depth and
@@ -216,7 +238,9 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
     horst-graben 0.5-5, T11); ``dip`` of the faults (25-35, T5; horst-graben 55-70, T11); ``width`` of a block at the
     horizon (m, nominal, log-uniform 1,500-5,000, T1; capped so that the throw stays under 1.5 km); ``density`` of the faults inside
     the trap with a throw of 5 m or more (per km2: log-normal, median 1.7, 1-3, T28). ``scatter``: log10 sd of the faults'
-    throws about ``width tan(tilt)`` (0.1 [J]; 0 for exact blocks).
+    throws about ``width tan(tilt)`` (0.1 [J]; 0 for exact blocks). ``rim`` (m), when given, also returns the simulation
+    ``outline``: the columns within it of the trap the model measured (``labels["trap"]``), as :func:`fold_trap` cuts a
+    fold's; nothing is drawn for it, and without it the model is what it was.
     """
     rng = np.random.default_rng(seed)
     u = dict(kind=rng.uniform(), az=rng.uniform(0.0, 360.0), tail=rng.uniform(), tilt=rng.uniform(), dip=rng.uniform(),
@@ -292,11 +316,11 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
                   beta=math.sin(math.radians(tilt + dip)) / math.sin(math.radians(dip)) if domino else 1.0, n_main=count, density_per_km2=density,
                   throws_m=[float(c) for c in cutoff], heave_m=[float(c) / tan_d for c in cutoff],
                   length_m=float(length), antithetic_share=antithetic, regional_ratio=ratio)
-    return _finish(faults, structure, None, x_len, y_len, grid, top, labels, frame)
+    return _finish(faults, structure, None, x_len, y_len, grid, top, labels, frame, dx, rim)
 
 
 def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, azimuth=None, flatten=None, ramp_base=None,
-             dip=None, throw=None, regional_dip=None, expansion=None, density=None, length=None, zones=1):
+             dip=None, throw=None, regional_dip=None, expansion=None, density=None, length=None, zones=1, rim=None):
     """A growth-fault rollover model (see the module docstring).
 
     ``x_len``, ``y_len``, ``dx``, ``top``, ``thickness`` as for :func:`tilted_blocks`, ``zones`` the number of layers of
@@ -315,7 +339,8 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
     in the reservoir and the throw at the centre follows from it. ``regional_dip`` toward the basin (degrees, 0.5-3 [J]);
     ``expansion`` index of the fault zone (downthrown over upthrown thickness, log-uniform 1.1-2.5, 5 % of cases 2.5-5, T18;
     Wilcox 1.3-2.5), shared among its faults as the count-th root; ``density`` of the faults inside the trap with 5 m of throw or
-    more (per km2: log-normal, median 1, 0.5-2, T28).
+    more (per km2: log-normal, median 1, 0.5-2, T28). ``rim`` (m), when given, also returns the simulation ``outline``: the
+    columns within it of the trap the model measured, as for :func:`tilted_blocks`.
 
     The faults inside a trap are drawn on a closure that frames it, and a drag that never turns the regional dip leaves
     the master faults none: drawn values that leave the masters and the regional dip no trap of at least 1 km2 (and nine
@@ -417,4 +442,4 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
                   flatten_m=built["bend"], ramp_base_m=built["masters"][0]["ramp_base_m"],
                   regional_dip_deg=float(built["alpha"]), expansion=ei, expansion_per_fault=each, zones=int(zones),
                   n_masters=count, density_per_km2=dens, regional_ratio=ratio, basinward_share=basinward, masters=built["masters"])
-    return _finish(faults, structure, isochore, x_len, y_len, grid, top, labels, frame)
+    return _finish(faults, structure, isochore, x_len, y_len, grid, top, labels, frame, dx, rim)
