@@ -13,6 +13,14 @@
 
 ### Added
 
+- `fold_traps.fold_trap(style, x_len, y_len, dx, top, thickness, closure, roughness=None, faults=None)`: a fold-style
+  model from ResMill's own pieces, for the six fold styles of `fault_patterns` (`four_way`, `turtle`,
+  `faulted_anticline`, `fold_belt`, `fault_bounded`, `low_relief`). The closure (`structure.closure`) plus its roughness
+  (`structure.roughness`) is the structure, and the style's faults (`fold_faults`) are drawn on the fold without the
+  roughness. Every value, seeds included, is an argument and nothing is drawn, so the model is a pure function of
+  them; `roughness=None` and `faults=None` are a smooth fold without faults. Returns `{"kwargs": ..., "meta": ...}`:
+  the keywords for `to_grdecl` (`structure`, `faults`) and the style, the asked area and height, the crest (a tilt moves
+  it off the centre), the number of faults and their sets. New module, nothing existing changes.
 - `to_grdecl(report=dict)` and `fault_seal.block_inputs`, `blocks_at`, `block_labels`: the fault blocks of a model for
   any fluid, without writing the grid again. `fault_blocks` needed the corner stack and the faces, which only
   `to_grdecl` holds, and its contacts depend on the fluid (`Capillary.delta_rho`), drawn after the model. `report` is
