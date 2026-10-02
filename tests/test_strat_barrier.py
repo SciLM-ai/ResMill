@@ -4,7 +4,7 @@ import pytest
 from scipy import ndimage
 
 from resmill.export import _build_geometry
-from resmill.strat_traps import strat_trap, trap_report
+from resmill.strat_traps import strat_trap, trap_report, zone_trap
 from tests.strat_helpers import _layers
 
 
@@ -142,6 +142,9 @@ def test_the_report_gives_a_limit_that_keeps_the_barrier_dry_and_the_rim_leaves_
     assert trap["crest_depth"] - top <= 0.25 * COLUMN + 2.0 * cell
     wet = lambda contact: (_shallowest(zc, act, slice(n_sand, None)) < contact - COLUMN)   # the shallowest barrier cell
     assert not wet(trap["limit_depth"] - 1e-6) and wet(trap["limit_depth"] + 1.0)
+    free = [t for t in zone_trap(zc, act, dx, dx, k=slice(0, n_sand)) if t["crest"] == trap["crest"]][0]
+    assert trap["height"] < free["height"] and free["limited_by"] != "barrier"             # the barrier lets it fill less:
+    assert 0.0 < trap["area"] < free["area"] and not (trap["mask"] & ~free["mask"]).any()   # a smaller part of the same trap
 
 
 def test_a_barrier_needs_the_column_it_holds_and_a_column_needs_a_barrier():

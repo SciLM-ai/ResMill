@@ -131,7 +131,7 @@ def _pools(depth):
                 for m in lower:
                     join(r, m, at)
     for r in {find(c) for c in parent}:
-        if not opened[r] and crest[r] is not None:
+        if not opened[r]:
             pools.append((divmod(crest[r], ny), math.inf, None))
     return pools
 

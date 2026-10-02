@@ -307,6 +307,15 @@ def test_min_thickness_is_the_collapse_threshold_and_defaults_to_5_mm(tmp_path):
     assert to_pyvista(layer, isochore=[wedge], min_thickness=6e-3).cell_data["ACTNUM"].sum() == nx - 5
 
 
+def test_plot_section_takes_the_keywords_a_stratigraphic_trap_returns(tmp_path):
+    """``strat_trap``'s kwargs go to ``to_grdecl``, ``to_pyvista`` and ``plot_section`` alike, ``min_thickness`` included."""
+    from resmill.strat_traps import strat_trap
+    layer = make_layer(nx=40, ny=30, nz=2, dx=100.0, dz=2.0, top=2000.0)
+    built = strat_trap("pinchout", 4000.0, 3000.0, 2000.0, [4.0], seed=1, dip=1.0, taper_angle=0.5, area=None)
+    plot_section(layer, **built["kwargs"])
+    plt.close("all")
+
+
 def test_plot_section_refuses_a_fully_eroded_model():
     with pytest.raises(ValueError, match="no active cells"):
         plot_section(make_layer(), erode_above=TOP + NZ * DZ + 1.0)

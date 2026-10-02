@@ -409,3 +409,20 @@ def test_a_mound_is_whole_in_the_middle_whatever_its_aspect_so_the_taper_is_limi
     layers = _layers(x_len, y_len, dx, [10.0], dz=1.0)
     _, _, zc, _ = _build_geometry(layers, **built["kwargs"])
     assert (zc[:, :, -1] - zc[:, :, 0]).max() == pytest.approx(10.0, rel=0.02)
+
+
+def test_the_wander_fades_out_over_the_taper_so_the_thick_sand_is_smooth_and_the_limit_rough():
+    """The edge's relief is added to the distance in from the edge, fading linearly over the taper: where the sand has
+    nearly its full thickness (the share u of the taper above 0.85) the factor differs from the smooth wedge's by
+    under a twentieth of what it differs by at the limit (u under 0.15): 2 (1 - u)^2 R / taper against 2 R / taper,
+    where an unfaded relief would carry it to a ninth."""
+    x_len, y_len = 8000.0, 6000.0
+    kw = dict(dip=1.0, taper_angle=0.4, area=None, range_m=1500.0, hurst=0.6, cell=50.0)
+    smooth = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=4, **kw)
+    rough = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=4, wander=250.0, **kw)
+    x, y = np.meshgrid(np.linspace(0.0, x_len, 161), np.linspace(0.0, y_len, 241), indexing="ij")
+    f0, f1 = smooth["kwargs"]["isochore"][0](x, y), rough["kwargs"]["isochore"][0](x, y)
+    u = np.clip((y - smooth["meta"]["line"]) / smooth["meta"]["taper_m"], 0.0, 1.0)         # the nominal share of the taper
+    inner, edge = (u > 0.85) & (u < 1.0), (u > 0.0) & (u < 0.15)
+    rms = lambda m: np.sqrt(np.mean((f1 - f0)[m] ** 2))
+    assert rms(edge) > 0.1 and rms(inner) < 0.05 * rms(edge)

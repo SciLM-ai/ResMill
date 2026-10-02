@@ -351,8 +351,9 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     :func:`trap_report`. ``meta["closure_nominal"]`` (and ``crest_nominal``, ``spill_nominal``) is that of the main
     tongue with a smooth edge and a flat top, the tangent of the dip times its length: a nominal figure, not the closure.
     With a rough edge, tongues, relief or a mound the closure is what the geometry has, and :func:`trap_report` reads
-    it from the cells (realized over nominal 0.8 / 1.3 / 1.7 at P10 / P50 / P90 over the plan's ranges, 0.96 / 1.1 /
-    1.5 for the nosed kinds): label an episode from the report, never from ``meta``.
+    it from the cells (realized over nominal 1.0 / 1.3 / 1.7-2.1 at P10 / P50 / P90 over the plan's ranges once a
+    destroyed trap is refused, 0.95 / 1.05 / 1.3 for the nosed kinds): label an episode from the report, never from
+    ``meta``.
     """
     nosed, lens = kind in NOSED, kind == "lens"
     thicknesses = [float(t) for t in thicknesses]

@@ -220,6 +220,9 @@ def test_every_local_minimum_of_the_top_is_a_pool_with_the_level_where_it_spills
         "sealed", "spill", "spill"]
     assert [t["area"] for t in traps] == [7.0, 1.0, 2.0]            # the pool of 6 m: the whole body, sealed
     assert [t["crest"] for t in _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, min_height=2.5)] == [(1, 2), (1, 6)]
+    main, pocket = _traps(_chain([20, 6, 12, 4]), 1.0, 1.0, min_height=0.0)           # the pool of 6 m has the cell of 20 m on
+    assert pocket["spill_point"] == (1, 3) and pocket["spill_depth"] == 12.0           # its left, and its saddle on its right
+    assert main["crest_depth"] == 4.0 and main["spill_point"] is None
     assert [t["crest"] for t in _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, min_height=9.0)] == [(1, 2)]
 
 
@@ -312,6 +315,8 @@ def test_the_contact_limit_is_the_shallowest_column_of_the_edge_for_the_pool_tha
     barred = _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, column=5.0, barrier_top=4.0, min_height=0.0)
     assert [t["limit_depth"] for t in barred] == [9.0, 9.0, 9.0] and [t["contact_limit"] for t in barred] == [9.0, 9.0,
                                                                                                            9.0]
+    low = _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, column=5.0, barrier_top=20.0, min_height=0.0)
+    assert [t["limit_depth"] for t in low] == [11.0, 10.0, 14.0]       # a barrier whose top is deeper than the crest: from the crest
     deep = _chain([12, 6, 10, 8, 14, 9, 11, 20], exit=True)           # an exit of 20 m, the primary pool's spill
     assert {t["crest_depth"]: t["contact_limit"] for t in _traps(deep, 1.0, 1.0, min_height=0.0)} == {6.0: 20.0, 8.0: 10.0,
                                                                                                         9.0: 14.0}
