@@ -39,6 +39,36 @@
   100 m / 6 apart (24 seeds) a walk asked for 2.0 has a median 1.9, 2.1 gives
   2.25, 2.2 gives 2.5 (P10 2.2, P90 3.0), 2.3 gives 2.9 and 2.5 gives 4.1. Raise
   the clip and ask for about 2.0 to 2.2.
+- `drapes` (`ChannelLayer`): mud drapes on the bases of channel storeys
+  (levels), as transmissibility multipliers on the faces between a
+  channel-fill cell and the older-storey sand next to it, not as mud cells
+  (a drape of 0.1-1.5 m is thinner than a cell). A drape covers part of an
+  element's base (a median 60 %, under 5 % to over 90 % over 17 outcrops,
+  Barton et al. 2010); in Barton's sector model recovery falls from 0.60
+  without drapes to 0.53 at 60 % coverage and 0.20 at 90 % (his Fig. 2;
+  Ruetten 2021: the same shape, at breakthrough). The multiplier is the
+  thin barrier [1 + (t / h)(ks / kd - 1)]^-1 of a mud layer `t` thick
+  (`h` the cell size, `ks` the harmonic mean permeability, `kd` the
+  drape's, by default the FF mud's): it seals a vertical face and chokes a
+  lateral face of a wide cell. `drapes` is a dict: `coverage`,
+  `coverage_concentration` (k of the Beta each storey's share is drawn
+  from; 0.71: continuous in a quarter of the storeys), `margin_bias`,
+  `thickness`, `perm`, `hole_range_m` or `hole_range_widths`. Facies,
+  porosity and permeability do not change, the drapes have a random stream
+  of their own, and `to_grdecl` writes them as MULTX, MULTY and MULTZ
+  (times a fault seal's; a later BOX / MULTX erases them where MULTIPLY
+  'MULTX' keeps them). `sample_drapes` draws a reservoir's settings. A
+  cell's storey is looked up once per flow event: same result, 8-10 times
+  faster. Off by default: outputs are bit-identical to before.
+- `distinct_events=True` (`ChannelLayer`): give every flow event its own
+  (poro_mult, log_perm_offset) pair. Both are clipped at +-2 sd, so two
+  events sometimes draw the same pair, and the engine's record (pair to
+  level, how levee fading and `drapes` find a cell's storey) keeps the last
+  one's level: in 80 anchor models 13 had cells of a wrong storey (0.45 %
+  of the sand, 16 % in the worst). A repeated pair moves to the next
+  free float32 poro_mult (1e-7 relative per repeat, no random number drawn). Compare runs
+  made with the same setting. Off by default: outputs are bit-identical to
+  before.
 - `path_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): metres between a channel path's points. Alluvsim spaces
   them one grid cell apart, and its bend rules count points: migration
