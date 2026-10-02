@@ -29,6 +29,8 @@ import numpy as np
 from scipy import ndimage
 from scipy.interpolate import RegularGridInterpolator
 
+from .faults import _frame, _plane, ww_profile
+
 
 def _as_field(obj):
     """Coerce Structure | callable | scalar to a plain callable f(x, y)."""
@@ -209,7 +211,8 @@ def _spill_levels(depth, wall_x=None, wall_y=None):
     flood from the edge, 4-connected). ``wall_x`` (nx-1, ny) and ``wall_y`` (nx, ny-1) give the pass level of each cell
     edge (between i and i+1, j and j+1): a path crosses it at the highest of its level so far, the next cell's depth
     and that pass level, so +inf seals the edge and -inf leaves it free (a boolean array seals its True edges). A cell
-    no path reaches keeps an infinite level."""
+    no path reaches keeps an infinite level. A cell of infinite depth holds no rock (collapsed by a fault): no path
+    crosses it, and its own level stays infinite."""
     nx, ny = depth.shape
     walls = [None if w is None else np.where(w, np.inf, -np.inf).tolist() if w.dtype == bool else w.tolist()
              for w in (wall_x, wall_y)]
@@ -392,3 +395,40 @@ def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):
 
     return Structure(fn)
 
+
+def growth(fault, expansion, width, depth):
+    """A zone's thickness factor for a zone laid down at ``depth`` (m) while ``fault`` was moving (growth strata).
+
+    1 in the footwall, ``expansion`` (the growth or expansion index: downthrown over upthrown thickness; Ewing et al. 1986,
+    Xiao & Suppe 1992: 1.1-2.5 per fault) in the hanging wall. The factor rises as a smooth step from 1 at the fault's trace
+    at ``depth`` (the plane's footwall cutoff there) to ``expansion`` ``width`` m toward the hanging wall (``None``: the
+    horizon's heave at the fault's centre line, so that the hanging wall begins at the full factor), and its excess
+    is tapered along the strike by the throw profile (the fault's tip ellipse at ``depth``, relative to its centre line):
+    no growth where the fault has no throw at that depth. A listric fault (:attr:`resmill.faults.Fault.flatten`) moves its whole
+    hanging wall by one heave, that of the horizon at ``z_center``, so its step spans that heave at every depth and its taper
+    does not depend on the depth. The step is the model: the whole hanging wall carries the full factor, with no decay length
+    and no wedge thinning away from the fault (T18 gives the index, not a wedge's shape). Pass it to ``to_grdecl(isochore=[...])``;
+    it needs ``fault.z_center``, the depth scale of the tip ellipse.
+    """
+    if fault.z_center is None:
+        raise ValueError("growth needs fault.z_center, the depth scale of the fault's tip ellipse")
+    if not (width is None or width > 0.0) or not expansion > 0.0:
+        raise ValueError(f"growth needs a width and an expansion above 0, got {width!r} and {expansion!r}")
+    zc = float(fault.z_center)
+    trace = _plane(fault, zc)[1]
+    h0 = float(trace(depth))
+    lx = 0.5 * fault.length
+    listric = fault.flatten is not None                 # its hanging wall has one heave and no taper with depth (faults.py)
+    rz = 0.0 if listric else (depth - zc) / np.sin(np.radians(fault.dip)) / (lx / fault.aspect)
+    centre = float(ww_profile(abs(rz)))
+    if width is None:
+        ref = zc if listric else depth
+        width = max(float(trace(ref + fault.throw * centre) - trace(ref)), 1.0)
+
+    def fn(x, y):
+        s, h = _frame(fault, np.asarray(x, dtype=float), np.asarray(y, dtype=float))
+        t = np.clip((h - h0) / width, 0.0, 1.0)
+        taper = ww_profile(np.sqrt((s / lx) ** 2 + rz ** 2)) / centre if centre > 0.0 else 0.0
+        return 1.0 + (expansion - 1.0) * t * t * (3.0 - 2.0 * t) * taper
+
+    return Structure(fn)

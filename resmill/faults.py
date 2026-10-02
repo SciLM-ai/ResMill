@@ -12,6 +12,20 @@ repeat a section, so each column goes whole to one side), and its trace may curv
 chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surfaces across their slip
 (Candela et al. 2012), for the bends left where segments linked; Walsh et al. 2003).
 
+With ``flatten`` the fault is listric: its plane is straight at ``dip`` down to the base of its ramp (``ramp_base``, default the
+tip ellipse's centre), as the faults of the Gulf's seismic sections are down to their bends, and below it tan(dip) falls by 1/e
+every ``flatten`` m of depth, so the plane flattens into a long gentle tail. ``flatten`` is 2.4 km at the median of six published
+faults (Xiao & Suppe 1992; Ewing et al. 1986, whose bends lie 1.0-2.7 km down) and 2.2 km if Bruce's (1973) fall from 60 to 15
+degrees takes about 4 km. The footwall is rigid while the hanging wall moves by vertical shear with constant heave (Gibbs 1983;
+White et al. 1986): one heave H for the whole block, so that a column of it slides down the plane as a unit and no zone changes
+thickness. ``throw`` is the throw, at the fault's centre line, of the horizon at the tip ellipse's centre (``z_center``), dying out
+along the strike like the tip line's profile, and gives the heave H = trace(z_center + throw) - trace(z_center); the column h from
+the trace then drops by plane(h) - plane(h - H), whatever its depth. The throw of a horizon is H tan(dip) where it cuts the plane:
+``throw`` at ``z_center``, more above it where the plane is steeper, less as the plane flattens, so that the hanging wall rolls
+over toward the fault above the bend, from the cutoff itself when the cutoff lies below it. The tip ellipse's depth plays no part
+(the block moves at every depth), and a plane that is planar as ``flatten`` grows gives the constant throw of a rigid hanging
+wall, that of a planar fault with a tall tip ellipse. ``hw_share`` and ``drag`` play no part.
+
 :func:`apply_fault` displaces the interface stack in 3-D and reports which side of the fault each cell
 ended on; :func:`face_records` turns that into the stair-stepped cell faces the GRDECL export writes as
 ``FAULTS``, with the fault's ``mult`` as ``MULTFLT`` (a face multiplier acts on every connection through
@@ -23,6 +37,8 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+
+TIP_ASPECT = 2.15                   # tip-line length / height of a fault (Nicol et al. 1996)
 
 
 @dataclass
@@ -39,13 +55,15 @@ class Fault:
     drag: tuple = (0.4, 0.2)       # reverse-drag reach on the hanging wall and footwall, x length (0: none)
     radius: float = math.inf       # signed trace curvature radius; inf: a straight trace
     z_center: float | None = None  # depth of the tip ellipse's centre; None: the stack's middle there
-    aspect: float = 2.15           # tip-line length / height
+    aspect: float = TIP_ASPECT     # tip-line length / height
     reverse: bool = False          # a reverse fault: the hanging wall moves up
     mult: float = 1.0              # transmissibility multiplier across the fault (MULTFLT)
     name: str = ""
     bends: float = 0.0             # rms wander of the trace about its chord or arc, x length (0: none)
     seed: int | None = None        # draws the bends (required with them)
     kind: str = ""                 # the set a fault pattern drew it from (a label only)
+    flatten: float | None = None   # listric: tan(dip) falls by 1/e per this much depth (m) below the ramp; None: a planar fault
+    ramp_base: float | None = None  # listric: depth (m) where the straight ramp ends and the flattening starts; None: z_center
 
     def __post_init__(self):
         problems = [msg for bad, msg in (
@@ -60,6 +78,10 @@ class Fault:
             (not self.mult >= 0.0, "mult must be >= 0"),
             (not self.bends >= 0.0, "bends must be >= 0"),
             (self.bends > 0.0 and self.seed is None, "bends needs a seed"),
+            (self.flatten is not None and not 0.0 < self.flatten < math.inf, "flatten must be a finite length > 0"),
+            (self.flatten is not None and self.reverse, "a listric fault (flatten) is a normal fault: reverse must be False"),
+            (self.ramp_base is not None and (self.flatten is None or not math.isfinite(self.ramp_base)),
+             "ramp_base is a finite depth and needs flatten (a listric fault)"),
         ) if bad]
         if problems:
             raise ValueError(f"Fault {self.name!r}: " + "; ".join(problems))
@@ -121,6 +143,36 @@ def _corners(a):
     return np.repeat(np.repeat(a, 2, axis=0), 2, axis=1)
 
 
+def _listric(dip, zc, flatten, zb=None):
+    """The plane of a listric fault: straight at ``dip`` degrees down to the bend at depth ``zb`` (default ``zc``), and below it
+    tan(dip) falls as exp(-(z - zb) / flatten): z = zb + flatten ln(1 + h tan(dip) / flatten) under a column ``h`` m from the
+    trace at ``zb``, a curve that leaves the ramp without a kink and is the ramp itself as ``flatten`` grows. Returns
+    ``plane(h)``, its depth under a column ``h`` m from the trace at depth ``zc`` toward the hanging wall, and ``trace(z)``,
+    the inverse (the exponent is capped at 700, where it would overflow: a depth no model reaches)."""
+    tan_d = math.tan(math.radians(dip))
+    zb = zc if zb is None else zb
+
+    def plane0(h):                                                       # from the bend's trace
+        h = np.asarray(h, dtype=float)
+        return zb + np.minimum(h, 0.0) * tan_d + flatten * np.log1p(np.maximum(h, 0.0) * tan_d / flatten)
+
+    def trace0(z):
+        z = np.asarray(z, dtype=float) - zb
+        return np.minimum(z, 0.0) / tan_d + flatten / tan_d * np.expm1(np.minimum(np.maximum(z, 0.0) / flatten, 700.0))
+
+    shift = float(trace0(zc))                                            # the trace at zc, from the bend's: 0 when the bend is at zc
+    return (lambda h: plane0(np.asarray(h, dtype=float) + shift)), (lambda z: trace0(z) - shift)
+
+
+def _plane(fault, zc):
+    """``plane(h)`` and ``trace(z)`` of ``fault``'s plane with its tip ellipse centred at depth ``zc``: the plane's depth
+    under a column ``h`` m from the trace there (toward the hanging wall), and the distance of the plane at depth ``z``."""
+    if fault.flatten is None:
+        tan_d = math.tan(math.radians(fault.dip))
+        return (lambda h: zc + h * tan_d), (lambda z: (z - zc) / tan_d)
+    return _listric(fault.dip, zc, fault.flatten, fault.ramp_base)
+
+
 def apply_fault(fault, Xc, Yc, Zc):
     """Displace the interface stack ``Zc`` (2nx, 2ny, nk) by ``fault``.
 
@@ -130,20 +182,24 @@ def apply_fault(fault, Xc, Yc, Zc):
     nx, ny = Xc.shape[0] // 2, Xc.shape[1] // 2
     Xm, Ym = _cells(Xc, nx, ny), _cells(Yc, nx, ny)
     Zcell = _cells(Zc, nx, ny)
-    sin_d, tan_d = math.sin(math.radians(fault.dip)), math.tan(math.radians(fault.dip))
+    sin_d = math.sin(math.radians(fault.dip))
     if fault.z_center is None:
         i0 = int(np.clip(np.argmin(np.abs(Xm[:, 0] - fault.center[0])), 0, nx - 1))
         j0 = int(np.clip(np.argmin(np.abs(Ym[0, :] - fault.center[1])), 0, ny - 1))
         zc = float(0.5 * (Zcell[i0, j0, 0] + Zcell[i0, j0, -1]))
     else:
         zc = float(fault.z_center)
+    plane, trace = _plane(fault, zc)
     lx = 0.5 * fault.length
     ly = lx / fault.aspect
 
     def displacement(s, h, z):
+        if fault.flatten is not None:                   # vertical shear, a rigid footwall: one heave per column, from the throw at z_center
+            heave = trace(zc + fault.throw * ww_profile(np.abs(s) / lx)) - trace(zc)
+            return np.broadcast_to((plane(h) - plane(h - heave))[..., None], z.shape), 0.0
         r = np.sqrt((s[..., None] / lx) ** 2 + ((z - zc) / sin_d / ly) ** 2)
         d = fault.throw * ww_profile(r)
-        hp = np.abs(h[..., None] if fault.reverse else h[..., None] - (z - zc) / tan_d)   # from the plane at depth z
+        hp = np.abs(h[..., None] if fault.reverse else h[..., None] - trace(z))           # from the plane at depth z
         taper = [np.clip(1.0 - hp / (reach * fault.length), 0.0, None) ** 2 if reach > 0.0 else 1.0
                  for reach in fault.drag]
         return fault.hw_share * d * taper[0], (1.0 - fault.hw_share) * d * taper[1]
@@ -153,7 +209,7 @@ def apply_fault(fault, Xc, Yc, Zc):
     s_c, h_c = _frame(fault, Xm, Ym)
     dhw_k, dfw_k = displacement(s_k, h_k, Zc)
     dhw_c, dfw_c = displacement(s_c, h_c, Zcell)
-    zp = zc + h_c * tan_d                                         # the fault plane's depth under each column
+    zp = plane(h_c)                                               # the fault plane's depth under each column
     zpk = _corners(zp)[..., None]
     if fault.reverse:                     # a k-ordered column cannot repeat a section: whole columns to one side
         hw = np.broadcast_to((h_c > 0.0)[..., None], Zcell.shape)

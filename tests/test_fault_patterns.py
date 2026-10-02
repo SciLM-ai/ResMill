@@ -436,3 +436,36 @@ def test_regional_faults_spread_evenly_over_the_model_when_the_cap_does_not_bind
     rings = np.hypot(centres[:, 0] - CENTER[0], centres[:, 1] - CENTER[1])
     assert min(quarters) > 0.4 * len(centres)
     assert np.mean(rings > 4000.0) > 0.5                                 # most of the model lies over 4 km out
+
+
+# ----- step 4: the rollover and tilted-block styles' populations, and the share of faults dipping basinward -----
+
+def dips_basinward(fault, n=(1.0, 0.0)):
+    """Whether a fault's hanging wall lies toward ``n`` (the regional extension's direction)."""
+    _, normal = unit(fault.strike)
+    return float(np.dot(fault.hanging_wall * normal, n)) > 0.0
+
+
+@pytest.mark.parametrize("basinward", [0.3, 0.55, 0.8])
+def test_basinward_is_the_share_of_regional_faults_whose_hanging_wall_lies_basinward(basinward):
+    """The regionally oriented faults dip basinward 80 % of the time (the default, as before); `basinward` sets the share,
+    so a rollover's crestal faults can be 40-70 % antithetic (Okari: 42 %; Mississippi Canyon: more than 10 equally spaced)."""
+    kw = dict(regional=(1.5, 0.0)) if basinward == 0.8 else dict(regional=(1.5, 0.0), basinward=basinward)
+    regs = [f for f in pooled("faulted_anticline", dome(1.0), seeds=range(24), **kw) if f.kind in ("regional", "major")]
+    assert len(regs) > 150
+    share = np.mean([dips_basinward(f) for f in regs])
+    assert share == pytest.approx(basinward, abs=0.08)
+
+
+@pytest.mark.parametrize("style", ["rollover", "tilted_blocks"])
+def test_the_block_styles_draw_the_population_of_a_trap_without_the_foldstyles_own_sets(style):
+    """`rollover` and `tilted_blocks` are fold_faults styles for the faults inside the trap of a block model: the rollover
+    keeps the keystone graben on its crest (half the time), the tilted blocks none, neither the fold belt's thrusts and tears,
+    a bounding fault or step faults."""
+    fold = dome(2.0)
+    kinds = [f.kind for s in range(30) for f in faults_of(style, fold, s, regional=(1.0, 0.0))]
+    assert set(kinds) <= set(FOLD) | {"regional", "major", "inherited", "graben"}
+    assert ("graben" in kinds) == (style == "rollover")
+    graben = sum(any(f.kind == "graben" for f in faults_of(style, fold, s, regional=(1.0, 0.0))) for s in range(60))
+    if style == "rollover":
+        assert 0.3 <= graben / 60 <= 0.7

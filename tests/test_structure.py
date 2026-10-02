@@ -1,3 +1,6 @@
+import contextlib
+import signal
+
 import numpy as np
 from scipy import ndimage
 import pytest
@@ -118,6 +121,53 @@ def test_closure_stats_measures_a_paraboloid_dome():
     assert stats["height"] == pytest.approx(80.0, rel=0.01)
     assert stats["spill_depth"] == pytest.approx(2000.0)
     assert stats["mask"][150, 150] and not stats["mask"][0, 0]
+
+
+@contextlib.contextmanager
+def within(seconds):
+    """Fail, not hang, when the block runs over ``seconds`` (SIGALRM, where the platform has it)."""
+    if not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def expired(*_):
+        raise TimeoutError(f"no answer in {seconds} s")
+
+    old = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def test_spill_levels_treat_cells_without_rock_as_walls():
+    """A cell of infinite depth is one a fault collapsed (no rock): no path crosses it and its own level stays infinite.
+    Two of them side by side once kept pushing each other onto the flood's queue for ever (the test gives it 20 s, so that
+    such a regression fails instead of hanging). A band of them across a map splits it into two maps (each spills at its own
+    edge), and a pit ringed by them has no way out: its level is infinite."""
+    band = np.full((5, 8), 7.0)
+    band[:, 3:5] = np.inf                                                # a collapsed band, two cells wide, across the map
+    band[2, 6] = 1.0                                                     # a pit east of it
+    band[2, 1] = 2.0                                                     # and one west
+    with within(20):
+        spill = st._spill_levels(band)
+    assert np.isinf(spill[:, 3:5]).all()
+    assert (spill[2, 6], spill[2, 1]) == (7.0, 7.0)                      # each spills over its own side's 7 m rim
+    ringed = np.full((7, 7), 10.0)
+    ringed[2:5, 2:5] = np.inf
+    ringed[3, 3] = 2.0                                                   # a pit inside a ring of collapsed cells
+    with within(20):
+        spill = st._spill_levels(ringed)
+    assert np.isinf(spill[2:5, 2:5]).all()
+    assert (spill[np.isfinite(ringed)][ringed[np.isfinite(ringed)] == 10.0] == 10.0).all()
+    edge = np.full((4, 4), 5.0)
+    edge[0, :] = np.inf                                                  # rockless cells along the edge seed no flood from it
+    edge[2, 2] = 1.0
+    with within(20):
+        spill = st._spill_levels(edge)
+    assert np.isinf(spill[0]).all() and spill[2, 2] == 5.0
 
 
 @pytest.mark.parametrize("kw", [dict(), dict(aspect=3.0, azimuth=30.0), dict(limb_ratio=2.5, tilt=0.4),
@@ -264,3 +314,119 @@ def test_the_spill_flood_ends_on_columns_of_infinite_depth():
     depth = np.where(ring == 2, np.inf, 10.0)
     spill = st._spill_levels(depth)
     assert np.all(spill[ring <= 2] == np.inf) and np.all(spill[ring > 2] == 10.0)
+
+
+# ----- growth strata: the thickness factor of a zone laid down while a fault moved -----
+
+def growth_fault(**kw):
+    from resmill.faults import Fault
+    return Fault(**{**dict(center=(1000.0, 1000.0), strike=90.0, length=10000.0, throw=50.0, dip=60.0, z_center=2000.0,
+                           hw_share=1.0, drag=(0.0, 0.0), name="F1"), **kw})
+
+
+def test_growth_is_one_at_the_footwall_cutoff_and_the_expansion_a_width_beyond_it():
+    """A 60 degree fault whose plane at 2,000 m is at x = 1,000 m, hanging wall east: at the zone's depth, 2,100 m, its trace
+    is 100 / tan(60) = 57.74 m east. The factor is 1 there and west of it, EI a width on, and a smooth step between
+    (3 t^2 - 2 t^3: 0.156 of the way up a quarter of the way along, half way up at the middle), on the fault's centre line."""
+    from resmill.faults import _plane
+    g = st.growth(growth_fault(), expansion=1.8, width=300.0, depth=2100.0)
+    x0 = 1000.0 + 100.0 / np.tan(np.radians(60.0))
+    x = np.array([x0 - 500.0, x0, x0 + 75.0, x0 + 150.0, x0 + 300.0, x0 + 4000.0])
+    assert g(x, np.full(6, 1000.0)) == pytest.approx([1.0, 1.0, 1.0 + 0.8 * 0.15625, 1.4, 1.8, 1.8], abs=1e-9)
+    f = growth_fault(flatten=2500.0, dip=40.0)                             # listric: the trace is the curve's at 2,100 m
+    h0 = float(_plane(f, 2000.0)[1](2100.0))
+    xl = np.array([1000.0 + h0 - 1.0, 1000.0 + h0 + 300.0])
+    assert st.growth(f, 1.8, 300.0, 2100.0)(xl, np.full(2, 1000.0)) == pytest.approx([1.0, 1.8], abs=1e-9)
+
+
+def test_growth_dies_along_strike_with_the_throw_profile():
+    """Half a half-length along the strike the throw of a fault is 0.559 of its centre's (Walsh and Watterson: (1 - r)^1.5
+    sqrt(1 + 3 r) at r = 0.5), and nothing beyond the tip: so the excess expansion is 0.559 of the centre's there and
+    zero past the tip, 1 in the footwall."""
+    g = st.growth(growth_fault(), expansion=2.0, width=100.0, depth=2000.0)       # the zone at the tip ellipse's centre
+    far = 1000.0 + 2000.0                                                          # clear of the transition
+    trace = lambda s: (far, 1000.0 - s)                                           # the trace runs along -y at strike 90
+    assert g(*trace(0.0)) == pytest.approx(2.0)
+    assert g(*trace(2500.0)) == pytest.approx(1.0 + 0.559017, abs=1e-5)           # r = 2500 / 5000 = 0.5
+    assert g(*trace(5000.0)) == pytest.approx(1.0) and g(*trace(7000.0)) == pytest.approx(1.0)
+    assert g(far - 2500.0, 1000.0) == pytest.approx(1.0)                          # footwall
+
+
+def test_growth_of_a_planar_fault_follows_its_tip_ellipse_at_the_zones_depth():
+    """A 10 km fault of aspect 2.15 dipping 60 degrees has a tip ellipse 2,014 m high on either side of its centre (half its length / 2.15
+    x sin(dip)): a zone laid down half of that below the centre, at 3,007 m, meets the fault where its throw is Walsh and Watterson's
+    0.559 of the centre's (r = 0.5). Its step is the heave of that throw, 50 x 0.559 / tan(60) = 16.1 m wide, not the centre's 28.9 m;
+    4,330 m along the strike, where the ellipse's r reaches 1, the fault has no throw and the zone no growth; half way, with the
+    depth in it, the throw is (1 - r)^1.5 (1 + 3 r)^0.5 at r = sqrt(0.5^2 + 0.5^2), 0.501 of the centre's, so the excess of an index of 2 is 0.501."""
+    ww = lambda r: (1.0 - r) ** 1.5 * np.sqrt(1.0 + 3.0 * r)
+    f = growth_fault(length=10000.0, throw=50.0, dip=60.0, z_center=2000.0)
+    depth = 2000.0 + 0.5 * (5000.0 / 2.15) * np.sin(np.radians(60.0))
+    g = st.growth(f, expansion=2.0, width=None, depth=depth)
+    x0 = 1000.0 + (depth - 2000.0) / np.tan(np.radians(60.0))              # the footwall cutoff of the zone, on the centre line
+    width = 50.0 * ww(0.5) / np.tan(np.radians(60.0))
+    assert width == pytest.approx(16.14, abs=0.01)
+    assert g(np.array([x0 - 1.0, x0 + 0.5 * width, x0 + width, x0 + 500.0]), np.full(4, 1000.0)) == pytest.approx([1.0, 1.5, 2.0, 2.0], abs=1e-9)
+    y = lambda s: np.array([1000.0 - s])                                   # the trace runs along -y at strike 90: s m from the centre
+    assert g(np.array([x0 + 500.0]), y(2500.0)) == pytest.approx(1.0 + ww(np.sqrt(0.5)) / ww(0.5), abs=1e-9)
+    assert ww(np.sqrt(0.5)) / ww(0.5) == pytest.approx(0.501, abs=1e-3)
+    assert g(np.array([x0 + 500.0]), y(4400.0)) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_growth_of_a_listric_fault_has_the_one_heave_of_its_hanging_wall_at_every_depth():
+    """Its hanging wall moves by one heave, that of the horizon at the tip ellipse's centre (z_center = the bend), and nothing tapers with
+    depth: a zone above, at or below it steps up over (L / tan(dip)) (exp(T / L) - 1) = 60.2 m (40 degrees, L = 2.5 km, T = 50 m) from its
+    own footwall cutoff, the plane's distance from the trace there, and dies along the strike by the same 0.559 at half the half-length."""
+    f = growth_fault(flatten=2500.0, dip=40.0, z_center=2000.0)
+    tan_d, L = np.tan(np.radians(40.0)), 2500.0
+    heave = L / tan_d * np.expm1(50.0 / L)
+    assert heave == pytest.approx(60.19, abs=0.01)
+    for depth in (1500.0, 2000.0, 4000.0):
+        x0 = 1000.0 + ((depth - 2000.0) / tan_d if depth < 2000.0 else L / tan_d * np.expm1((depth - 2000.0) / L))
+        g = st.growth(f, 2.0, None, depth)
+        assert g(x0 + heave * np.array([-0.1, 0.5, 1.0, 2.0]), np.full(4, 1000.0)) == pytest.approx([1.0, 1.5, 2.0, 2.0], abs=1e-6)
+        assert g(np.array([x0 + 2.0 * heave]), np.array([1000.0 - 2500.0])) == pytest.approx(1.559017, abs=1e-5)
+
+
+@pytest.mark.parametrize("flatten", [None, 2500.0])
+def test_growth_without_a_width_steps_up_over_the_horizons_heave(flatten):
+    """``width=None``: the zone thickens over the horizon's heave at the fault's centre line (the distance between its
+    footwall and hanging-wall cutoffs), so the hanging wall begins at the full expansion. The heave of 50 m of throw is
+    50 / tan(60) = 28.9 m for a 60 degree plane, and (L / tan(dip)) (exp(50 / L) - 1) for a 40 degree fault whose tan(dip)
+    falls by 1/e every L = 2.5 km below its bend (the horizon is at the bend); half way across it the factor is half way up."""
+    dip = 60.0 if flatten is None else 40.0
+    f = growth_fault(flatten=flatten, dip=dip, z_center=2000.0)                # throw 50 m at the centre line, trace at x = 1,000
+    if flatten is None:
+        heave = 50.0 / np.tan(np.radians(dip))
+    else:
+        heave = flatten / np.tan(np.radians(dip)) * (np.exp(50.0 / flatten) - 1.0)
+    x = 1000.0 + heave * np.array([-0.2, 0.0, 0.5, 1.0, 1.5])
+    assert st.growth(f, 2.0, None, 2000.0)(x, np.full(5, 1000.0)) == pytest.approx([1.0, 1.0, 1.5, 2.0, 2.0], abs=1e-6)
+    assert st.growth(f, 2.0, None, 9000.0)(np.array([5000.0]), np.array([1000.0])) == pytest.approx(1.0)   # no throw there
+
+
+@pytest.mark.parametrize("flatten", [None, 2500.0])
+def test_growth_thickens_the_zone_by_the_expansion_in_the_hanging_wall_only(flatten):
+    """As the isochore of a 40 m zone cut by a fault whose hanging wall moves rigidly (a plane) or by vertical shear (listric,
+    toward its flattening plane): 5 m cells are EI x 5 m in the hanging wall far from the fault and 5 m in the footwall, none
+    negative."""
+    from resmill.export import _build_geometry
+    nx, ny, nz, dx = 160, 6, 8, 50.0
+    layer = Layer(nx, ny, nz, nx * dx, ny * dx, 40.0, top_depth=2000.0, kzkx=0.1)
+    f = growth_fault(center=(1000.0, 150.0), flatten=flatten, dip=40.0 if flatten else 60.0, throw=30.0, z_center=2020.0)
+    g = st.growth(f, 2.2, 200.0, 2020.0)
+    _, _, zc, _ = _build_geometry([layer], isochore=[g], faults=[f])
+    thick = np.diff(zc[:, 6, :], axis=1)
+    assert thick.min() >= 0.0                                                        # the cut-out beside the plane is thin, never negative
+    assert thick[20:30].max() == pytest.approx(5.0, abs=1e-6)                        # x 0.5-0.75 km: footwall, clear of the fault
+    far = thick[-20:]                                       # plus the throw's own change over the thickened zone: a few cm
+    assert far.max() == pytest.approx(11.0, abs=0.05) and far.min() == pytest.approx(11.0, abs=0.05)
+
+
+def test_growth_refuses_what_has_no_meaning():
+    """It needs the fault's own depth scale (z_center), a width and an expansion above 0."""
+    from resmill.faults import Fault
+    with pytest.raises(ValueError, match="z_center"):
+        st.growth(Fault(center=(0.0, 0.0), strike=0.0, length=1000.0, throw=10.0), 1.5, 100.0, 2000.0)
+    for kw in (dict(width=0.0), dict(width=-5.0), dict(expansion=0.0)):
+        with pytest.raises(ValueError):
+            st.growth(growth_fault(), **{**dict(expansion=1.5, width=100.0, depth=2000.0), **kw})
