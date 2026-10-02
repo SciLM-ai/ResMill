@@ -8,9 +8,11 @@ Salt is a mask and two terms of the structure, nothing more (rows N1-N39 of ``st
   by ``lean`` m per metre of depth (a wall dipping at ``phi`` leans ``cot(phi)``), grows by ``flare`` m per metre of
   depth (negative: salt wider above, an overhang; positive: a pedestal) and is made irregular by ``lobes`` (smooth random
   waves displacing its coordinates, as :func:`resmill.structure.closure`'s ``warp``) and, at the smaller scales, by
-  ``rough`` (octaves of :func:`resmill.structure.roughness` of falling sd, ranges one radius down to 150 m). The outline is tested at each
-  cell's own depth, so a cell beneath an overhang stays active: that is the trap beneath the overhang that 5 of the 9
-  producing East Texas stocks have (N27). Pillars are vertical, so the wall is a staircase on cell faces; the error of
+  ``rough`` (octaves of :func:`resmill.structure.roughness` of falling sd, ranges one radius down to 150 m). The outline is
+  tested at each cell's own depth, so a cell beneath an overhang stays active: that is the trap beneath the overhang that 5 of
+  the 9 producing East Texas stocks have (N27). ``overhang=(L, H)`` gives it an underside L wide and H high (the grid
+  holds the reservoir interval only, so the part of a trap beneath an overhang is as wide as the underside reaches across the
+  interval, ``h0 / (s + H / L)`` for beds of slope ``s``: a steep underside leaves one cell, a gentle one many). Pillars are vertical, so the wall is a staircase on cell faces; the error of
   its position is under half a cell, and the upturn beside it must be at least two cells wide (:attr:`SaltBody.max_cell`).
 * :func:`salt_upturn` lifts the strata toward the wall by ``A (1 - d/W)^p`` over a folding zone of width ``W`` (d the
   horizontal distance from the contact), with ``A = W tan(dip) / p`` so that the strata meet the contact at ``dip``
@@ -18,7 +20,10 @@ Salt is a mask and two terms of the structure, nothing more (rows N1-N39 of ``st
   zone is a hook (50-200 m), a wedge (0.3-1 km) or a megaflap (3-4.6 km) (N12-N15). :func:`salt_thinning` is the
   isochore factor ``1 - a (1 - d/W)^p`` that thins the strata toward the salt (halokinetic wedges, megaflaps 37-93 %).
   The upturn shifts the strata vertically and so keeps their vertical thickness: the thickness measured along the
-  bed's normal is already ``cos(dip)`` of it, and ``a`` thins it further.
+  bed's normal is already ``cos(dip)`` of it, and ``a`` thins it further. :func:`salt_sequence` is the hook or wedge
+  halokinetic sequence (Giles & Rowan 2012): the upturn of a narrow (50-200 m) or broad (300-1,000 m) folding zone and
+  :func:`salt_truncation`, the unconformity that cuts the lifted beds off at a high or a low angle and so pinches the reservoir
+  out within the zone (the beds of a corner-point column cannot overturn, so a hook is as steep as :data:`MAX_DIP`).
 * :func:`base_of_salt` is the surface a salt sheet rests on, for ``to_grdecl(erode_above=...)``: cells above it are
   salt (inactive), the cells it cuts are truncated against it, and a reservoir below it is a subsalt trap (N30-N35).
 
@@ -64,7 +69,7 @@ class SaltBody:
     """A salt body: an outline that depends on depth (see the module docstring and :func:`salt_body`)."""
 
     def __init__(self, center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, lobes=0.0, shape=2.0,
-                 seed=None, rough=0.0, hurst=1.0):
+                 seed=None, rough=0.0, hurst=1.0, overhang=None):
         problems = [msg for bad, msg in (
             (not min(axes) > 0.0, "axes must be positive"),
             (not shape >= 2.0, "shape (the superellipse exponent) must be at least 2"),
@@ -73,12 +78,15 @@ class SaltBody:
             (not 0.0 <= rough <= MAX_ROUGH, f"rough must lie in [0, {MAX_ROUGH}]"),
             (rough > 0.0 and seed is None, "rough needs a seed (a shared default made every body alike)"),
             (not hurst >= 0.0, "hurst must be >= 0"),
+            (overhang is not None and not (len(overhang) == 2 and min(overhang) > 0.0),
+             "overhang must be (lateral extent, height), both positive"),
         ) if bad]
         if problems:
             raise ValueError("SaltBody: " + "; ".join(problems))
         self.center, self.axes = (float(center[0]), float(center[1])), (float(axes[0]), float(axes[1]))
         self.azimuth, self.z_ref = float(azimuth), float(z_ref)
         self.lean, self.flare, self.lobes, self.shape = (float(lean[0]), float(lean[1])), float(flare), float(lobes), float(shape)
+        self.overhang = None if overhang is None else (float(overhang[0]), float(overhang[1]))
         self.radius = min(self.axes)                                   # lobes are a fraction of it
         rng = np.random.default_rng(seed)
         self._waves = [(rng.uniform(1.5, 3.5, 6) / self.radius, rng.uniform(0.0, 2.0 * np.pi, 6),
@@ -110,6 +118,14 @@ class SaltBody:
         """The widest cell (m) the body can be gridded with: half its narrowest folding zone (inf: none registered)."""
         return 0.5 * min(self._widths) if self._widths else math.inf
 
+    def _widen(self, dz):
+        """How much the semi-axes have grown (m) at ``dz`` m below the reference depth: ``flare`` per metre, plus the overhang's
+        lateral extent over its height above the neck (nothing below it, all of it above the shoulder)."""
+        wide = self.flare * dz
+        if self.overhang is not None:
+            wide = wide + self.overhang[0] * np.clip(-dz / self.overhang[1], 0.0, 1.0)
+        return wide
+
     def _gauge(self, x, y, z):
         """Superellipse radius at (x, y, z): below 1 inside the body, 1 on its contact (inf where it has pinched out)."""
         dz = np.asarray(z, dtype=float) - self.z_ref
@@ -126,7 +142,7 @@ class SaltBody:
             du, dv = (amp * sum(np.cos(k * (math.cos(a) * u + math.sin(a) * v) + ph) for k, a, ph in zip(*wave))
                       for wave in self._waves)
             u, v = u + du, v + dv
-        a, b = self.axes[0] + self.flare * dz, self.axes[1] + self.flare * dz
+        a, b = self.axes[0] + self._widen(dz), self.axes[1] + self._widen(dz)
         with np.errstate(divide="ignore", invalid="ignore"):
             g = (np.abs(u / a) ** self.shape + np.abs(v / b) ** self.shape) ** (1.0 / self.shape)
         return np.where((a > 0.0) & (b > 0.0), g, np.inf)
@@ -141,7 +157,7 @@ class SaltBody:
         ``_RAYS`` directions from its centre by bisection."""
         z = self.z_ref if z is None else float(z)
         dz = z - self.z_ref
-        a, b = self.axes[0] + self.flare * dz, self.axes[1] + self.flare * dz
+        a, b = self.axes[0] + self._widen(dz), self.axes[1] + self._widen(dz)
         if not (a > 0.0 and b > 0.0):
             raise ValueError(f"the body has no outline at {z:g} m (it has pinched out)")
         cx, cy = self.center[0] + self.lean[0] * dz, self.center[1] + self.lean[1] * dz
@@ -181,7 +197,7 @@ class SaltBody:
 
 
 def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, lobes=0.0, shape=2.0, seed=None,
-              rough=0.0, hurst=1.0):
+              rough=0.0, hurst=1.0, overhang=None):
     """A salt body: stock (equal ``axes``) or wall (axes ratio 3-10; N5).
 
     ``center`` (x, y) and ``axes`` (the semi-axes along and across ``azimuth``, m) give the outline at depth ``z_ref``
@@ -194,10 +210,13 @@ def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, 
     irregularity of real outlines at the smaller scales: octaves of ranges one radius, a half, a quarter ... down to
     :data:`MIN_RANGE` (150 m), each of sd ``rough x radius x (range / radius)^hurst`` (the Santos stock and the Sigsbee
     feeders show 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave: ``hurst`` about 1.2),
-    displacing the outline along its normal and moving with its lean; ``seed`` is required with it. Returns a
-    :class:`SaltBody`.
+    displacing the outline along its normal and moving with its lean; ``seed`` is required with it. ``overhang`` =
+    (lateral extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck) from H above it upward, linearly
+    between: an underside dipping ``atan(H / L)`` from horizontal, that a reservoir lifted into it meets (East Texas
+    stocks overhang by 0.15-2.6 km, P50 0.37 km, over 0.5-2.4 km of height, an underside of 35-68 degrees; the shoulders of
+    Precaspian walls are 0.3-1.5 km wide at 15-30 degrees). Returns a :class:`SaltBody`.
     """
-    return SaltBody(center, axes, azimuth, z_ref, lean, flare, lobes, shape, seed, rough, hurst)
+    return SaltBody(center, axes, azimuth, z_ref, lean, flare, lobes, shape, seed, rough, hurst, overhang)
 
 
 def salt_cells(salt, Xc, Yc, Zc):

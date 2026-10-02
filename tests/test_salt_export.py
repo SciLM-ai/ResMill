@@ -113,6 +113,32 @@ def test_an_overhang_leaves_active_cells_beneath_salt_and_a_vertical_wall_does_n
     assert (act[col] == expect).all() and not expect.all() and expect.any()  # salt on top, sediment beneath
 
 
+@pytest.mark.parametrize("lateral,height", [(400.0, 100.0), (300.0, 300.0)])
+def test_the_part_of_the_trap_beneath_an_overhang_is_as_wide_as_the_underside_reaches_across_the_reservoir(lateral, height):
+    """The grid holds the reservoir interval only, so what lies beneath an overhang (active cells with salt cells above them
+    in their column) is where the underside, dipping atan(H / L) from horizontal, cuts through the interval. A reservoir
+    h0 thick whose top rises toward the wall at slope s (z = 2000 + s e, e from the neck line) meets an underside
+    z = z_ref - (H / L) e at e_hi = (z_ref - 2000) / (s + H / L) and leaves it at e_lo = (z_ref - 2000 - h0) / (s + H / L): the
+    band is h0 / (s + H / L) wide, and columns nearer than e_lo are dead. Hand-computed, h0 = 60 m, s = 0.2, neck at 2090 m:
+    133 m wide at 14 degrees (400 / 100), 50 m at 45 (300 / 300). A steep underside is why the old overhang trap was a cell."""
+    dx, nz, dz, s, y_c, z_ref = 5.0, 30, 2.0, 0.2, 20.0, 2090.0
+    nx, ny = 6, 160
+    L = layer(nz=nz, dz=dz, nx=nx, ny=ny, dx=dx)
+    body = sl.salt_body((0.5 * nx * dx, y_c - 5000.0), (20000.0, 5000.0), z_ref=z_ref, overhang=(lateral, height))
+    ramp = st.Structure(lambda x, y: s * (np.asarray(y, dtype=float) - y_c))
+    Xc, Yc, zc, act = _build_geometry([L], structure=ramp, salt=body)
+    salt = sl.salt_cells(body, Xc, Yc, zc)
+    under = (act > 0) & np.logical_or.accumulate(salt, axis=2)
+    e = (np.arange(ny) + 0.5) * dx - y_c
+    cols = np.flatnonzero(under[0].any(axis=1))
+    slope = s + height / lateral
+    e_hi, e_lo = (z_ref - 2000.0) / slope, (z_ref - 2000.0 - nz * dz) / slope
+    assert (cols.max() - cols.min() + 1) * dx == pytest.approx(nz * dz / slope, abs=3 * dx)
+    assert e[cols.min()] == pytest.approx(e_lo, abs=3 * dx) and e[cols.max()] == pytest.approx(e_hi, abs=3 * dx)
+    live = np.flatnonzero(act[0].any(axis=1))
+    assert e[live.min()] == pytest.approx(e_lo, abs=3 * dx)                       # nearer columns are dead
+
+
 def test_a_leaning_wall_is_inactive_where_its_depth_shifted_outline_says():
     nz, dz = 40, 5.0
     cot = 1.0 / math.tan(math.radians(60.0))

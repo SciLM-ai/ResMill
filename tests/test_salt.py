@@ -66,6 +66,27 @@ def test_a_negative_flare_is_an_overhang_a_positive_one_a_pedestal():
     assert list(pedestal.inside(x, CY, z)) == [False, False, False, True, True]   # R + 0.2 (z - 2000) > R + 10 below 2050
 
 
+def test_an_overhang_widens_the_body_by_its_lateral_extent_over_its_height_above_the_neck():
+    """``overhang=(L, H)``: the outline is the plain one at the neck (z_ref) and below it, L wider at H above it and higher, and
+    linear between (the underside of an overhang L wide, H high, which dips atan(H / L) from horizontal). Hand-computed for
+    R = 300 m, L = 100, H = 200, neck at 2000 m: radius 300 at 2000 and below, 325 at 1950, 350 at 1900, 400 at 1800 and above."""
+    body = stock(z_ref=2000.0, overhang=(100.0, 200.0))
+    for z, expected in ((2200.0, 300.0), (2000.0, 300.0), (1950.0, 325.0), (1900.0, 350.0), (1800.0, 400.0), (1500.0, 400.0)):
+        out = body.outline(z)
+        assert np.hypot(out[:, 0] - CX, out[:, 1] - CY) == pytest.approx(expected, abs=0.05)
+    assert body.inside(CX + 349.0, CY, 1900.0) and not body.inside(CX + 351.0, CY, 1900.0)
+    plain = stock(z_ref=2000.0)
+    assert (plain.outline(1800.0) == stock(z_ref=2000.0, overhang=None).outline(1800.0)).all()
+    both = stock(z_ref=2000.0, flare=-0.1, overhang=(100.0, 200.0))                  # the two add: 300 + 10 + 50 at 1900
+    assert np.hypot(*(both.outline(1900.0) - [CX, CY]).T) == pytest.approx(360.0, abs=0.05)
+
+
+@pytest.mark.parametrize("bad", [(0.0, 100.0), (100.0, 0.0), (-5.0, 100.0), (100.0,)])
+def test_an_overhang_that_cannot_exist_is_refused(bad):
+    with pytest.raises(ValueError):
+        stock(overhang=bad)
+
+
 def test_distance_is_signed_exact_and_unit_slope_for_a_circle():
     body = stock()
     rho = np.array([0.0, 100.0, 299.0, 301.0, 450.0, 800.0])
