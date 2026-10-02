@@ -31,6 +31,10 @@
   them; `roughness=None` and `faults=None` are a smooth fold without faults. Returns `{"kwargs": ..., "meta": ...}`:
   the keywords for `to_grdecl` (`structure`, `faults`) and the style, the asked area and height, the crest (a tilt moves
   it off the centre), the number of faults and their sets. New module, nothing existing changes.
+  With `rim` (m) it also returns the simulation outline: `kwargs["outline"]` (the closure drawn, its ellipse, joined
+  with the trap of the fold and with the one that came out with its roughness, each around the crest, and the crest's
+  column, dilated by `rim` as `structure.outline` does) and `outline_columns` in `meta`; without `rim` nothing
+  changes.
 - `to_grdecl(report=dict)` and `fault_seal.block_inputs`, `blocks_at`, `block_labels`: the fault blocks of a model for
   any fluid, without writing the grid again. `fault_blocks` needed the corner stack and the faces, which only
   `to_grdecl` holds, and its contacts depend on the fluid (`Capillary.delta_rho`), drawn after the model. `report` is

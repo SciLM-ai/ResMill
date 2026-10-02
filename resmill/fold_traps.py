@@ -7,8 +7,14 @@ construction. A closure (:func:`resmill.structure.closure`) is the fold, a rough
 local highs and is slow to search). What differs between the styles is what the caller draws for them: a fold belt
 a steeper forelimb, a three-way trap a tilt, a low-relief trap a few metres of relief, and the style's own fault sets
 inside ``fold_faults``. :func:`fold_trap` draws nothing: every value, seeds included, is an argument, so the model is a
-pure function of them, and it returns the keywords of :func:`resmill.export.to_grdecl` with what it built.
+pure function of them, and it returns the keywords of :func:`resmill.export.to_grdecl` with what it built. With a
+``rim`` it also says which columns a simulation keeps: the closure's own columns and the rim around them
+(:func:`resmill.structure.outline`).
 """
+import math
+
+import numpy as np
+
 from . import structure as st
 from .fault_patterns import fold_faults
 
@@ -16,7 +22,7 @@ FOLD_STYLES = ("four_way", "turtle", "faulted_anticline", "fold_belt", "fault_bo
 """The styles of this composer: the fault patterns that stand on a closure alone."""
 
 
-def fold_trap(style, x_len, y_len, dx, top, thickness, closure, roughness=None, faults=None):
+def fold_trap(style, x_len, y_len, dx, top, thickness, closure, roughness=None, faults=None, rim=None):
     """A fold-style trap as ``{"kwargs": ..., "meta": ...}``: the keywords for :func:`resmill.export.to_grdecl` and what
     was built.
 
@@ -33,12 +39,20 @@ def fold_trap(style, x_len, y_len, dx, top, thickness, closure, roughness=None, 
       (``density`` and ``seed`` are required; ``over_salt``, ``regional``, ``max_faults``); None for no faults.
 
     Seeds are the caller's: a block without one is drawn from the system's entropy, as its primitive would be alone.
+    ``rim`` (m, from column centre to column centre; ``x_len`` and ``y_len`` must be whole cells of ``dx``) cuts the
+    simulation outline: the columns kept are the closure's own and every column within ``rim`` of them. The closure
+    is the ellipse drawn (``area``, ``aspect`` and ``azimuth`` about the centre) joined with the trap around the crest
+    (its spill contour, before the faults) of the fold as drawn, satellites and warp included, and of the fold plus
+    its roughness as it came out, and the crest's column. The ellipse keeps the closure a grid cannot resolve, or one a
+    tilt or the roughness leaves almost no trap of inside the map, from shrinking the model to a disc about the crest.
 
     ``kwargs`` is ``{"structure": the fold plus its roughness, "faults": the faults}`` (an empty list for none), for
-    ``reservoir.to_grdecl(path, **result["kwargs"])``. ``meta`` is plain numbers: ``style``, ``area`` (m2) and
-    ``height`` (m) as asked, ``crest`` ((x, y) in m: the main culmination's crest, which a tilt moves off the centre),
-    ``n_faults`` and ``fault_sets`` (the sorted kinds the faults were drawn as). The closure of the model as built,
-    with its faults, roughness and cells that hold no rock, is read with :func:`resmill.fault_seal.blocks_at` from
+    ``reservoir.to_grdecl(path, **result["kwargs"])``, and with a ``rim`` also ``"outline"``: the ``(nx, ny)`` bool
+    columns kept, which ``to_grdecl`` writes as the only active ones (its geometry, seal and ``report`` stay those of
+    the whole map). ``meta`` is plain numbers: ``style``, ``area`` (m2) and ``height`` (m) as asked, ``crest`` ((x, y)
+    in m: the main culmination's crest, which a tilt moves off the centre), ``n_faults`` and ``fault_sets`` (the
+    sorted kinds the faults were drawn as), and with a ``rim`` its value and ``outline_columns``. The closure of the
+    model as built, with its faults and roughness, is read with :func:`resmill.fault_seal.blocks_at` from
     ``to_grdecl(report=)``.
     """
     if style not in FOLD_STYLES:
@@ -50,4 +64,34 @@ def fold_trap(style, x_len, y_len, dx, top, thickness, closure, roughness=None, 
     meta = dict(style=style, area=float(closure["area"]), height=float(closure["height"]),
                 crest=tuple(float(c + o) for c, o in zip(center, fold.crest_offset)),
                 n_faults=len(drawn), fault_sets=sorted({fault.kind for fault in drawn}))
-    return dict(kwargs=dict(structure=structure, faults=drawn), meta=meta)
+    kwargs = dict(structure=structure, faults=drawn)
+    if rim is not None:
+        kwargs["outline"] = _outline(fold, structure, closure, center, x_len, y_len, dx, top, meta["crest"], rim)
+        meta.update(rim=float(rim), outline_columns=int(kwargs["outline"].sum()))
+    return dict(kwargs=kwargs, meta=meta)
+
+
+def _outline(fold, structure, closure, center, x_len, y_len, dx, top, crest, rim):
+    """The columns of the closure and ``rim`` m around it, ``(nx, ny)`` bool. The closure is the ellipse of ``closure``
+    (``area``, ``aspect``, ``azimuth``) about ``center``, joined with the trap of ``top`` plus the fold and with that
+    of ``structure``, the fold plus its roughness (the closure as it came out, which a low relief can move far from
+    the drawn one), each read at the column centres (:func:`resmill.structure.closure_stats`) around its shallowest
+    column within two of ``crest`` ((x, y) in m), and that column itself, so that a closure under a cell still leaves
+    a model."""
+    nx, ny = int(round(x_len / dx)), int(round(y_len / dx))
+    sx, sy = x_len / nx, y_len / ny
+    x, y = np.meshgrid((np.arange(nx) + 0.5) * sx, (np.arange(ny) + 0.5) * sy, indexing="ij")
+    aspect, azimuth = closure.get("aspect", 1.0), math.radians(closure.get("azimuth", 0.0))
+    across_half = math.sqrt(closure["area"] / (math.pi * aspect))
+    along = (x - center[0]) * math.cos(azimuth) - (y - center[1]) * math.sin(azimuth)
+    across = (x - center[0]) * math.sin(azimuth) + (y - center[1]) * math.cos(azimuth)
+    footprint = (along / (aspect * across_half)) ** 2 + (across / across_half) ** 2 <= 1.0
+    ci, cj = min(nx - 1, int(crest[0] // sx)), min(ny - 1, int(crest[1] // sy))
+    i0, j0 = max(ci - 2, 0), max(cj - 2, 0)
+    for surface in (fold,) if structure is fold else (fold, structure):
+        depth = top + surface(x, y)
+        window = depth[i0:ci + 3, j0:cj + 3]
+        cell = tuple(int(n + o) for n, o in zip(np.unravel_index(int(np.argmin(window)), window.shape), (i0, j0)))
+        footprint |= st.closure_stats(depth, sx, sy, crest=cell)["mask"]
+        footprint[cell] = True
+    return st.outline(footprint, sx, sy, rim)
