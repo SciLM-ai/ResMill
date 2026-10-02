@@ -298,11 +298,22 @@ def _seal_vsh(seal, layers, shape):
     return vsh
 
 
+def _outline_columns(outline, shape):
+    """``outline`` as the ``(nx, ny)`` bool map of the columns a file keeps; a map of another shape, or one that keeps
+    none, is a ``ValueError``."""
+    keep = np.asarray(outline, dtype=bool)
+    if keep.shape != shape:
+        raise ValueError(f"outline must be a bool array of shape {shape} (nx, ny), not shape {keep.shape}")
+    if not keep.any():
+        raise ValueError("outline keeps no column")
+    return keep
+
+
 def to_grdecl(model, path, structure=None, top=None, base=None,
               erode_above=None, erode_below=None, facies=False, isochore=None, onlap=False,
               faults=None,
               poro_floor=None, perm_floor=None,
-              fmt_z="%.2f", fmt_prop="%.6g", seal=None, report=None):
+              fmt_z="%.2f", fmt_prop="%.6g", seal=None, report=None, outline=None):
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
 
     The file carries SPECGRID, COORD, ZCORN, ACTNUM, PORO, PERMX, PERMY
@@ -367,6 +378,13 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         (:func:`resmill.fault_seal.block_inputs`), from which :func:`resmill.fault_seal.blocks_at` draws the fault
         blocks of any fluid and :func:`resmill.fault_seal.block_labels` labels the map's columns. Without a seal no
         face has a record, so every edge a fault splits is a wall; a model without faults is one block.
+    outline : (nx, ny) bool array, optional
+        The columns a simulation keeps (:func:`resmill.structure.outline`): every cell of the others is written
+        inactive (ACTNUM 0, in every layer). The grid is the whole map's, so the file differs from the one without
+        ``outline`` in its ACTNUM block alone: the seal's multipliers, FAULTS and ``report`` are those of the whole
+        map, and the fault blocks see all of it (a cut model's own rock-free columns would be walls, which a flood
+        from the map's edge cannot cross to a trap inside the outline). An array of another shape, or one that keeps
+        no column, is refused before a file is written.
 
     A channel layer made with ``drapes`` (mud drapes at the bases of storeys,
     :mod:`resmill.layers.drapes`) also gets MULTX, MULTY and MULTZ, its drapes'
@@ -384,6 +402,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     if len(set(names)) < len(names) or any(len(nm) > 8 for nm in names):
         raise ValueError(f"fault names must be unique within 8 characters (OPM keeps 8): {names}")
     seal_vsh = _seal_vsh(seal, layers, actnum.shape) if faces and seal is not None else None
+    keep = None if outline is None else _outline_columns(outline, (nx, ny))
 
     fac = _stack_prop(layers, "facies").astype(int) if facies else None
     poro = _stack_prop(layers, "poro_mat").astype(float)
@@ -423,7 +442,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         f.write(f"SPECGRID\n {nx} {ny} {nz} 1 F /\n\n")
         _write_array(f, "COORD", coord, fmt_z, per_line=6)
         _write_array(f, "ZCORN", zcorn.ravel(order="F"), fmt_z, per_line=10)
-        _write_rle(f, "ACTNUM", actnum.ravel(order="F"))
+        _write_rle(f, "ACTNUM", (actnum if keep is None else actnum * keep[:, :, None]).ravel(order="F"))
         _write_array(f, "PORO", poro.ravel(order="F"), "%.4f", per_line=14)
         _write_array(f, "PERMX", permx.ravel(order="F"), fmt_prop, per_line=10)
         _write_array(f, "PERMY", permy.ravel(order="F"), fmt_prop, per_line=10)

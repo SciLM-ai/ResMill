@@ -13,6 +13,16 @@
 
 ### Added
 
+- `to_grdecl(outline=)` and `structure.outline`: a simulation outline cut around a trap, as full field decks cut their
+  models. `outline(trap, dx, dy, rim)` is the `(nx, ny)` bool map of the columns within `rim` m (centre to centre) of
+  a trap's columns (the `mask` of `closure_stats`, or any other trap's); `to_grdecl(outline=map)` writes every cell of
+  the other columns inactive (ACTNUM 0, every layer) and nothing else: ZCORN, the properties, FAULTS, the seal's
+  multipliers and `report` are those of the whole map. That is deliberate: read as rock-free walls, the cut columns
+  seal a trap inside the outline from a flood that starts at the map's edge (a four-way closure with a 500 m rim: the
+  one block fills to its deepest column, 9.9 km2 and 83 m for a closure of 5 km2 and 59 m), so the fault blocks, the
+  contacts and the labels are the whole map's, and the cut only says which cells are simulated. `outline=None`, the
+  default, changes nothing: outputs are bit-identical to before. In Flow, a small model written whole and cut gave the
+  same transmissibilities and fault NNCs among the cells kept, none across the cut and none new.
 - `fold_traps.fold_trap(style, x_len, y_len, dx, top, thickness, closure, roughness=None, faults=None)`: a fold-style
   model from ResMill's own pieces, for the six fold styles of `fault_patterns` (`four_way`, `turtle`,
   `faulted_anticline`, `fold_belt`, `fault_bounded`, `low_relief`). The closure (`structure.closure`) plus its roughness

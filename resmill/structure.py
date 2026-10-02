@@ -262,6 +262,22 @@ def closure_stats(depth, dx, dy, crest=None):
             "spill_depth": spill_depth, "crest": crest, "mask": mask}
 
 
+def outline(trap, dx, dy, rim):
+    """The columns of a simulation outline: those whose centre lies within ``rim`` m of a column of ``trap``.
+
+    ``trap`` is the ``(nx, ny)`` bool map of a trap's columns (the ``mask`` of :func:`closure_stats`, or any other
+    trap's), ``dx`` and ``dy`` the cell sizes (m) and ``rim`` (m, from centre to centre) the width kept around it: the
+    trap dilated by a disc, as a company deck cuts its model at the closure plus a margin where an aquifer attaches.
+    Returns an ``(nx, ny)`` bool map, the ``outline`` of :func:`resmill.export.to_grdecl`.
+    """
+    trap = np.asarray(trap, dtype=bool)
+    if not trap.any():
+        raise ValueError("outline needs a trap: no column of the map is True")
+    if not rim >= 0.0:
+        raise ValueError(f"rim must be zero or more, not {rim}")
+    return ndimage.distance_transform_edt(~trap, sampling=(dx, dy)) <= float(rim)
+
+
 def closure(area, height, aspect=1.0, azimuth=0.0, center=None, limb_ratio=1.0, tilt=0.0,
             satellites=0, warp=0.0, seed=None):
     """A four-way dip closure over ``area`` (m2) with ``height`` (m) of relief, lobate and asymmetric.
