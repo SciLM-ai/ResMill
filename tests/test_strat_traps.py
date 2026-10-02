@@ -726,19 +726,22 @@ def _same_fields(a, b):
 
 @pytest.mark.parametrize("kind", ["pinchout", "facies_change", "lens", "truncation", "onlap"])
 def test_everything_drawn_follows_the_seed(kind):
-    """The same seed gives the same tongues, edge and relief, to the bit, and another seed another one."""
+    """The same seed gives the same tongues, edge and relief, to the bit, and another seed another one (the seeds whose
+    lobes fit and whose edge leaves a trap)."""
     thick, barrier = ([10.0, 6.0], True) if kind == "facies_change" else ([10.0], False)
     kw = dict(barrier=barrier, dip=1.4, taper_angle=0.4, area=2.0e6, aspect=1.5, warp=0.2, wander=120.0, range_m=1200.0,
               hurst=0.5, floor_m=60.0, relief_sd=1.5, **({} if kind == "lens" else dict(tongues=[(0.8e6, 0.5)])))
-    a, b = (strat_trap(kind, 8000.0, 6000.0, 2000.0, thick, seed=11, **kw) for _ in range(2))
-    assert _same_fields(a, b)
-    for seed in range(12, 40):                                             # the first seed whose lobes fit
+    builds = []
+    for seed in range(11, 60):
         try:
-            c = strat_trap(kind, 8000.0, 6000.0, 2000.0, thick, seed=seed, **kw)
-            break
+            builds.append(strat_trap(kind, 8000.0, 6000.0, 2000.0, thick, seed=seed, **kw))
         except ValueError:
             continue
-    assert not _same_fields(a, c)
+        if len(builds) == 2:
+            break
+    a, c = builds
+    b = strat_trap(kind, 8000.0, 6000.0, 2000.0, thick, seed=a["meta"]["seed"], **kw)
+    assert _same_fields(a, b) and not _same_fields(a, c)
 
 
 def test_a_facies_change_with_tongues_a_rough_edge_and_relief_keeps_the_thickness_of_its_interval():
@@ -914,28 +917,29 @@ def test_a_relief_without_a_cell_or_a_floor_is_refused_and_so_is_a_range_below_t
                    **kw)
 
 
-# A draw of the plan's ranges (seed 723533758) whose sand edge, wandering 195 m and with a top relief of 2.4 m, shows
-# a grid dependence when its octaves go down to 31 m: cells of 200 m read no closure at all, the fine map 64 m.
-GRID_DRAW = dict(dip=1.9696, taper_angle=0.4631, area=2274781.24, aspect=1.9607, warp=0.296, wander=194.68,
-                 relief_sd=2.4315)
+# A draw of the plan's ranges (seed 1446768185, a 11.2 x 9 km model) whose sand edge, wandering 329 m, with a top
+# relief of 1.9 m, shows a grid dependence when its octaves go down to 31 m: cells of 100 and 200 m read closures of 40
+# and 54 m against 36 m on the fine map.
+GRID_DRAW = dict(dip=1.153, taper_angle=0.2143, area=4848934.0, aspect=1.7735, warp=0.1699, wander=329.31,
+                 relief_sd=1.9424)
 
 
 def _grid_draw_closure(dx, **floor):
-    built = strat_trap("pinchout", 7400.0, 6000.0, 2000.0, [8.0], seed=723533758, **GRID_DRAW, **floor)
-    fine = _fine_traps(built, 2000.0, 7400.0, 6000.0)[0]["height"]
-    return trap_report(_layers(7400.0, 6000.0, dx, [8.0]), built)[0]["height"], fine, np.tan(np.radians(1.9696)) * dx
+    built = strat_trap("pinchout", 11200.0, 9000.0, 2000.0, [8.0], seed=1446768185, **GRID_DRAW, **floor)
+    fine = _fine_traps(built, 2000.0, 11200.0, 9000.0)[0]["height"]
+    return trap_report(_layers(11200.0, 9000.0, dx, [8.0]), built)[0]["height"], fine, np.tan(np.radians(1.153)) * dx
 
 
 @pytest.mark.parametrize("dx", [50.0, 100.0, 200.0])
 def test_with_a_floor_of_two_cells_every_grid_up_to_that_cell_reads_the_closure_the_fine_map_has(dx):
     """One build, read on cells of 50, 100 and 200 m (the build's own cell): the closure is that of the fine analytic
     map within 1.5 cells' rise and 8 % of it. With the floor of 31 m that a 32nd of the range gives, the same draw
-    reads 0 m on the 200 m cells against 64 m on the fine map: the sand's necks of under a cell open and shut."""
+    reads 51 % more on the 200 m cells than the fine map: the sand's necks of under a cell open and shut."""
     height, fine, rise = _grid_draw_closure(dx, cell=200.0)
     assert height == pytest.approx(fine, abs=1.5 * rise + 0.08 * fine)
     if dx == 200.0:
         height_old, fine_old, _ = _grid_draw_closure(dx, floor_m=1000.0 / 32.0)
-        assert fine_old > 50.0 and height_old < 0.1 * fine_old
+        assert height_old > 1.3 * fine_old
 
 
 def test_the_largest_model_of_the_plan_builds_in_under_a_gigabyte():
@@ -950,3 +954,86 @@ def test_the_largest_model_of_the_plan_builds_in_under_a_gigabyte():
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert peak < 0.5e9 and time.time() - t0 < 30.0
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The edge wanders: what it may do to the trap (review F4)
+
+# Two draws of the plan's ranges (pinch-outs, cells of 100 m) whose wandered sand reaches the model's edge: the sand
+# comes 2.9 and 1.7 km updip of the line against tongues of 1.8 and 1.2 km, the shallowest active column is on the
+# map's boundary and the spill is the crest, 0 m against nominal closures of 39 and 34 m. The nominal outline, which
+# the refusal used to read, is well inside the model.
+EDGE_HITS = [
+    dict(dip=1.255, taper_angle=0.328, area=10063799.096, aspect=3.938, warp=0.12, wander=319.971, relief_sd=0.11,
+         azimuth=193.423, seed=1613526909, x_len=10800.0, y_len=8700.0),
+    dict(dip=1.585, taper_angle=0.309, area=3161456.307, aspect=2.623, warp=0.364, wander=175.799, relief_sd=4.667,
+         azimuth=352.799, seed=1511112119, x_len=8500.0, y_len=6800.0),
+]
+
+
+@pytest.mark.parametrize("draw", EDGE_HITS, ids=["crest on the edge", "crest at the edge"])
+def test_a_draw_whose_wander_puts_the_crest_on_the_models_edge_is_refused(draw):
+    """The refusal reads the sand that was drawn, wander and relief included, not the nominal outline: the plan grid's
+    largest closure is under a fifth of the nominal one, so the caller is told to draw again."""
+    draw = dict(draw)
+    x_len, y_len, seed = draw.pop("x_len"), draw.pop("y_len"), draw.pop("seed")
+    with pytest.raises(ValueError, match="wander"):
+        strat_trap("pinchout", x_len, y_len, 2000.0, [8.0], seed, cell=100.0, **draw)
+    smooth = dict(draw, wander=0.0, relief_sd=0.0)                       # the same shapes without the roughness
+    built = strat_trap("pinchout", x_len, y_len, 2000.0, [8.0], seed, **smooth)
+    assert trap_report(_layers(x_len, y_len, 100.0, [8.0], dz=2.0), built)[0]["height"] > 0.5 * built["meta"][
+        "closure_expected"]
+
+
+@pytest.mark.parametrize("kind", ["pinchout", "truncation"])
+def test_what_is_accepted_at_the_largest_wander_still_closes_and_what_is_not_is_refused(kind):
+    """24 draws at a wander of 0.18 of the main tongue's length (the plan's range ends at 0.2): the closure of the
+    cells is never under a fifth of the nominal one (before, 3 % of the pinch-outs and 1 % of the truncations were
+    accepted with about none), and some draws are refused for it."""
+    x_len, y_len, dx = 9000.0, 7200.0, 100.0
+    rng = np.random.default_rng(5)
+    accepted, refused = [], 0
+    for _ in range(24):
+        area, aspect = float(rng.uniform(1.5e6, 4.0e6)), float(rng.uniform(1.0, 3.0))
+        length = 2.0 * np.sqrt(area / (np.pi * aspect))
+        taper = 0.4 if kind == "pinchout" else 0.3
+        try:
+            built = strat_trap(kind, x_len, y_len, 2000.0, [8.0], int(rng.integers(1, 2 ** 31 - 1)), dip=1.4,
+                               taper_angle=taper, area=area, aspect=aspect, warp=0.25, wander=0.18 * length if kind ==
+                               "pinchout" else 0.18 * 8.0 / np.tan(np.radians(taper)), relief_sd=1.0, cell=dx,
+                               azimuth=float(rng.uniform(0.0, 360.0)))
+        except ValueError as error:
+            assert "wander" in str(error) or "edge" in str(error) or "fit" in str(error)
+            refused += "wander" in str(error)
+            continue
+        accepted.append(trap_report(_layers(x_len, y_len, dx, [8.0], dz=2.0), built)[0]["height"]
+                        / built["meta"]["closure_expected"])
+    assert len(accepted) >= 8 and refused >= 1 and min(accepted) > 0.2
+
+
+@pytest.mark.parametrize("kind,share,fits", [
+    ("pinchout", 0.99, True), ("pinchout", 1.02, False), ("truncation", 0.99, True), ("truncation", 1.02, False),
+    ("onlap", 1.02, False), ("pinchout_nose", 0.99, True), ("pinchout_nose", 1.02, False),
+    ("truncation_nose", 1.02, False)])
+def test_the_wander_is_at_most_a_fifth_of_the_tongue_or_a_quarter_of_the_taper(kind, share, fits):
+    """The owner's range: more breaks the sand into pieces that hold no trap. A depositional edge with a tongue may
+    wander 0.2 of its length (``share`` is that of the limit); the edge of an erosion surface (truncation, onlap) or
+    one across a nose, a quarter of the taper."""
+    x_len, y_len, angle = 14000.0, 11000.0, 0.4
+    taper_m = 8.0 / np.tan(np.radians(angle))
+    length = 2.0 * np.sqrt(3.4e6 / (np.pi * 2.2))
+    erosion = kind != "pinchout"
+    args = dict(dip=1.2, taper_angle=angle, wander=share * (0.25 * taper_m if erosion else 0.2 * length), cell=100.0,
+                **(dict(nose=NOSE) if kind.endswith("_nose") else dict(area=3.4e6, aspect=2.2)))
+    if not fits:
+        with pytest.raises(ValueError, match="at most"):
+            strat_trap(kind, x_len, y_len, 2000.0, [8.0], 1, **args)
+    else:
+        for seed in range(1, 12):                          # a bound is not a guarantee: the collapse refusal may speak
+            try:
+                strat_trap(kind, x_len, y_len, 2000.0, [8.0], seed, **args)
+                break
+            except ValueError as error:
+                assert "at most" not in str(error)
+        else:
+            raise AssertionError("every seed was refused")

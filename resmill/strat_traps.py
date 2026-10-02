@@ -33,6 +33,13 @@ KINDS = ("pinchout", "facies_change", "lens", "truncation", "onlap", "pinchout_n
 NOSED = KINDS[-2:]                  # the combination kinds
 MAX_NOSE = 335.0                    # m: the closure of Kuparuk (Carman and Hardwick 1983), the largest [J]
 
+MIN_THICKNESS = 6e-3                # m: a cell thinner than this is collapsed, as the deck's PINCH threshold takes it
+EDGE_MARGIN = 0.02                  # of the model's size: a trap this close to its edge is taken to touch it [J]
+COLLAPSED = 0.2                     # of the nominal closure: a wandering edge that leaves less has destroyed the trap [J]
+WANDER_TONGUE, WANDER_TAPER = 0.2, 0.25     # the most an edge may wander, of the main tongue's length (depositional) or of
+#                                             the taper (an erosion surface, or across a nose): more breaks the sand into
+#                                             pieces that hold no trap (the owner's range, 2026-10-02, judgement [J])
+
 GRAVITY = 9.81                      # m/s2
 # Berg's packing of the grains as uniform spheres, rhombohedral (porosity 26 %; Graton and Fraser 1935): the pores
 # between them are 0.414 of a grain diameter across, the throats connecting them 0.154.
@@ -230,6 +237,18 @@ def _floors(wander, range_m, relief_sd, relief_range, floor_m, cell):
     return floors
 
 
+def _check_wander(kind, wander, length, taper_m):
+    """Refuse an edge that wanders more than it may: a fifth of the main tongue's length (a tongue of sand: depositional
+    edges) and, where the edge is the relief of an erosion surface or lies across a nose, a quarter of the taper."""
+    erosion = kind in ("truncation", "onlap") or kind in NOSED
+    limit = min(WANDER_TONGUE * length if length and not erosion else np.inf, WANDER_TAPER * taper_m if erosion else
+                np.inf)
+    if wander > limit * (1.0 + 1e-9):
+        what = f"{WANDER_TAPER:g} of the taper" if erosion else f"{WANDER_TONGUE:g} of the main tongue's length"
+        raise ValueError(f"wander ({wander:.0f} m) must be at most {limit:.0f} m, {what}: more breaks the sand into "
+                         f"pieces that hold no trap")
+
+
 def _footprint(nose, parts, offsets, at, dip_dir, strike, azimuth, warp, lens, seeds):
     """What outlines the sand: ``(fold, outline, line)``, the nose's fold (None without one), the footprint of the
     tongues (a Structure, negative inside; None for a straight line or a nose) and where the line lies along dip
@@ -249,16 +268,39 @@ def _footprint(nose, parts, offsets, at, dip_dir, strike, azimuth, warp, lens, s
     return fold, outline, line
 
 
-def _refuse_edge(foot, lens, nosed, line, dip_dir, x_len, y_len):
-    """Refuse a footprint whose lobes come within 2 % of the model's edge where the trap is, over which it would
-    leak."""
-    gx, gy = np.meshgrid(np.linspace(0.0, x_len, 301), np.linspace(0.0, y_len, 301), indexing="ij")
+def _plan(x_len, y_len):
+    """The plan grid (301 x 301 points over the model) that the refusals read the drawn sand on."""
+    return np.meshgrid(np.linspace(0.0, x_len, 301), np.linspace(0.0, y_len, 301), indexing="ij")
+
+
+def _refuse_edge(foot, lens, nosed, line, dip_dir, plan, margin):
+    """Refuse the footprint of the lobes (a Structure, negative inside) if it comes within ``margin`` m (along x and
+    along y) of the model's edge where the trap is, over which it would leak: updip of the line, all round a lens,
+    downdip of it for a nose."""
+    (gx, gy), (mx, my) = plan, margin
+    x_len, y_len = gx.max(), gy.max()
     inside, along_dip = foot(gx, gy) < 0.0, gx * dip_dir[0] + gy * dip_dir[1]
-    edge = (np.minimum(gx, x_len - gx) < 0.02 * x_len) | (np.minimum(gy, y_len - gy) < 0.02 * y_len)
+    edge = (np.minimum(gx, x_len - gx) < mx) | (np.minimum(gy, y_len - gy) < my)
     watched = edge if lens else edge & (along_dip > line if nosed else along_dip < line)   # where the trap is
     if (watched & inside).any():
-        raise ValueError("the lobes of the trap come within 2 % of the model's edge, over which it would leak: use "
-                         "another seed, a smaller warp or a larger model")
+        raise ValueError(f"the lobes of the trap come within {max(mx, my):.0f} m of the model's edge, over which it "
+                         f"would leak: use another seed, a smaller warp or a larger model")
+
+
+def _refuse_collapse(present, depth, nominal, plan, margin):
+    """Refuse a draw whose wandering edge has destroyed the trap: on the plan grid, the sand's top ``depth`` where
+    ``present`` (a mask) has no closure of a fifth of the ``nominal`` one, the margin of the model's edge being
+    taken as the edge over which it leaks. The sand reaches the model's edge or breaks up (3 % of the pinch-outs and
+    1 % of the truncations at the plan's ranges, 0 m against 34-40 m nominal, nearly all with the crest on the edge)."""
+    (gx, gy), (mx, my) = plan, margin
+    dx, dy = gx.max() / 300.0, gy.max() / 300.0
+    kx, ky = int(np.ceil(mx / dx)), int(np.ceil(my / dy))
+    inner = (slice(kx, -kx or None), slice(ky, -ky or None))
+    traps = _traps(np.where(present, depth, np.inf)[inner], dx, dy)
+    best = max((trap["height"] for trap in traps), default=0.0)
+    if best < COLLAPSED * nominal:
+        raise ValueError(f"the wandering edge has destroyed the trap: it closes by {best:.1f} m on the plan grid "
+                         f"against {nominal:.1f} m nominal: use another seed or a smaller wander")
 
 
 def _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_net):
@@ -358,14 +400,17 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     centre = np.array([0.5 * x_len, 0.5 * y_len])
     ss = np.random.SeedSequence(seed).spawn(5)
     parts, lengths, sizes = _shapes(nose, area, aspect, tongues, lens)
+    _check_wander(kind, wander, lengths[0], taper_m)
     offsets = _packed([2.0 * s[2] for s in sizes], np.random.default_rng(ss[0]))
     length = lengths[0]
     at = centre + _line_shift(sizes, offsets, x_len, y_len, dip_dir, strike, lens) * dip_dir
     fold, outline, line = _footprint(nose, parts, offsets, at, dip_dir, strike, azimuth, warp, lens, (ss[3], ss[4]))
     structure = st.ramp(dip, azimuth, center=tuple(centre))
     structure = structure if fold is None else structure + fold
+    plan = _plan(x_len, y_len)
+    margin = [max(EDGE_MARGIN * size, 2.0 * (cell or 0.0)) for size in (x_len, y_len)]           # two cells at least
     if fold is not None or outline is not None:
-        _refuse_edge(fold if nosed else outline, lens, nosed, line, dip_dir, x_len, y_len)
+        _refuse_edge(fold if nosed else outline, lens, nosed, line, dip_dir, plan, margin)
     floors = _floors(wander, range_m, relief_sd, relief_range, floor_m, cell)
     if relief_sd:
         structure = structure + st.relief(relief_sd, relief_range, x_len, y_len, hurst, floors[1], seed=ss[2])
@@ -385,6 +430,12 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
         complement = None if lens and mound else st.Structure(      # the barrier takes what the sand loses
             lambda x, y: 1.0 + sum(t * (1.0 - g(x, y)) for t, g in zip(thicknesses, layers_f)) / thicknesses[-1])
         kwargs["isochore"] = layers_f + ([complement] if barrier else [])
+    nominal = nose["height"] if nosed else np.tan(np.radians(dip)) * length
+    if wander or relief_sd:                                            # the roughness may have destroyed the trap
+        gx, gy = plan
+        surface = kwargs["erode_above"] if "erode_above" in kwargs else st.Structure(
+            lambda x, y: top + structure(x, y))
+        _refuse_collapse(thicknesses[0] * f(gx, gy) > MIN_THICKNESS, surface(gx, gy), nominal, plan, margin)
     tan_dip, along = np.tan(np.radians(dip)), float(centre @ dip_dir)
     cut = t_sand if kind.startswith("truncation") else 0.0              # a truncation's top is its sand's base
     level = top + tan_dip * ((along if lens else line) - along) + cut   # the depth of the line (of the middle)
@@ -398,7 +449,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                 erosion_relief_m=np.tan(np.radians(taper_angle)) * wander if kind in ("truncation", "onlap",
                                                                                       "truncation_nose") else None,
                 spill_expected=None if lens else level,
-                closure_expected=nose["height"] if nosed else tan_dip * length,
+                closure_expected=nominal,
                 crest_expected=level - (nose["height"] if nosed else tan_dip * (length if not lens else 0.5 * length)))
     return dict(kwargs=kwargs, meta=meta)
 
