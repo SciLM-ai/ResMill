@@ -517,3 +517,14 @@ def test_a_sand_of_several_layers_thins_over_its_whole_thickness_as_one_layer_of
     z1 = _build_geometry(_layers(x_len, y_len, dx, [12.0], dz=1.0), **one["kwargs"])[2]
     assert np.allclose(zm[:, :, -1] - zm[:, :, 0], z1[:, :, -1] - z1[:, :, 0], atol=1e-6)
     assert np.allclose(zm[:, :, 0], z1[:, :, 0], atol=1e-6)
+
+
+def test_a_trap_within_two_cells_of_the_edge_is_taken_to_touch_it_whatever_the_share_of_the_model():
+    """A cell of the edge is an exit if any corner of it holds sand, so the margin is two cells at least, and 2 % of the
+    model where that is more: a lens of 16.6 km2 whose rim lies 700 m from the edge of an 8 x 6 km model is refused on
+    cells of 400 m (a margin of 800 m, against the 160 m of 2 %) and built on cells of 100 m (200 m)."""
+    args = dict(dip=1.0, taper_angle=0.5, area=16.6e6, aspect=1.0, warp=0.0)
+    with pytest.raises(ValueError, match="800 m of the model's edge"):
+        strat_trap("lens", 8000.0, 6000.0, 2000.0, [10.0], seed=1, cell=400.0, **args)
+    built = strat_trap("lens", 8000.0, 6000.0, 2000.0, [10.0], seed=1, cell=100.0, **args)
+    assert built["meta"]["cell"] == 100.0

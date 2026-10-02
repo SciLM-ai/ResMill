@@ -316,9 +316,12 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     displacement of the limit, of the line and of every tongue's outline, a :func:`resmill.structure.relief` surface
     of Hurst exponent ``hurst`` (the exponent of the edge's own structure function, which the test reads back; the
     realized edge's dimension is about 1.5 - hurst / 2 where the relief dominates, the 1.02-1.25 of coasts for 0.5-0.96,
-    Kondev and Henley 1995, Mandelbrot 1967). It fades out over the taper, so the thick sand is smooth. More than
-    about 0.2 of the main tongue's length, or of the taper for an erosional edge, breaks the sand into pieces that hold
-    no trap. In a truncation or an onlap the wander is the relief of the erosion surface: tan(taper_angle) times it,
+    Kondev and Henley 1995, Mandelbrot 1967). It fades out over the taper, so the thick sand is smooth. More than 0.2
+    of the main tongue's length (a depositional edge), or 0.25 of the taper (an erosional edge, or across a nose), breaks
+    the sand into pieces that hold no trap and is refused [J, the owner's ranges of 2026-10-02]; so is a smaller wander
+    that destroys the trap anyway (no pool that a contact can fill holds a fifth of the nominal closure) or brings the
+    sand within two cells, or 2 %, of the model's edge. In a truncation or an onlap the wander is the relief of the
+    erosion surface: tan(taper_angle) times it,
     ``meta["erosion_relief_m"]`` (None where there is no erosion surface); a valley of that depth preserves sand
     farther updip by its depth over the discordance. ``relief_sd`` (m) is the low-amplitude relief of the zone's top
     and base together, a :func:`resmill.structure.relief` surface of range ``relief_range``: the closure is that of
@@ -346,8 +349,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     the sampler draws them (a Hurst exponent of 0.4-0.8, the edge's own wander, 0.5-2 m of relief on the tops).
 
     The shapes sit on the dip direction through the middle of the model, as far updip as their rims fit within 80 % of
-    the model's size (a lens in the middle); a shape that does not fit, or lobes that the warp pushes within 2 % of the
-    edge, raise a ValueError for the caller to draw again. ``meta["net_layers"]`` counts the layers that are sand, for
+    the model's size (a lens in the middle); a shape that does not fit, lobes that the warp pushes within two cells (or
+    2 %) of the edge, and a wandering edge that destroys the trap raise a ValueError for the caller to draw again. ``meta["net_layers"]`` counts the layers that are sand, for
     :func:`trap_report`. ``meta["closure_nominal"]`` (and ``crest_nominal``, ``spill_nominal``) is that of the main
     tongue with a smooth edge and a flat top, the tangent of the dip times its length: a nominal figure, not the closure.
     With a rough edge, tongues, relief or a mound the closure is what the geometry has, and :func:`trap_report` reads
