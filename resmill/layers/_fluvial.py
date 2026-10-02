@@ -26,6 +26,8 @@ Conventions inside the engine match Alluvsim:
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 from numba import njit
 from scipy.interpolate import CubicSpline
@@ -359,6 +361,19 @@ class fluvial:
         merge_branches: bool = True,
         width_exp: float = 0.5,
         depth_exp: float = 0.4,
+        # ``after_tree(engine)`` is called after every network a level grows
+        # (``bifurcate`` mode) and a True ends that level's networks, so
+        # ``n_trees`` is only the cap. With it no network is abandoned and
+        # mud-filled: each is stamped as sand, the older ones too. DeltaLayer's
+        # ``tree_ntg_stop`` uses it. None: ``n_trees`` networks, the older
+        # ones abandoned.
+        after_tree: Callable[[fluvial], bool] | None = None,
+        # ``branch_levees``: a tree's levees follow their own branch. ``mLVwidth`` and
+        # ``mLVheight`` are then the trunk's, and a branch of discharge share q gets
+        # them times q ** width_exp and q ** depth_exp, its own width and depth ratios.
+        # False: every branch has the trunk's levee, so a small distributary is flanked
+        # by banks wider than itself and a crowd of them leaves no interdistributary mud.
+        branch_levees: bool = False,
         # When ``True``, ``ntime`` is interpreted as the per-level event
         # cap and the global event counter is reset at the top of every
         # level — so each of the ``nlevel`` levels gets its own full
@@ -583,6 +598,8 @@ class fluvial:
         self.merge_branches = bool(merge_branches)
         self.width_exp = float(width_exp)
         self.depth_exp = float(depth_exp)
+        self.after_tree = after_tree
+        self.branch_levees = bool(branch_levees)
         self.tree_branches: list[dict] = []
         if mCHentry_x_offset_per_level is None:
             self.mCHentry_x_offset_per_level = None
@@ -597,8 +614,10 @@ class fluvial:
         self._entry_x_offset = 0.0
         # Endpoints of every streamline that ended up active at the
         # close of a level — used by DeltaLayer to paint optional
-        # mouth-bar lobes at the prograding front.
-        self.distal_tips: list[tuple[float, float, float]] = []
+        # mouth-bar lobes at the prograding front: (x, y, chelev, heading),
+        # and in tree mode (bifurcate=True) also the tip's full channel width
+        # and the depth of the channel (a bifurcation's bar: of the parent).
+        self.distal_tips: list[tuple[float, ...]] = []
 
         # Azimuth (back-compat with delta-style rotated stamping)
         self.azimuth_rad = float(np.deg2rad(azimuth))
@@ -1874,7 +1893,9 @@ class fluvial:
                         if not self._draw_from_pool():
                             break
                         self.cal_curv()
-                    self._simulate_tree(old=itree < self.n_trees - 1)
+                    self._simulate_tree(old=itree < self.n_trees - 1 and self.after_tree is None)
+                    if self.after_tree is not None and self.after_tree(self):
+                        break
                 continue
 
             level_cap = self.ntime[ilevel] if isinstance(self.ntime, list) else self.ntime
@@ -2007,7 +2028,7 @@ class fluvial:
             return
         branches = [dict(cx=tcx, cy=tcy, q=1.0, order=0, splits=0,
                          protect=max(1, int(self.min_avul_node_frac * n)), tip=at_front, merged=False)]
-        bars = []                                          # (x, y, heading, width): a bar at every bifurcation
+        bars = []                                          # (x, y, heading, width, depth): a bar at every bifurcation
         reg = np.radians(450.0 - self.mCHazi)             # regional flow, walk frame, math radians
         lim = np.radians(80.0)
         for _ in range(self.n_bifurcations):
@@ -2082,7 +2103,8 @@ class fluvial:
                                     tip=bool(d_front), merged=False, splits=0)
             # the bar that split the channel sits between the two branches: about
             # half the parent's width, so record it as a tip of that width
-            bars.append((float(pcx[k]), float(pcy[k]), head, 1.0 * half_of(parent['q'])))
+            bars.append((float(pcx[k]), float(pcy[k]), head, 1.0 * half_of(parent['q']),
+                         base_depth * parent['q'] ** self.depth_exp))
             branches[self._index_of(branches, parent)] = up
             branches.append(down)
             branches.append(dict(cx=cx_t, cy=cy_t, q=q_child, order=parent['order'] + 1, splits=0,
@@ -2133,6 +2155,9 @@ class fluvial:
             lv_height = _gauss_clip(self.mLVheight, self.stdevLVheight, lo=0.0)
             lv_asym = _gauss_clip(self.mLVasym, self.stdevLVasym, lo=0.0)
             lv_thin = _gauss_clip(self.mLVthin, self.stdevLVthin, lo=0.0)
+            if self.branch_levees:
+                lv_width *= (self.CHdepth / base_depth) ** (self.width_exp / self.depth_exp)
+                lv_height *= self.CHdepth / base_depth
             self._stamp_levee(lv_depth, lv_width, lv_height, lv_asym, lv_thin)
             if b['tip'] and self.cx.size > 1:
                 dx, dy = self.cx[-1] - self.cx[-2], self.cy[-1] - self.cy[-2]
@@ -2141,12 +2166,13 @@ class fluvial:
                 hy = -dx * self._sin_az + dy * self._cos_az
                 tip_half = float(self._chwidth_arr[-1]) if self._chwidth_arr is not None else self.CHhalfwidth
                 self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)),
-                                         2.0 * tip_half))
-        for bx, by, bhead, bw in bars:
+                                         2.0 * tip_half, float(self.CHdepth)))
+        for bx, by, bhead, bw, bdepth in bars:
             tx, ty = self._rot_xy(bx, by)
             hx = np.cos(bhead) * self._cos_az + np.sin(bhead) * self._sin_az
             hy = -np.cos(bhead) * self._sin_az + np.sin(bhead) * self._cos_az
-            self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)), float(bw)))
+            self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)), float(bw),
+                                     float(bdepth)))
 
     @staticmethod
     def _index_of(branches, b):

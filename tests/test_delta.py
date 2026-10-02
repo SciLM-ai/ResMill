@@ -161,3 +161,318 @@ def test_delta_passes_splay_step_and_max_sinuosity_to_every_generation(monkeypat
     layer = DeltaLayer(nx=32, ny=32, nz=8, x_len=512, y_len=512, z_len=16, top_depth=0.0)
     layer.create_geology(seed=1, n_generations=2, ntime_per_gen=3, splay_step=20.0, max_sinuosity=2.2)
     assert seen == [(20.0, 2.2)] * 2
+
+
+# --------------------------------------------------------------------------
+# opt-in stop at the net-to-gross: trees are added until the level holds its sand
+# --------------------------------------------------------------------------
+
+TREE = dict(bifurcate=True, n_generations=3, n_bifurcations=12, mCHdepth=4.0, mCHwdratio=20.0, stdevCHdepth=0.4,
+            stdevCHwdratio=1.0, mCHsinu=1.08, trunk_length_fraction=0.3, paint_mouth_bars=True,
+            mouth_bar_length_factor=2.5, mouth_bar_width_factor=1.0, q_min=0.03, front_radius=1.0,
+            azimuth=0.0, seed=3)
+
+
+def _tree_delta(**extra):
+    layer = DeltaLayer(nx=48, ny=48, nz=12, x_len=1920.0, y_len=1920.0, z_len=24.0, top_depth=1000)
+    layer.create_geology(**{**TREE, **extra})
+    return layer
+
+
+def _tree_calls(**fluvial_args):
+    """Run the engine of one level with a spy on every tree it grows; returns the ``old`` flag of each."""
+    from resmill.layers._fluvial import fluvial
+
+    class Spy(fluvial):
+        calls = []
+
+        def _simulate_tree(self, old=False):
+            self.calls.append(old)
+            super()._simulate_tree(old=old)
+
+    engine = Spy(nx=48, ny=48, nz=12, xsiz=40.0, ysiz=40.0, zsiz=2.0, xmn=20.0, ymn=20.0, nlevel=1, level_z=[24.0],
+                 NTGtarget=0.99, bifurcate=True, n_bifurcations=12, mCHdepth=4.0, mCHwdratio=20.0, q_min=0.03,
+                 stdevCHsource=0.2, seed=3, **fluvial_args)
+    engine.calls = []
+    engine.simulation()
+    return engine.calls
+
+
+def test_the_after_tree_hook_ends_a_levels_trees_and_leaves_none_abandoned():
+    """Without it ``n_trees`` networks are grown and every one but the last is abandoned (``old``); with it
+    the hook is asked after each tree and the first True ends the level, no tree being abandoned."""
+    assert _tree_calls(n_trees=3) == [True, True, False]
+    asked = []
+    assert _tree_calls(n_trees=5, after_tree=lambda e: asked.append(e) or len(asked) == 2) == [False, False]
+    assert len(asked) == 2
+
+
+def test_the_stop_at_ntg_adds_networks_until_the_sand_share_is_reached():
+    """NTGtarget is the sand share of the whole layer (facies 1 or more, mouth bars included): generation g of 3
+    asks for (g + 1) / 3 of it, counted once over the layer, so the layer ends at its target plus at most
+    the last network, a fraction of a percent here; ``n_trees`` is only the cap."""
+    shares = {}
+    for target in (0.15, 0.30):
+        layer = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=target)
+        shares[target] = float((layer.facies >= 1).mean())
+        assert target <= shares[target] < target + 0.015, (target, shares[target])
+        if target == 0.15:     # the cap would be 3 generations of 200 networks, 3000 branches or more
+            assert len(layer.tree_branches) < 3 * 200 * 5
+    assert shares[0.30] > shares[0.15] + 0.12
+
+
+def test_the_stop_at_ntg_counts_sand_once_where_bars_cross_generations():
+    """Bars 0.35 of their half-width thick (four times the default) reach down through several generations; a
+    generation's own sand then overstates what it adds to the layer, and the share still ends at the target."""
+    layer = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=0.25, mouth_bar_hw_ratio=0.15, mouth_bar_dw_ratio=0.2)
+    assert 0.25 <= (layer.facies >= 1).mean() < 0.27
+
+
+def test_the_stop_at_ntg_stamps_older_networks_as_sand_not_mud_fill():
+    """With mFFCHprop = 1 the default mud-fills every abandoned network (FFCH cells); the stop leaves none."""
+    default = _tree_delta(n_trees=6, mFFCHprop=1.0, stdevFFCHprop=0.0)
+    stopped = _tree_delta(tree_ntg_stop=True, n_trees=6, NTGtarget=0.99, mFFCHprop=1.0, stdevFFCHprop=0.0)
+    assert (default.facies == 0).sum() > 0 and (stopped.facies == 0).sum() == 0
+    assert (stopped.facies >= 1).mean() > (default.facies >= 1).mean()
+
+
+def test_the_stop_at_ntg_counts_the_mouth_bars():
+    """Bars are painted after every tree, so bigger bars reach the same share with fewer networks: the same
+    target is met by a network share about the size of a bar's."""
+    small = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=0.2, mouth_bar_length_factor=1.0, mouth_bar_width_factor=0.5)
+    large = _tree_delta(tree_ntg_stop=True, n_trees=200, NTGtarget=0.2, mouth_bar_length_factor=4.0, mouth_bar_width_factor=1.5)
+    for layer in (small, large):
+        assert 0.18 < (layer.facies >= 1).mean() < 0.3
+    assert (large.facies == 3).sum() > (small.facies == 3).sum()
+    assert len(large.tree_branches) < len(small.tree_branches)
+
+
+def test_the_stop_at_ntg_needs_the_tree_mode():
+    with pytest.raises(ValueError, match="bifurcate"):
+        _tree_delta(tree_ntg_stop=True, bifurcate=False)
+
+
+# --------------------------------------------------------------------------
+# opt-in levels: networks one to a level, levels added until the layer holds its sand
+# --------------------------------------------------------------------------
+
+def test_spread_levels_come_both_ends_first_then_halve_the_gaps():
+    """Channel tops from the floor to the roof in the order 0, 1, 1/2, 1/4, 3/4, 1/8, ...: any prefix of
+    2^m + 1 levels is evenly spaced, so a stop part-way leaves no part of the layer bare."""
+    from resmill.layers.delta import _spread_levels
+
+    z = _spread_levels(4.0, 20.0, 9)
+    np.testing.assert_allclose(z, [4.0, 20.0, 12.0, 8.0, 16.0, 6.0, 14.0, 10.0, 18.0])
+    for m in (1, 2, 3):
+        np.testing.assert_allclose(np.diff(np.sort(z[:2 ** m + 1])), 16.0 / 2 ** m)
+    assert len(set(_spread_levels(0.0, 1.0, 100))) == 100
+
+
+def test_a_level_stop_adds_levels_until_the_layer_holds_its_sand():
+    """One network a level and three levels leave the layer at 2 %; with ``max_levels`` the stop adds levels (the
+    gaps halved in turn) until the share is the target's, to within the last network (0.7 % of the layer here)."""
+    few = _tree_delta(tree_ntg_stop=True, n_trees=1, NTGtarget=0.12)
+    many = _tree_delta(tree_ntg_stop=True, n_trees=1, NTGtarget=0.12, max_levels=60)
+    assert (few.facies >= 1).mean() < 0.06
+    assert 0.12 <= (many.facies >= 1).mean() < 0.14
+    assert len({b["gen"] for b in many.tree_branches}) > 10
+
+
+def test_a_level_stop_spreads_its_networks_through_the_whole_layer():
+    """Every third of the layer, the floor, the middle and the roof, holds sand of the same order."""
+    layer = _tree_delta(tree_ntg_stop=True, n_trees=1, NTGtarget=0.12, max_levels=60)
+    sand = (layer.facies >= 1).mean(axis=(0, 1))
+    thirds = [sand[:4].mean(), sand[4:8].mean(), sand[8:].mean()]
+    assert min(thirds) > 0.5 * max(thirds) and min(thirds) > 0.04, thirds
+
+
+def test_a_level_stop_ends_at_the_cap_on_levels():
+    layer = _tree_delta(tree_ntg_stop=True, n_trees=1, NTGtarget=0.9, max_levels=4)
+    assert {b["gen"] for b in layer.tree_branches} == {0, 1, 2, 3}
+    assert (layer.facies >= 1).mean() < 0.1
+
+
+def test_max_levels_needs_the_stop():
+    with pytest.raises(ValueError, match="tree_ntg_stop"):
+        _tree_delta(max_levels=10)
+
+
+def _levels_asked(monkeypatch, z_len, nz, **extra):
+    """(channel top, protected trunk fraction, front radius) of the engine of every level, in the order the levels run,
+    for a stop with ``max_levels`` in a zone ``z_len`` thick; the layer is returned beside them."""
+    from resmill.layers import _fluvial
+
+    seen, original = [], _fluvial.fluvial.__init__
+
+    def record(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        seen.append((self.level_z[0], self.min_avul_node_frac, self.front_radius))
+
+    monkeypatch.setattr(_fluvial.fluvial, "__init__", record)
+    layer = DeltaLayer(nx=48, ny=48, nz=nz, x_len=1920.0, y_len=1920.0, z_len=z_len, top_depth=1000)
+    layer.create_geology(**{**TREE, "tree_ntg_stop": True, "n_trees": 1, "max_levels": 5, "progradation_fraction": 0.2,
+                            "trunk_length_fraction": 0.3, "front_radius": 1.0, **extra})
+    return seen, layer
+
+
+def test_the_progradation_of_a_level_follows_its_height_between_the_floor_and_the_roof(monkeypatch):
+    """The levels of a 24 m zone with a 4 m trunk run 4, 24, 14, 9, 19 m (the floor, the roof, the middle, the
+    quarter points), so their heights from the first level's top to the roof are 0, 1, 1/2, 1/4 and 3/4. A level
+    at height h protects 0.3 + 0.2 h of the trunk and ends at 1 + 0.2 h of the front radius."""
+    seen, _ = _levels_asked(monkeypatch, 24.0, 12, NTGtarget=0.9)
+    np.testing.assert_allclose([s[0] for s in seen], [4.0, 24.0, 14.0, 9.0, 19.0])
+    np.testing.assert_allclose([s[1] for s in seen], [0.30, 0.50, 0.40, 0.35, 0.45])
+    np.testing.assert_allclose([s[2] for s in seen], [1.00, 1.20, 1.10, 1.05, 1.15])
+
+
+def test_a_zone_thinner_than_its_trunk_progrades_nothing_instead_of_by_a_billion(monkeypatch):
+    """A 12 m zone under a 16 m trunk: the levels run down from the trunk's depth (16, 12, 14, 15, 13 m), none above
+    the first, and the height is held to 0-1 where it used to be -4 / 1e-9 (a front radius of nothing, a trunk cut
+    to the apex, no network at any level after the first)."""
+    seen, _ = _levels_asked(monkeypatch, 12.0, 6, mCHdepth=16.0, mCHwdratio=10.0, NTGtarget=0.9)
+    np.testing.assert_allclose([s[0] for s in seen], [16.0, 12.0, 14.0, 15.0, 13.0])
+    np.testing.assert_allclose([s[1] for s in seen], 0.3)
+    np.testing.assert_allclose([s[2] for s in seen], 1.0)
+
+
+def test_a_zone_a_little_thicker_than_its_trunk_progrades_in_proportion(monkeypatch):
+    """The height is the level's rise over the room the zone has above the trunk, at least one cell (2 m here), so
+    a zone 1 m above its trunk's depth never reaches a height of 1 and the progradation is continuous in the zone's
+    thickness: 12 m under a 11 m trunk gives levels 11, 12, 11.5, ... of heights 0, 1/2, 1/4, ..."""
+    seen, _ = _levels_asked(monkeypatch, 12.0, 6, mCHdepth=11.0, mCHwdratio=10.0, NTGtarget=0.9)
+    np.testing.assert_allclose([s[0] for s in seen[:3]], [11.0, 12.0, 11.5])
+    np.testing.assert_allclose([s[1] for s in seen[:3]], [0.30, 0.30 + 0.2 * 0.5, 0.30 + 0.2 * 0.25])
+
+
+def test_a_level_stop_in_a_zone_thinner_than_its_trunk_still_grows_a_network_at_every_level(monkeypatch):
+    """The symptom of the height above: one network at the first level and none at the rest, the stop running through
+    all ``max_levels`` empty levels (a share of 3 % here for an aim of 25 %)."""
+    seen, layer = _levels_asked(monkeypatch, 12.0, 6, mCHdepth=16.0, mCHwdratio=10.0, NTGtarget=0.25, max_levels=12)
+    assert len({b["gen"] for b in layer.tree_branches}) > 6
+    assert 0.25 <= (layer.facies >= 1).mean() < 0.4
+
+
+# --------------------------------------------------------------------------
+# opt-in levees that follow their own branch
+# --------------------------------------------------------------------------
+
+def _levee_calls(**extra):
+    """(depth of the branch, levee width, levee height) of every levee a tree's branches are given."""
+    from resmill.layers._fluvial import fluvial
+
+    seen = []
+
+    class Spy(fluvial):
+        def _stamp_levee(self, LV_depth, LV_width, LV_height, LV_asym, LV_thin):
+            seen.append((self.CHdepth, LV_width, LV_height))
+            super()._stamp_levee(LV_depth, LV_width, LV_height, LV_asym, LV_thin)
+
+    engine = Spy(nx=48, ny=48, nz=12, xsiz=40.0, ysiz=40.0, zsiz=2.0, xmn=20.0, ymn=20.0, nlevel=1, level_z=[24.0],
+                 NTGtarget=0.99, bifurcate=True, n_bifurcations=12, mCHdepth=4.0, mCHwdratio=20.0, q_min=0.03,
+                 mLVwidth=60.0, stdevLVwidth=0.0, mLVheight=0.5, stdevLVheight=0.0, stdevCHdepth=0.0,
+                 stdevCHsource=0.2, seed=3, **extra)
+    engine.simulation()
+    return np.array(seen)
+
+
+def test_levees_follow_their_branch_when_asked():
+    """Off (the default) every branch gets the trunk's levee, 60 m wide and 0.5 m high. On, a branch of depth
+    d = 4 q^0.4 has width 20 x 4 q^0.5 and a levee scaled by the same q: width 60 q^0.5, height 0.5 q^0.4."""
+    default = _levee_calls()
+    assert len(default) > 10 and np.all(default[:, 1] == 60.0) and np.all(default[:, 2] == 0.5)
+    scaled = _levee_calls(branch_levees=True)
+    q = (scaled[:, 0] / 4.0) ** (1.0 / 0.4)
+    np.testing.assert_allclose(scaled[:, 1], 60.0 * q ** 0.5, rtol=1e-6)
+    np.testing.assert_allclose(scaled[:, 2], 0.5 * q ** 0.4, rtol=1e-6)
+    assert scaled[:, 1].max() == pytest.approx(60.0) and scaled[:, 1].min() < 30.0
+
+
+# --------------------------------------------------------------------------
+# the bar's footprint as asked
+# --------------------------------------------------------------------------
+
+def test_a_mouth_bar_is_as_long_and_as_wide_as_asked():
+    """A bar of length 600 m and half-width 150 m (12 and 6 tip widths of 50 and 25 m, say) at a tip heading +x:
+    its footprint runs 600 m along the heading and 300 m across at its widest, a third of the way along."""
+    from types import SimpleNamespace
+    from resmill.layers.delta import _paint_mouth_bar_into_engine
+
+    n, size = 120, 10.0
+    canvas = SimpleNamespace(facies=np.full((n, n, 4), -1, dtype=np.int8), x=np.arange(n) * size + size / 2,
+                             y=np.arange(n) * size + size / 2, xsiz=size, ysiz=size, zsiz=1.0)
+    _paint_mouth_bar_into_engine(canvas, 200.0, 600.0, 3.9, 0.0, 600.0, 150.0, 0.1, 0.1)
+    plan = (canvas.facies >= 1).any(axis=2)
+    xs, ys = np.where(plan)
+    assert (xs.max() - xs.min() + 1) * size == pytest.approx(600.0, abs=2 * size)
+    widest = plan.sum(axis=1).max() * size
+    assert widest == pytest.approx(300.0, abs=2 * size)
+    assert plan.sum(axis=1).argmax() * size + size / 2 - 200.0 == pytest.approx(200.0, abs=60.0)
+
+
+# --------------------------------------------------------------------------
+# opt-in bar thickness in depths of the tip's own channel
+# --------------------------------------------------------------------------
+
+def _bar_canvas(n=160, size=10.0, nz=40, zsiz=0.5):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(facies=np.full((n, n, nz), -1, dtype=np.int8), x=np.arange(n) * size + size / 2,
+                           y=np.arange(n) * size + size / 2, xsiz=size, ysiz=size, zsiz=zsiz)
+
+
+def _bar_peak_thickness(tip, thickness_depths=None):
+    """Metres of sand in the widest column of the bar painted at ``tip`` (heading +x, crest at 19.5 m)."""
+    from resmill.layers.delta import _paint_mouth_bars
+
+    canvas = _bar_canvas()
+    _paint_mouth_bars(canvas, [tip], 6.0, 2.0, 0.06, 0.08, fallback=(1.0, 1.0), thickness_depths=thickness_depths)
+    return float((canvas.facies >= 1).sum(axis=2).max()) * canvas.zsiz
+
+
+def test_a_bar_is_as_thick_as_asked_in_depths_of_its_own_channel_whatever_its_width():
+    """Without ``thickness_depths`` a bar's peak is 0.06 + 0.08 of its half-width, so a bar twice as wide is twice as
+    thick (a 50 m tip: half-width 100 m, 14 m; a 100 m one 28 m). With it the peak is that many depths of the tip's
+    channel, 1.25 x 4 m = 5 m at either width, to within a cell (0.5 m)."""
+    narrow, wide = (300.0, 600.0, 19.5, 0.0, 50.0, 4.0), (300.0, 600.0, 19.5, 0.0, 100.0, 4.0)
+    assert _bar_peak_thickness(narrow) == pytest.approx(14.0, abs=0.5 + 0.5)
+    assert _bar_peak_thickness(wide) == pytest.approx(19.5, abs=0.5)         # the 20 m column is full
+    for tip in (narrow, wide):
+        assert _bar_peak_thickness(tip, thickness_depths=1.25) == pytest.approx(5.0, abs=0.5 + 0.01)
+    deeper = (300.0, 600.0, 19.5, 0.0, 50.0, 8.0)
+    assert _bar_peak_thickness(deeper, thickness_depths=1.25) == pytest.approx(10.0, abs=0.5 + 0.01)
+
+
+def test_a_tip_without_a_depth_keeps_its_ratio_of_the_half_width():
+    """The engine records no depth for the tip of a level's streamline outside the tree mode, and a bar of such a tip is
+    built as before even when ``thickness_depths`` is given."""
+    tip = (300.0, 600.0, 19.5, 0.0, 50.0)
+    assert _bar_peak_thickness(tip, thickness_depths=1.25) == _bar_peak_thickness(tip)
+
+
+def test_a_tree_tip_records_the_depth_of_its_own_channel_and_the_bars_follow_it():
+    """A branch of discharge share q has depth 4 q^0.4 m: the tips of the tree (trunk depth 4 m, 3 % of the discharge
+    is the least a branch splits at) hold depths from the trunk's down to about 2 m, and a bar of 1.25 depths is
+    thinner than one of 2.5 on the same networks (``n_trees`` fixed, so only the bars differ)."""
+    thin = _tree_delta(n_trees=4, mouth_bar_thickness_depths=0.5)
+    thick = _tree_delta(n_trees=4, mouth_bar_thickness_depths=2.5)
+    tips = np.array(thin._distal_tips)
+    assert tips.shape[1] == 6 and len(tips) > 10
+    assert 0.0 < tips[:, 5].min() < 3.0 and tips[:, 5].max() < 6.0
+    assert (thick.facies == 3).sum() > 1.5 * (thin.facies == 3).sum()
+
+
+def test_a_tips_bar_is_sized_by_the_tips_width_and_the_two_factors():
+    """A tip 50 m wide with a length factor of 6 and a width factor of 2 has a bar 2 x 6 x 50 = 600 m long and 2 x 50 = 100 m
+    from its axis to its edge at the widest, 200 m across (and a bar painted from a width factor of 4 is twice as wide)."""
+    from resmill.layers.delta import _paint_mouth_bars
+
+    def footprint(width_factor):
+        canvas = _bar_canvas()
+        _paint_mouth_bars(canvas, [(300.0, 600.0, 19.5, 0.0, 50.0, 4.0)], 6.0, width_factor, 0.06, 0.08, fallback=(1.0, 1.0))
+        plan = (canvas.facies >= 1).any(axis=2)
+        xs = np.where(plan.any(axis=1))[0]
+        return (xs.max() - xs.min() + 1) * 10.0, plan.sum(axis=1).max() * 10.0
+
+    length, across = footprint(2.0)
+    assert length == pytest.approx(600.0, abs=20.0) and across == pytest.approx(200.0, abs=20.0)
+    assert footprint(4.0)[1] == pytest.approx(2.0 * across, abs=30.0)

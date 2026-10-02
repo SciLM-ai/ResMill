@@ -61,7 +61,7 @@ from scipy.special import betainc, betaincinv
 from .base import RANGE_PER_SIGMA
 
 __all__ = ["COVERAGE_BETA", "COVERAGE_RANGE", "HOLE_RANGE_WIDTHS", "MARGIN_BIAS_MAX", "THICKNESS_RANGE_M", "check_drapes",
-           "coverage_from_unit", "sample_drapes", "storey_map", "draped_columns", "drape_faces", "place_drapes"]
+           "coverage_from_unit", "sample_drapes", "storey_map", "draped_columns", "thin_barrier", "drape_faces", "place_drapes"]
 
 # Coverage over reservoirs: the Beta with the mean and standard deviation of Barton et al.'s 17 outcrop means (0.556 and
 # 0.257), cut to the span of those outcrops (the truncation moves them to 0.53 and 0.23).
@@ -211,6 +211,15 @@ def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng, 
     return draped
 
 
+def thin_barrier(thickness, size, ks, kd):
+    """The thin-barrier factor ``[1 + (t / h)(ks / kd - 1)]^-1`` of a mud layer of ``thickness`` t (m, at most ``size``) and
+    permeability ``kd`` (mD) replacing t of the rock between two cells of size h = ``size`` (m) whose harmonic mean
+    permeability across the face is ``ks`` (mD), kept between 1e-12 and 1. Arrays broadcast. The drapes' faces and the lobes'
+    thin interlobe caps both use it."""
+    m = 1.0 / (1.0 + (np.minimum(thickness, size) / size) * (ks / kd - 1.0))
+    return np.clip(m, MULTIPLIER_FLOOR, 1.0)
+
+
 def drape_faces(facies, storey, draped, perms, size, thickness, mud_perm):
     """``(mult_x, mult_y, mult_z)``, each ``(nx, ny, nz)`` float32 with k up: the multiplier across each cell's +x,
     +y and lower face (k - 1), 1 where there is no drape. A face is draped when its two cells are sand of different
@@ -235,10 +244,9 @@ def drape_faces(facies, storey, draped, perms, size, thickness, mud_perm):
             flag |= known_lo & known_hi & (s_lo > s_hi) & held_lo
         k_lo, k_hi = (k[flag].astype(float) for k in _pair(perm, axis))
         ks = 2.0 * k_lo * k_hi / (k_lo + k_hi)
-        m = 1.0 / (1.0 + (min(float(thickness), h) / h) * (ks / float(mud_perm) - 1.0))
         mult = np.ones(facies.shape, dtype=np.float32)
         view = np.moveaxis(mult, axis, 0)
-        (view[1:] if axis == 2 else view[:-1])[flag] = np.clip(m, MULTIPLIER_FLOOR, 1.0)
+        (view[1:] if axis == 2 else view[:-1])[flag] = thin_barrier(float(thickness), h, ks, float(mud_perm))
         out.append(mult)
     return tuple(out)
 

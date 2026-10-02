@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- `max_levels` (`DeltaLayer`, with `tree_ntg_stop=True`) in a zone no thicker than its trunk is deep grew a
+  network at the first level only. The progradation follows each level's height above the first level's top,
+  divided by the room above it (the zone's thickness minus the trunk's depth), which is nothing or negative in such a
+  zone and was taken as 1e-9: every later level had a height of about -1e9, a front radius of nothing and a trunk
+  cut to the apex, so the stop ran through all its levels, empty, and ended short of its target (3 x 3 km, 18 m
+  trunk, aim 0.55: 0.06, 0.08, 0.12 and 0.18 in zones of 4, 6, 9 and 14 m, one level in 300 grew a network). The
+  height is now held to 0-1 and the room is at least a cell: the same grid gives 0.62, 0.59, 0.58 and 0.56. A zone
+  more than a cell thicker than its trunk is built as before; `progradation_fraction=0` and `max_levels=None` do not
+  see the change.
 - `facies_props` given to one `ChannelLayer` or `DeltaLayer` no longer
   rewrite the module's `FACIES_PROPS`. The table was copied one level deep
   and its inner dicts updated in place, so every later layer built without
@@ -251,6 +260,89 @@
   generation the older ones are abandoned and mud-filled with `mFFCHprop`. Off by default; the published dataset is
   unchanged. `examples/dataset_generation/config_full_delta_v2.json` is the
   dataset config for it. `layer.tree_branches` lists every segment.
+- `compensation_scale` (`LobeLayer`): the weight of a column as the next stamp's centre is
+  `exp(-deficit / (compensation_scale * dh_ave))`, the deficit being its height above the lowest
+  column in metres, so a column one scale of stamp thicknesses higher is e times less likely.
+  ResMill's weight, `(height above the lowest column in cells + 0.001) ** -m`, puts every stamp on the
+  lowest column from `m` = 2 up, so `m` = 2, 10 and 50 give the same stack and the same compensation
+  index kappa (Straub et al. 2009): 0.83 for about 350 stamps of 1.4 km (3 m peak), 0.86 for 90 stamps,
+  0.93-0.95 for 15-19 stamps wider than the model, and the strength could not be varied. With the scale
+  kappa falls smoothly as the scale grows (about 350 stamps of 1.4 km and 3 m on 5.5 x 4 km, 3 seeds, an
+  independent re-run: 0.82, 0.81, 0.79 and 0.76 at 0.03, 0.1, 0.2 and 0.4, 0.69 at 1, 0.65 at 3, 0.83 for ResMill's
+  weight at m = 100; random stacking is 0.55; the first count of 0.81-0.85 at 0.2 or less was a little high). Default `None` keeps the old weight: outputs are
+  bit-identical to before.
+- `facies_props` (`LobeLayer`): rock by facies for lobes, keyed by facies code as in `ChannelLayer`.
+  Without it the sand is the top `ntg` share of the lobe structure, whose porosity and permeability are
+  standardized over all cells before the mud is zeroed, so the sand's average moves with `ntg` (porosity
+  0.292, 0.274 and 0.256 for a requested 0.25 at `ntg` 0.25, 0.5 and 0.85), the mud has no rock (the
+  deck's floors) and PERMZ is one `kzkx` per layer. With it the sand keeps exactly `poro_ave`,
+  `perm_ave`, `poro_std` and `perm_std` at any `ntg`; the mud (`-1`) has its own `poro`, `log10_perm`
+  and optional `poro_sd` / `log10_perm_sd`; `kvkh` entries give each facies' vertical to horizontal
+  ratio per cell (`kvkh_mat`, written as PERMZ). Every cell is one facies with that facies' rock. Binary lobes
+  leave a connected mud lattice 100-400 m wide around round sand cores in plan view, where Tanqua lobes
+  fade from 85-100 % sand at the axis to 20-50 % at the fringe (Spychala et al. 2017): that fringe is the
+  heterolithic facies of `interlobe_erosion`, below. Default `None`: outputs are bit-identical to before.
+- `tree_ntg_stop=True` (`DeltaLayer`, with `bifurcate=True`): grow distributary networks in each
+  generation until the layer holds its cumulative share of `NTGtarget` (sand cells, facies 1 or more,
+  mouth bars included; generation g of `n_generations` asks for (g + 1) / `n_generations` of it, counted
+  once over the layer's cells), `n_trees` being only the cap. The branching delta ignores `NTGtarget`,
+  grows a fixed `n_trees` networks per generation and abandons every one but the last, mud-filling it
+  with `mFFCHprop` (nothing at all is painted with the preset's 0), so at field scale it realizes 2-15 %
+  sand whatever `n_trees` (1-12), `n_bifurcations` (16-128) or trunk width (70-450 m), and the mouth bars
+  of the vanished networks float where they were. With the stop every network is stamped as sand, the
+  older ones too, and each network's mouth bars are painted right after it so they count. A 48 x 48 x 12
+  test delta ends at 0.053, 0.150 and 0.300 for targets of 0.05, 0.15 and 0.30; a 4 x 4 km, 36 m thick
+  one at 0.501 for 0.5 (bars 4 x 1.5). The engine takes the stop as a hook, `after_tree(engine)`, called
+  after each network: a True ends the level's networks and none is abandoned. Off by default: outputs
+  are bit-identical.
+- `interlobe_erosion` (`LobeLayer`, with `facies_props`): interlobe mud, continuous around each lobe at a low
+  net-to-gross and eroded away at the axes at a high one, in cells that are one facies each. Each stamp is
+  capped with mud `min((1 - f) t, M)` thick (`t` its thickness at the column, `f` the sand fraction of its margin,
+  `facies_props[2]["ntg_floor"]`), so a lobe's sand fraction falls from `1 - M / t` where it is thick to `f` at its
+  margin (Tanqua: axis 85-100 %, off-axis 50-85 %, fringe 20-50 %), and a younger stamp scours
+  `interlobe_erosion` times its own thickness below its base, the mud in that reach, of whichever older
+  cap, becoming its sand (sand on sand where it is thick, no cut at its margin; the deepest reach of any later
+  stamp counts, so a sliver of a deposit between two stamps shields nothing). A cell is sand (3, half sand or more), the
+  heterolithic fringe (2, a fifth to a half) or mud (-1), by what fills it, as channel, levee and floodplain cells are,
+  with the rock and the kv/kh of its facies (the fringe has `poro`, `log10_perm`, spreads and `kvkh` of its own, 1-2 decades
+  below the sand's in the Tanqua); nothing is mixed, so a cell's permeability does not depend on the cell's size. `M` is
+  found by bisection so that the share of net cells (sand, and the fringe when its permeability is above 1 mD: the
+  cells above 1 mD) is `ntg`, a warning and `interlobe["aim_missed"]` when the stack cannot go as low (cells as thick as
+  the lobes, a fringe that is net). The mud of a cap half a cell thick or more fills cells; the mud in a sand cell, under
+  half of it, is a thin cap and no cell: it is a vertical transmissibility barrier on the face of the cell nearest its
+  middle, the thin-barrier factor of the mud drapes (`resmill.layers.drapes.thin_barrier`: the cap's thickness, the mud's
+  permeability and the harmonic mean of the PERMZ of the two cells), written as MULTZ through the drapes' export path
+  (`self.mult_z`), which multiplies into a fault seal. A cap of 0.3 cells of 1e-3 mD mud between sand of 300 mD gives a face of about 2e-5, and a
+  stack of caps a set of compartments joined where the later lobes scoured the caps away. Facies 3, 2 and -1;
+  `self.interlobe` holds the cap thickness, the share of contacts amalgamated, the realized `net_cells`, the mean sand
+  share and the share of faces under a half. The option also clips the porosity decay of a stamp thinner than a
+  cell or two at 1: a cell whose lower face lies below the stamp's base had a decay above 1, a ring of porosity above the
+  design maximum 0.35 that shows as a small bright ring in a plan view (`clip_decay`, off in every other path).
+  With cells of 0.3 m on lobes of 5 m, 40 x 30 columns, the cells above 1 mD are the 0.25, 0.5, 0.65 and 0.85 asked,
+  at 1 m the last two, at 3 m none (cells as thick as the lobe). Default `None`: outputs are bit-identical.
+- `max_levels=N` (`DeltaLayer`, with `tree_ntg_stop=True`): the layer is grown level by level instead of
+  piling networks at `n_generations` levels. The stop of `tree_ntg_stop` with `n_trees` large puts 100 or
+  more networks at each of a few levels, and since every plan view then holds the union of them (a
+  network covers 3-6 % of a field-scale plan view) each is one solid fan with no interdistributary
+  mud. With `max_levels`, `n_trees` networks (1) are grown at each of up to `max_levels` channel tops
+  spread from the floor to the roof (both ends, the middle, the quarter points, ...: any `2**m + 1` of
+  them are evenly spaced), until the layer holds `NTGtarget`; a plan view then shows the few networks
+  that reach it as separate trees with mud between, and the net-to-gross lands at the target plus the
+  last network's share. It replaces `n_generations` and `level_z`; the progradation follows each level's
+  height. Default `None`: outputs are bit-identical.
+- `mouth_bar_thickness_depths` (`DeltaLayer`, tree mode): every mouth bar's peak thickness in depths of its own
+  tip's channel (a bar at a bifurcation: of the parent branch), whatever `mouth_bar_width_factor` makes its width. A bar
+  is otherwise `mouth_bar_hw_ratio + mouth_bar_dw_ratio` of its half-width thick, so its thickness over the depth of
+  its channel is that ratio times the channel's width per depth, and a tree's tips are narrower per depth than its
+  trunk (a branch of discharge share q has width per depth `q**0.1` of the trunk's, then the taper): ratios worked out
+  for the trunk (1.25 depths of an 8 m, 320 m trunk, Reynolds 1999's mouth bar over distributary channel) gave bars of
+  0.74 tip depths (P10-P90 0.60-0.88, 102 tips at the anchors). The engine's `distal_tips` of a tree now carry the
+  channel's depth as a sixth element. `None`, the default: outputs are bit-identical.
+- `branch_levees=True` (`fluvial`, so `DeltaLayer` too; tree mode): `mLVwidth` and `mLVheight` are the
+  trunk's, and a branch of discharge share q gets them times q**`width_exp` and q**`depth_exp`, its own
+  width and depth ratios. Every branch otherwise has the trunk's levee, 60 m wide beside a 30 m
+  distributary, and the levee sheets of a hundred overlapping networks fill the interdistributary area.
+  Default `False`: outputs are bit-identical.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);
   `examples/anticline_meander.py` and `examples/angular_unconformity.py`.
 
