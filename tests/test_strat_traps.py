@@ -235,14 +235,14 @@ def test_a_pinch_out_tongue_closes_by_the_dip_times_its_length_and_has_the_area_
     x_len, y_len, dx = model
     built = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=1, dip=dip, taper_angle=0.5, area=area,
                        aspect=aspect, warp=0.0)
-    assert built["meta"]["closure_expected"] == pytest.approx(closure, abs=0.5)
-    assert built["meta"]["closure_expected"] == pytest.approx(np.tan(np.radians(dip)) * _length(area, aspect))
+    assert built["meta"]["closure_nominal"] == pytest.approx(closure, abs=0.5)
+    assert built["meta"]["closure_nominal"] == pytest.approx(np.tan(np.radians(dip)) * _length(area, aspect))
     (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
     cell = np.tan(np.radians(dip)) * dx                                   # the depth a cell's width is worth
     assert trap["limited_by"] == "spill"
     assert trap["height"] == pytest.approx(closure, abs=cell + 0.02 * closure)
-    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=cell)
-    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_expected"], abs=cell)
+    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_nominal"], abs=cell)
+    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_nominal"], abs=cell)
     assert area * 0.97 < trap["area"] < area * 1.10
 
 
@@ -256,13 +256,13 @@ def test_a_trap_on_a_dip_in_any_direction_closes_by_the_same_dip_times_its_lengt
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
     built = strat_trap(kind, x_len, y_len, 2000.0, [10.0], seed=1, dip=1.1, taper_angle=0.5, area=3.4e6, aspect=2.2,
                        warp=0.0, azimuth=azimuth, mound=mound)
-    (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
+    trap = trap_report(_layers(x_len, y_len, dx, [10.0]), built)[0]
     cell = 1.5 * np.tan(np.radians(1.1)) * dx
     fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
-    expected = fine["height"] if mound else built["meta"]["closure_expected"]
+    expected = fine["height"] if mound else built["meta"]["closure_nominal"]
     assert trap["height"] == pytest.approx(expected, abs=cell + 0.02 * 27.0)
-    assert fine["height"] == pytest.approx(built["meta"]["closure_expected"], abs=0.5 + (4.0 if mound else 0.0))
-    assert trap["crest_depth"] == pytest.approx(fine["crest_depth"] if mound else built["meta"]["crest_expected"],
+    assert fine["height"] == pytest.approx(built["meta"]["closure_nominal"], abs=0.5 + (4.0 if mound else 0.0))
+    assert trap["crest_depth"] == pytest.approx(fine["crest_depth"] if mound else built["meta"]["crest_nominal"],
                                                 abs=cell)
     assert 3.4e6 * 0.95 < trap["area"] < 3.4e6 * 1.15
 
@@ -286,7 +286,7 @@ def test_lobes_warped_by_a_quarter_close_by_the_dip_times_the_length_of_the_shap
         (trap,) = trap_report(_layers(x_len, y_len, dx, thick), built)[:1]
         expected = _fine_traps(built, 2000.0, x_len, y_len)[0]["height"]
         errors.append(abs(trap["closure"] - expected) - (1.5 * np.tan(np.radians(1.2)) * dx + 0.08 * expected))
-        assert built["meta"]["closure_expected"] == pytest.approx(np.tan(np.radians(1.2)) * _length(3.0e6, 2.0))
+        assert built["meta"]["closure_nominal"] == pytest.approx(np.tan(np.radians(1.2)) * _length(3.0e6, 2.0))
     assert len(errors) >= 5 and max(errors) <= 0.0
 
 
@@ -295,7 +295,7 @@ def test_a_straight_pinch_out_line_on_a_plane_monocline_has_no_closure():
     built = strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.0, taper_angle=0.5, area=None)
     (trap,) = trap_report(_layers(8000.0, 6000.0, 50.0, [10.0]), built)
     assert trap["height"] == 0.0 and trap["area"] == 0.0
-    assert built["meta"]["closure_expected"] == 0.0
+    assert built["meta"]["closure_nominal"] == 0.0
 
 
 @pytest.mark.parametrize("mound", [False, True], ids=["flat top", "mound"])
@@ -312,7 +312,7 @@ def test_an_enclosed_lens_is_sealed_and_holds_the_dip_times_its_whole_length(dip
     (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
     assert trap["limited_by"] == "sealed" and trap["spill_depth"] is None
     expected = np.tan(np.radians(dip)) * _length(area, aspect)
-    assert built["meta"]["closure_expected"] == pytest.approx(expected)
+    assert built["meta"]["closure_nominal"] == pytest.approx(expected)
     cell = np.tan(np.radians(dip)) * dx
     fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
     assert fine["limited_by"] == "sealed"
@@ -458,9 +458,9 @@ def test_a_tongue_closes_by_the_dip_times_its_length_whichever_surface_cuts_the_
     (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
     cell = np.tan(np.radians(1.1)) * dx
     assert trap["limited_by"] == "spill" and trap["height"] == pytest.approx(27.0, abs=cell + 0.5)
-    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=cell)
-    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_expected"], abs=cell)
-    assert built["meta"]["spill_expected"] == pytest.approx(1980.9 + (10.0 if kind == "truncation" else 0.0), abs=0.1)
+    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_nominal"], abs=cell)
+    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_nominal"], abs=cell)
+    assert built["meta"]["spill_nominal"] == pytest.approx(1980.9 + (10.0 if kind == "truncation" else 0.0), abs=0.1)
     fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
     assert trap["area"] == pytest.approx(fine["area"], rel=0.06) and 3.4e6 * 0.97 < trap["area"]
     assert (trap["area"] > 3.4e6 * 1.1) == (kind == "truncation")
@@ -486,10 +486,10 @@ def test_an_updip_edge_across_a_nose_closes_by_the_height_of_the_nose(kind):
     layers = _layers(x_len, y_len, dx, [10.0])
     (trap,) = trap_report(layers, built)
     cell = np.tan(np.radians(1.0)) * dx
-    assert built["meta"]["closure_expected"] == 60.0
+    assert built["meta"]["closure_nominal"] == 60.0
     assert trap["limited_by"] == "spill" and trap["height"] == pytest.approx(60.0, abs=cell + 0.03 * 60.0)
-    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=2.0 * cell)
-    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_expected"], abs=2.0 * cell)
+    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_nominal"], abs=2.0 * cell)
+    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_nominal"], abs=2.0 * cell)
     rows = np.nonzero(trap["mask"].any(axis=0))[0]
     line = int(built["meta"]["line"] // dx)
     assert rows.min() in (line, line + 1) and trap["crest"][1] in (line, line + 1)    # downdip of the line, crest on it
@@ -689,7 +689,7 @@ def test_the_taper_thins_without_a_step_or_a_hinge_to_the_edge():
     built = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=1, dip=1.0, taper_angle=angle, area=None)
     _, _, _, zc, _ = _sand("pinchout", built, nz=10, x_len=x_len, y_len=y_len, thick=10.0)
     h = (zc[:, :, -1] - zc[:, :, 0])[len(zc) // 4, 0::2]                     # along dip, one column, at the nodes
-    y, line, mean = np.arange(len(h)) * dx, built["meta"]["line"], np.tan(np.radians(angle))
+    mean = np.tan(np.radians(angle))
     taper = (h > 1e-9) & (h < 10.0 - 1e-6)
     assert taper.sum() * dx == pytest.approx(10.0 / mean, abs=2 * dx)
     slope = np.diff(h) / dx
@@ -984,8 +984,9 @@ EDGE_HITS = [
 
 @pytest.mark.parametrize("draw", EDGE_HITS, ids=["crest on the edge", "crest at the edge"])
 def test_a_draw_whose_wander_puts_the_crest_on_the_models_edge_is_refused(draw):
-    """The refusal reads the sand that was drawn, wander and relief included, not the nominal outline: the plan grid's
-    largest closure is under a fifth of the nominal one, so the caller is told to draw again."""
+    """The refusal reads the sand that was drawn, wander and relief included, not the nominal outline: no pool of the plan
+    grid can hold a fifth of the nominal closure (the edge's own crest is shallower than every pool's: no contact is
+    admissible), so the caller is told to draw again."""
     draw = dict(draw)
     x_len, y_len, seed = draw.pop("x_len"), draw.pop("y_len"), draw.pop("seed")
     with pytest.raises(ValueError, match="wander"):
@@ -993,14 +994,14 @@ def test_a_draw_whose_wander_puts_the_crest_on_the_models_edge_is_refused(draw):
     smooth = dict(draw, wander=0.0, relief_sd=0.0)                       # the same shapes without the roughness
     built = strat_trap("pinchout", x_len, y_len, 2000.0, [8.0], seed, **smooth)
     assert trap_report(_layers(x_len, y_len, 100.0, [8.0], dz=2.0), built)[0]["height"] > 0.5 * built["meta"][
-        "closure_expected"]
+        "closure_nominal"]
 
 
 @pytest.mark.parametrize("kind", ["pinchout", "truncation"])
 def test_what_is_accepted_at_the_largest_wander_still_closes_and_what_is_not_is_refused(kind):
-    """24 draws at a wander of 0.18 of the main tongue's length (the plan's range ends at 0.2): the closure of the
-    cells is never under a fifth of the nominal one (before, 3 % of the pinch-outs and 1 % of the truncations were
-    accepted with about none), and some draws are refused for it."""
+    """24 draws at a wander of 0.18 of the main tongue's length (the plan's range ends at 0.2): the oil that a contact can
+    hold in the cells' main trap (``contact_limit``) is never under a tenth of the nominal closure (before, 3 % of the
+    pinch-outs and 1 % of the truncations were accepted with about none), and some draws are refused for it."""
     x_len, y_len, dx = 9000.0, 7200.0, 100.0
     rng = np.random.default_rng(5)
     accepted, refused = [], 0
@@ -1017,9 +1018,9 @@ def test_what_is_accepted_at_the_largest_wander_still_closes_and_what_is_not_is_
             assert "wander" in str(error) or "edge" in str(error) or "fit" in str(error)
             refused += "wander" in str(error)
             continue
-        accepted.append(trap_report(_layers(x_len, y_len, dx, [8.0], dz=2.0), built)[0]["height"]
-                        / built["meta"]["closure_expected"])
-    assert len(accepted) >= 8 and refused >= 1 and min(accepted) > 0.2
+        trap = trap_report(_layers(x_len, y_len, dx, [8.0], dz=2.0), built)[0]
+        accepted.append((trap["contact_limit"] - trap["crest_depth"]) / built["meta"]["closure_nominal"])
+    assert len(accepted) >= 8 and refused >= 1 and min(accepted) > 0.1
 
 
 @pytest.mark.parametrize("kind,share,fits", [
@@ -1225,7 +1226,7 @@ def test_the_trap_measure_is_right_for_both_tops_and_the_convex_top_sinks_the_cr
         built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=2, barrier=barrier, column=12.0 if barrier else None,
                            dip=dip, taper_angle=taper, area=3.4e6, aspect=2.2, warp=0.2, wander=60.0, range_m=1000.0,
                            relief_sd=0.5, cell=dx, mound=mound)
-        (trap,) = trap_report(layers, built)
+        trap = trap_report(layers, built)[0]
         fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
         assert trap["closure"] == pytest.approx(fine["height"], abs=1.5 * np.tan(np.radians(dip)) * dx + 0.08 * fine[
             "height"])
@@ -1246,3 +1247,154 @@ def test_a_convex_up_top_is_not_for_an_erosion_surface_or_a_nose(kind, extra):
     with pytest.raises(ValueError, match="convex"):
         strat_trap(kind, 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.0, mound=True, **extra)
     strat_trap(kind, 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.0, mound=False, **extra)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Every pool, and a contact that overfills none (review F5)
+
+def _chain(values, exit=False):
+    """A map of walls (infinite depth) with one row of cells of the given depths, 1 m across: its row is 1, its
+    columns 1 to len(values). The map's edge is its first and last row and column, so the row has an exit only if
+    ``exit``: the last cell is then on the edge."""
+    depth = np.full((3, len(values) + (1 if exit else 2)), np.inf)
+    depth[1, 1:len(values) + 1] = values
+    return depth
+
+
+def test_every_local_minimum_of_the_top_is_a_pool_with_the_level_where_it_spills_into_a_shallower_pool():
+    """Depths 12 6 10 8 14 9 11 along a row of cells in walls, sealed all round: three pools, the elder rule. The crest of
+    6 m is the body's: sealed, it fills to the deepest cell of the body (14 m). The pool of 8 m spills into it at the
+    saddle of 10 m (its closure 2 m), that of 9 m at 14 m, the saddle on its left, into the pool of 6 m (the one on its
+    right ends in a wall: 11 m, a dead end). Pools of less than ``min_height`` of closure are left out, the body's own
+    never."""
+    traps = _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, min_height=0.0)
+    assert [t["crest"] for t in traps] == [(1, 2), (1, 4), (1, 6)] and [t["crest_depth"] for t in traps] == [6, 8, 9]
+    assert [t["spill_depth"] for t in traps] == [None, 10.0, 14.0] and [t["closure"] for t in traps] == [8, 2, 5]
+    assert [t["primary"] for t in traps] == [True, False, False] and [t["into"] for t in traps] == [None, (1, 2), (1, 2)]
+    assert [t["spill_point"] for t in traps] == [None, (1, 3), (1, 5)] and [t["limited_by"] for t in traps] == [
+        "sealed", "spill", "spill"]
+    assert [t["area"] for t in traps] == [7.0, 1.0, 2.0]            # the pool of 6 m: the whole body, sealed
+    assert [t["crest"] for t in _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, min_height=2.5)] == [(1, 2), (1, 6)]
+    assert [t["crest"] for t in _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, min_height=9.0)] == [(1, 2)]
+
+
+def test_a_pool_whose_water_reaches_the_edge_spills_there_and_a_pool_beyond_a_saddle_spills_into_it():
+    """The same row ending in a cell of 5 m on the map's edge: that pool is open, with no closure (its crest is on the
+    edge); the pool of 9 m spills into it at 11 m, the pool of 6 m (its water meets the open pool's at the saddle of 14
+    m) at 14 m, and the pool of 8 m spills left, into the pool of 6 m, at 10 m."""
+    traps = _traps(_chain([12, 6, 10, 8, 14, 9, 11, 5], exit=True), 1.0, 1.0, min_height=0.0)
+    by = {t["crest_depth"]: t for t in traps}
+    assert by[5.0]["spill_depth"] == 5.0 and by[5.0]["closure"] == 0.0 and by[5.0]["into"] is None
+    assert by[9.0]["spill_depth"] == 11.0 and by[9.0]["into"] == by[5.0]["crest"]
+    assert by[6.0]["spill_depth"] == 14.0 and by[6.0]["into"] == by[5.0]["crest"]
+    assert by[8.0]["spill_depth"] == 10.0 and by[8.0]["into"] == by[6.0]["crest"]
+    assert sum(t["primary"] for t in traps) == 1 and by[5.0]["primary"]
+
+
+def _brute_pools(depth):
+    """Each strict local minimum of ``depth`` and the level where it stops being a pool, by raising the water: the
+    first level at which its connected water holds a shallower cell or a cell of the map's edge (4-connected, binary
+    search over the levels)."""
+    nx, ny = depth.shape
+    out = {}
+    levels = np.unique(depth[np.isfinite(depth)])
+
+    def water(seed, level):
+        seen, todo = {seed}, [seed]
+        while todo:
+            i, j = todo.pop()
+            for a, b in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
+                if 0 <= a < nx and 0 <= b < ny and (a, b) not in seen and depth[a, b] <= level:
+                    seen.add((a, b))
+                    todo.append((a, b))
+        return seen
+
+    for i in range(nx):
+        for j in range(ny):
+            nbrs = [depth[a, b] for a, b in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1))
+                    if 0 <= a < nx and 0 <= b < ny]
+            if not np.isfinite(depth[i, j]) or any(depth[i, j] > v for v in nbrs):
+                continue
+
+            def dies(level):
+                cells = water((i, j), level)
+                return any(depth[c] < depth[i, j] or c[0] in (0, nx - 1) or c[1] in (0, ny - 1) for c in cells)
+
+            above = levels[levels >= depth[i, j]]                   # the water starts at the cell's own depth
+            lo, hi = 0, len(above) - 1
+            if not dies(above[hi]):
+                out[(i, j)] = np.inf
+                continue
+            while lo < hi:
+                mid = (lo + hi) // 2
+                lo, hi = (lo, mid) if dies(above[mid]) else (mid + 1, hi)
+            out[(i, j)] = float(above[lo])
+    return out
+
+
+def test_the_pools_of_random_maps_are_those_a_rising_water_level_finds():
+    """Smooth random depth maps with walls (infinite depth) in patches: every strict local minimum is a pool, its spill the
+    level at which its water first holds a shallower cell or a cell of the map's edge (found by raising the water, with
+    nothing from ``strat_traps``), and ``zone_trap`` lists exactly those with a closure of at least ``min_height``
+    (the body's own always)."""
+    rng = np.random.default_rng(11)
+    checked = 0
+    for _ in range(25):
+        depth = 100.0 + 30.0 * ndimage.gaussian_filter(rng.standard_normal((22, 18)), 1.2)
+        depth[ndimage.gaussian_filter(rng.standard_normal(depth.shape), 2.0) > 0.12] = np.inf
+        expected = _brute_pools(depth)
+        found = {t["crest"]: t for t in _traps(depth, 1.0, 1.0, min_height=0.0)}
+        assert set(found) == set(expected)
+        for crest, spill in expected.items():
+            assert (np.inf if found[crest]["spill_depth"] is None else found[crest]["spill_depth"]) == pytest.approx(spill)
+        listed = {t["crest"] for t in _traps(depth, 1.0, 1.0, min_height=3.0)}
+        assert listed == {c for c, t in found.items() if t["primary"] or t["closure"] >= 3.0}
+        checked += len(expected)
+    assert checked > 100
+
+
+def test_the_contact_limit_is_the_shallowest_column_of_the_edge_for_the_pool_that_holds_the_oil():
+    """An initialisation by contacts puts oil in every cell above the contact, joined to the trap or not, and oil whose
+    water meets the map's edge leaks: so no contact is admissible that is deeper than the shallowest column on the
+    edge (5 m here: the pool of 6 m is then no trap to fill, its limit its crest). Without an exit (the row in
+    walls, sealed) it is the trap's own limit, and an exit deeper than the spill does not bind."""
+    open_row = {t["crest_depth"]: t for t in _traps(_chain([12, 6, 10, 8, 14, 9, 11, 5], exit=True), 1.0, 1.0,
+                                                    min_height=0.0)}
+    assert open_row[6.0]["contact_limit"] == 6.0 and open_row[6.0]["spill_depth"] == 14.0
+    assert open_row[5.0]["contact_limit"] == 5.0
+    sealed = {t["crest_depth"]: t for t in _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, min_height=0.0)}
+    assert sealed[6.0]["contact_limit"] == 14.0 and sealed[8.0]["contact_limit"] == 10.0
+    barred = _traps(_chain([12, 6, 10, 8, 14, 9, 11]), 1.0, 1.0, column=5.0, barrier_top=4.0, min_height=0.0)
+    assert [t["limit_depth"] for t in barred] == [9.0, 9.0, 9.0] and [t["contact_limit"] for t in barred] == [9.0, 9.0,
+                                                                                                           9.0]
+    deep = _chain([12, 6, 10, 8, 14, 9, 11, 20], exit=True)           # an exit of 20 m, the primary pool's spill
+    assert {t["crest_depth"]: t["contact_limit"] for t in _traps(deep, 1.0, 1.0, min_height=0.0)} == {6.0: 20.0, 8.0: 10.0,
+                                                                                                        9.0: 14.0}
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The closure label is the realized one (review F6)
+
+def test_meta_gives_the_nominal_closure_and_the_report_the_realized_one_a_mound_holding_half_as_much_again():
+    """``meta`` has the tangent of the dip times the length of the drawn tongue under the name it deserves
+    (``closure_nominal``, ``crest_nominal``, ``spill_nominal``), and the report's ``closure`` is what the cells hold:
+    for a mound of 10 m on a gentle dip (0.3 degrees, 3.4 km2) the nominal 10.5 m, the realized 16 m (the mound's own
+    relief, T (1 + x)^2 with x = 10.5 / 40), as the fine analytic map says; with a rough edge and a top with relief
+    it is another number again. Nothing in ``meta`` is called ``expected``."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    layers = _layers(x_len, y_len, dx, [10.0], dz=1.0)
+    mound = strat_trap("lens", x_len, y_len, 2000.0, [10.0], seed=2, dip=0.3, taper_angle=0.3, area=3.4e6, aspect=2.2,
+                       warp=0.0)
+    assert not [key for key in mound["meta"] if "expected" in key]
+    nominal = mound["meta"]["closure_nominal"]
+    assert nominal == pytest.approx(np.tan(np.radians(0.3)) * _length(3.4e6, 2.2))
+    (trap,) = trap_report(layers, mound)
+    assert trap["closure"] == pytest.approx(10.0 * (1.0 + nominal / 40.0) ** 2, rel=0.06) and trap["closure"] > 1.4 * nominal
+    assert trap["closure"] == pytest.approx(_fine_traps(mound, 2000.0, x_len, y_len)[0]["height"], abs=1.5 * 0.0052 * dx
+                                            + 0.05 * trap["closure"])
+    rough = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=4, dip=1.2, taper_angle=0.4, area=3.4e6, aspect=2.2,
+                       warp=0.2, wander=120.0, relief_sd=1.5, cell=dx)
+    main = trap_report(layers, rough)[0]
+    assert abs(main["closure"] - rough["meta"]["closure_nominal"]) > 1.0
+    assert main["closure"] == pytest.approx(_fine_traps(rough, 2000.0, x_len, y_len)[0]["height"], abs=1.5 * 0.021 * dx +
+                                            0.08 * main["closure"])

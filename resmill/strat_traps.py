@@ -22,18 +22,20 @@ truncation's or an onlap's edge, shapes a lens as a mound on a flat base and giv
 The closure of such a geometry is whatever it holds, read from the cells by :func:`trap_report`; the tangent of the dip
 times the length of the drawn tongue is the nominal one.
 """
+import math
+
 import numpy as np
 from scipy import ndimage
 
 from . import structure as st
 from .export import _build_geometry
-from .structure import _spill_levels
 
 KINDS = ("pinchout", "facies_change", "lens", "truncation", "onlap", "pinchout_nose", "truncation_nose")
 NOSED = KINDS[-2:]                  # the combination kinds
 MAX_NOSE = 335.0                    # m: the closure of Kuparuk (Carman and Hardwick 1983), the largest [J]
 
 MIN_THICKNESS = 6e-3                # m: a cell thinner than this is collapsed, as the deck's PINCH threshold takes it
+MIN_POOL = 1.0                      # m: a pool of less closure is not listed (the body's own always is): a cell's own rise [J]
 EDGE_MARGIN = 0.02                  # of the model's size: a trap this close to its edge is taken to touch it [J]
 COLLAPSED = 0.2                     # of the nominal closure: a wandering edge that leaves less has destroyed the trap [J]
 WANDER_TONGUE, WANDER_TAPER = 0.2, 0.25     # the most an edge may wander, of the main tongue's length (depositional) or of
@@ -81,22 +83,103 @@ def zone_top(zc, act, k=None):
     return np.where(act.any(axis=2), first, np.inf)
 
 
-def _traps(depth, dx, dy, column=None, barrier_top=None):
+def _pools(depth):
+    """The pools of a depth map, as the elder rule finds them by raising the water over the finite cells (4-connected;
+    a plateau is one pool): every local minimum is a pool, and it ends at the level where its water meets that of a pool
+    with a shallower crest (it then spills into that pool) or first holds a cell of the map's edge (it leaves the map).
+    Returns ``(crest, spill, into)`` for each: the crest (i, j), the level it ends at (infinite for the body's own
+    pool when nothing reaches the edge: sealed) and the crest of the pool it spills into (None where it leaves the
+    map)."""
+    nx, ny = depth.shape
+    level = depth.ravel().tolist()
+    cells = [c for c in np.argsort(depth.ravel(), kind="stable").tolist() if level[c] < math.inf]
+    parent, crest, opened, pools = {}, {}, {}, []      # union-find over the cells the water has reached; per root:
+    #                                                    the crest of its pool (None: none yet) and if it holds the edge
+
+    def find(c):
+        while parent[c] != c:
+            parent[c] = parent[parent[c]]
+            c = parent[c]
+        return c
+
+    def ends(c, at, into):                              # the pool with crest cell c stops being one at the level ``at``
+        pools.append((divmod(c, ny), at, None if into is None else divmod(into, ny)))
+
+    def join(a, b, at):
+        a, b = find(a), find(b)
+        if a == b:
+            return
+        if crest[a] is not None and crest[b] is not None and opened[a] == opened[b]:
+            if not opened[a]:                           # two pools meet: the one with the deeper crest spills into the other
+                young, old = sorted((crest[a], crest[b]), key=lambda c: (level[c], c), reverse=True)
+                ends(young, at, old)
+        elif crest[a] is not None and crest[b] is not None:              # a pool meets water that holds the edge
+            closed = b if opened[a] else a
+            ends(crest[closed], at, crest[a if closed == b else b])
+        elif crest[a] is not None and opened[b] and not opened[a]:
+            ends(crest[a], at, None)
+        elif crest[b] is not None and opened[a] and not opened[b]:
+            ends(crest[b], at, None)
+        parent[b] = a
+        opened[a] = opened[a] or opened[b]
+        crest[a] = min((c for c in (crest[a], crest[b]) if c is not None), key=lambda c: (level[c], c), default=None)
+
+    k = 0
+    while k < len(cells):
+        at, group = level[cells[k]], []
+        while k < len(cells) and level[cells[k]] == at:
+            group.append(cells[k])
+            k += 1
+        steps = lambda c: [m for m, ok in ((c - ny, c >= ny), (c + ny, c < (nx - 1) * ny), (c - 1, c % ny > 0),
+                                          (c + 1, c % ny < ny - 1)) if ok and m in parent]
+        for c in group:
+            i, j = divmod(c, ny)
+            parent[c], crest[c], opened[c] = c, c, i in (0, nx - 1) or j in (0, ny - 1)
+        for c in group:                                  # the plateau of each cell first: one pool, not a pool a cell
+            for m in steps(c):
+                if level[m] == at:
+                    a, b = find(c), find(m)
+                    if a != b:
+                        parent[b], opened[a], crest[a] = a, opened[a] or opened[b], min(crest[a], crest[b])
+        for r in {find(c) for c in group}:
+            lower = [m for c in group if find(c) == r for m in steps(c) if level[m] < at]
+            if not lower:                                # nothing shallower is joined to it: a new pool is born
+                if opened[r]:
+                    ends(crest[r], at, None)             # on the map's edge from its birth: no closure
+            else:
+                crest[r] = None if lower else crest[r]
+                for m in lower:
+                    join(r, m, at)
+    for r in {find(c) for c in parent}:
+        if not opened[r] and crest[r] is not None:
+            pools.append((divmod(crest[r], ny), math.inf, None))
+    return pools
+
+
+def _traps(depth, dx, dy, column=None, barrier_top=None, min_height=MIN_POOL):
     """The traps of a map of depths (nx, ny), infinite where the zone is absent (:func:`zone_trap`, whose result it is,
-    on any such map: the top of a zone's cells, or an analytic surface). A barrier holds its ``column`` below the
-    shallower of the crest and ``barrier_top``, the shallowest top of its cells (an initialisation by contacts puts oil
-    in any cell above its entry pressure, joined to the trap or not)."""
+    on any such map: the top of a zone's cells, or an analytic surface): one for each pool (:func:`_pools`) of at least
+    ``min_height`` closure and the shallowest of each connected body, whatever its closure. A barrier holds its
+    ``column`` below the shallower of the crest and ``barrier_top``, the shallowest top of its cells (an initialisation
+    by contacts puts oil in any cell above its entry pressure, joined to the trap or not)."""
     if column is not None and column < 0.0:
         raise ValueError(f"column must not be negative, not {column}")
     alive = np.isfinite(depth)
-    spill = _spill_levels(depth)
     bodies, count = ndimage.label(alive)
+    edge = np.zeros(depth.shape, dtype=bool)
+    edge[[0, -1], :] = edge[:, [0, -1]] = True
+    edge_top = float(depth[edge].min())                    # the shallowest column on the edge: the oil above it leaks
+    own = {b: np.unravel_index(int(np.argmin(np.where(bodies == b, depth, np.inf))), depth.shape) for b in
+           range(1, count + 1)}
     traps = []
-    for b in range(1, count + 1):
+    for crest, spill, into in _pools(depth):
+        b = bodies[crest]
+        primary = own[b] == crest
+        if not primary and spill - depth[crest] < min_height:
+            continue
         body = bodies == b
-        crest = np.unravel_index(int(np.argmin(np.where(body, depth, np.inf))), depth.shape)
-        sealed = not np.isfinite(spill[crest])
-        deepest = float(depth[body].max() if sealed else spill[crest])
+        sealed = not np.isfinite(spill)
+        deepest = float(depth[body].max() if sealed else spill)
         reach = float(depth[crest]) if barrier_top is None else min(float(depth[crest]), barrier_top)
         limit = deepest if column is None else max(min(deepest, reach + float(column)), float(depth[crest]))
 
@@ -108,16 +191,17 @@ def _traps(depth, dx, dy, column=None, barrier_top=None):
         leaves = [] if sealed else np.argwhere(ndimage.binary_dilation(full) & ~full & alive & (depth == deepest))
         mask = full if limit == deepest else trapped(limit)
         traps.append(dict(
-            crest=(int(crest[0]), int(crest[1])), crest_depth=float(depth[crest]),
-            spill_depth=None if sealed else deepest,
+            crest=(int(crest[0]), int(crest[1])), crest_depth=float(depth[crest]), body=int(b), primary=primary,
+            into=into, spill_depth=None if sealed else deepest,
             spill_point=tuple(int(c) for c in leaves[0]) if len(leaves) else None,
             limit_depth=limit, limited_by="barrier" if limit < deepest else "sealed" if sealed else "spill",
-            closure=deepest - float(depth[crest]), height=limit - float(depth[crest]), area=float(mask.sum()) * dx * dy,
-            mask=mask, barrier_top=barrier_top))
+            closure=deepest - float(depth[crest]), height=limit - float(depth[crest]),
+            contact_limit=max(min(limit, edge_top), float(depth[crest])), area=float(mask.sum()) * dx * dy, mask=mask,
+            barrier_top=barrier_top))
     return sorted(traps, key=lambda trap: trap["crest_depth"])
 
 
-def zone_trap(zc, act, dx, dy, k=None, column=None, barrier=None):
+def zone_trap(zc, act, dx, dy, k=None, column=None, barrier=None, min_height=MIN_POOL):
     """The traps of the top of the active cells of a zone, absent columns being walls and the map's edge the only exit.
 
     ``zc`` (2nx, 2ny, nk + 1) is the interface stack and ``act`` (nx, ny, nk) the active cells, both k top-down as
@@ -127,16 +211,29 @@ def zone_trap(zc, act, dx, dy, k=None, column=None, barrier=None):
     than that below its crest, or below the shallowest top of the barrier's cells, ``barrier`` (a slice of the layers),
     if they reach updip of it (``barrier_top`` in each trap, None without a barrier).
 
-    Returns one dict per body of connected columns that has any, the shallowest crest first: ``crest`` (i, j),
-    ``crest_depth``, ``spill_depth`` (the deepest top on the best way out, None when nothing reaches the body:
-    sealed all round), ``spill_point`` (the column beside the trap the oil leaves into, None when sealed),
-    ``limit_depth`` (the deepest contact the trap holds: the spill, the deepest top of a sealed body, or ``column``
-    below the crest, whichever is shallowest), ``limited_by`` ("spill", "sealed" or "barrier"), ``height``
-    (``limit_depth`` - ``crest_depth``), and the ``area`` (m2) and ``mask`` of the columns shallower than the limit
-    that join the crest (all of a sealed body: it fills to its deepest point). A body with no closure has height 0.
+    Returns one dict per pool, the shallowest crest first: every local minimum of the zone's top is one (the elder rule,
+    :func:`_pools`), listed if it closes by ``min_height`` (a cell's own rise: 1 m) or is the shallowest of its body.
+    A rough edge leaves a median 12-25 pools (up to 90) over a pinch-out, truncation, onlap or nose of the plan's ranges.
+    The keys: ``crest`` (i, j), ``crest_depth``, ``body`` (the connected body of columns it lies in) and ``primary``
+    (the body's shallowest); ``spill_depth`` (the level where the pool ends: it meets a pool with a shallower crest, or
+    the edge; None when nothing reaches the body: sealed all round), ``into`` (the crest of the pool it spills into,
+    None where it leaves the map), ``spill_point`` (the column beside the trap the oil leaves into, None when sealed),
+    ``closure`` (the spill, or the deepest top of a sealed body, less the crest), ``limit_depth`` (the deepest contact
+    the trap holds: the spill, the deepest top of a sealed body, or ``column`` below the crest, whichever is
+    shallowest), ``limited_by`` ("spill", "sealed" or "barrier"), ``height`` (``limit_depth`` - ``crest_depth``), and
+    the ``area`` (m2) and ``mask`` of the columns shallower than the limit that join the crest (all of a sealed
+    body: it fills to its deepest point). A body with no closure has height 0.
+
+    ``contact_limit`` is the deepest contact that an initialisation by contacts can use with this pool holding the
+    oil: the limit, or the shallowest column on the map's edge if that is shallower (the crest at the least). An
+    initialisation puts oil in every cell above the contact, joined to the trap or not, and the water of a pool that
+    holds a cell of the edge leaks: at the old rule, the main limit less 1 m, 5 % of the oil-bearing sand of a
+    pinch-out (mean; 8-9 % of a truncation or onlap, 20-22 % of a nosed one) lay in water that leaks; at
+    ``contact_limit`` none does. A contact that keeps every pool closed costs the main trap 12-16 % of its closure
+    (median; P90 29-55 %).
     """
     top = None if barrier is None else float(zone_top(zc, act, barrier).min())
-    return _traps(zone_top(zc, act, k), dx, dy, column, top)
+    return _traps(zone_top(zc, act, k), dx, dy, column, top, min_height)
 
 
 def _packed(widths, rng):
@@ -316,18 +413,20 @@ def _refuse_edge(foot, lens, nosed, line, dip_dir, plan, margin):
 
 def _refuse_collapse(present, depth, nominal, plan, margin):
     """Refuse a draw whose wandering edge has destroyed the trap: on the plan grid, the sand's top ``depth`` where
-    ``present`` (a mask) has no closure of a fifth of the ``nominal`` one, the margin of the model's edge being
-    taken as the edge over which it leaks. The sand reaches the model's edge or breaks up (3 % of the pinch-outs and
-    1 % of the truncations at the plan's ranges, 0 m against 34-40 m nominal, nearly all with the crest on the edge)."""
+    ``present`` (a mask) has no pool that a contact can fill (the report's ``contact_limit``) by a fifth of the
+    ``nominal`` closure, the margin of the model's edge being taken as the edge over which it leaks. The sand reaches
+    the model's edge or breaks up (3 % of the pinch-outs and 1 % of the truncations at the plan's ranges, 0 m against
+    34-40 m nominal, nearly all with the crest on the edge)."""
     (gx, gy), (mx, my) = plan, margin
     dx, dy = gx.max() / 300.0, gy.max() / 300.0
     kx, ky = int(np.ceil(mx / dx)), int(np.ceil(my / dy))
     inner = (slice(kx, -kx or None), slice(ky, -ky or None))
     traps = _traps(np.where(present, depth, np.inf)[inner], dx, dy)
-    best = max((trap["height"] for trap in traps), default=0.0)
+    best = max((trap["contact_limit"] - trap["crest_depth"] for trap in traps), default=0.0)
     if best < COLLAPSED * nominal:
-        raise ValueError(f"the wandering edge has destroyed the trap: it closes by {best:.1f} m on the plan grid "
-                         f"against {nominal:.1f} m nominal: use another seed or a smaller wander")
+        raise ValueError(f"the wandering edge has destroyed the trap: no contact holds more than {best:.1f} m of oil on "
+                         f"the plan grid against {nominal:.1f} m of closure nominal: use another seed or a smaller "
+                         f"wander")
 
 
 def _barrier(thicknesses, layers_f, flat, rim_m, line, outline, azimuth, x_len, y_len, rough):
@@ -400,7 +499,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     A straight updip line has no closure, so the line has a tongue of sand ``area`` (m2) and ``aspect`` (strike over
     dip length) protruding updip from it, a lobate half-ellipse (``warp``, :func:`resmill.structure.closure`): its
     length along dip is L = 2 sqrt(area / (pi aspect)) and the closure is tan(dip) L, derived, not drawn
-    (``meta["closure_expected"]``): the oil spills over the sheet's updip edge, ``meta["spill_expected"]``.
+    (``meta["closure_nominal"]``): the oil spills over the sheet's updip edge, ``meta["spill_nominal"]``.
     ``area=None`` gives a straight line, no closure. ``tongues`` are further tongues, a sequence of (area, aspect)
     that the caller draws (digitate ones have an aspect under 1), set side by side along the line in an order and with
     gaps drawn from ``seed``; a set that does not fit within 80 % of the model raises a ValueError. A lens has the
@@ -442,8 +541,11 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     The shapes sit on the dip direction through the middle of the model, as far updip as their rims fit within 80 % of
     the model's size (a lens in the middle); a shape that does not fit, or lobes that the warp pushes within 2 % of the
     edge, raise a ValueError for the caller to draw again. ``meta["net_layers"]`` counts the layers that are sand, for
-    :func:`trap_report`. ``meta["closure_expected"]`` is that of the main tongue with a smooth edge and a flat top; with
-    a rough edge, tongues, relief or a mound the closure is what the geometry has, which :func:`trap_report` reads.
+    :func:`trap_report`. ``meta["closure_nominal"]`` (and ``crest_nominal``, ``spill_nominal``) is that of the main
+    tongue with a smooth edge and a flat top, the tangent of the dip times its length: a nominal figure, not the closure.
+    With a rough edge, tongues, relief or a mound the closure is what the geometry has, and :func:`trap_report` reads
+    it from the cells (realized over nominal 0.8 / 1.3 / 1.7 at P10 / P50 / P90 over the plan's ranges, 0.96 / 1.1 /
+    1.5 for the nosed kinds): label an episode from the report, never from ``meta``.
     """
     nosed, lens = kind in NOSED, kind == "lens"
     thicknesses = [float(t) for t in thicknesses]
@@ -507,19 +609,21 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                 length=length, line=line, nose=nose, barrier=bool(barrier), column=column, rim_m=rim_m, net_layers=n_net, seed=seed,
                 erosion_relief_m=np.tan(np.radians(taper_angle)) * wander if kind in ("truncation", "onlap",
                                                                                       "truncation_nose") else None,
-                spill_expected=None if lens else level,
-                closure_expected=nominal,
-                crest_expected=level - (nose["height"] if nosed else tan_dip * (length if not lens else 0.5 * length)))
+                spill_nominal=None if lens else level,
+                closure_nominal=nominal,
+                crest_nominal=level - (nose["height"] if nosed else tan_dip * (length if not lens else 0.5 * length)))
     return dict(kwargs=kwargs, meta=meta)
 
 
 def trap_report(model, built):
     """The traps of the sand of ``model`` (a layer, a reservoir or a list of layers) as :func:`strat_trap` shaped it
-    (:func:`zone_trap`, the surface being the top of the sand's cells: a barrier zone is no part of it), the one with
-    the most closure first: a rough edge leaves pieces of sand that hold small traps of their own, some of them
-    shallower than the main one. With a barrier zone the limit is the admissible one: the barrier holds ``column`` (what
-    ``built`` was given) below the shallower of the crest and the top of its own shallowest cell, ``barrier_top``, so
-    that a contact at ``limit_depth`` puts oil in no barrier cell."""
+    (:func:`zone_trap`, the surface being the top of the sand's cells: a barrier zone is no part of it): every pool,
+    the one with the most closure first (``height``; ``closure`` is the spill less the crest, ``height`` what the
+    barrier lets it hold). These, not ``built["meta"]``, are the episode's labels: the closure ``meta`` gives is
+    the nominal one. With a barrier zone the limit is the admissible one: the barrier holds ``column`` (what ``built``
+    was given) below the shallower of the crest and the top of its own shallowest cell, ``barrier_top``, so that a
+    contact at ``limit_depth`` puts oil in no barrier cell; ``contact_limit`` also keeps every pool's water in the
+    model (:func:`zone_trap`)."""
     layers = list(model) if isinstance(model, (list, tuple)) else list(getattr(model, "layers", [model]))
     meta = built["meta"]
     made = [meta["x_len"], meta["y_len"], meta["top"], *meta["thicknesses"]]
