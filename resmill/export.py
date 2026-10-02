@@ -78,7 +78,7 @@ def _build_geometry(layers, structure=None, top=None, base=None,
     """
     L0 = layers[0]
     nx, ny = L0.nx, L0.ny
-    if salt is not None and max(L0.dx, L0.dy) > salt.max_cell:
+    if salt is not None and max(L0.dx, L0.dy) > salt.max_cell * (1.0 + 1e-9):   # float noise in x_len / nx
         raise ValueError(f"cells of {max(L0.dx, L0.dy):g} m are wider than half the upturn's folding zone "
                          f"({salt.max_cell:g} m): the salt flank would not be resolved")
     x_len, y_len = L0.x_len, L0.y_len

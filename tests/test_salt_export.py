@@ -175,6 +175,20 @@ def test_the_grid_must_resolve_the_upturn():
         to_grdecl(layer(nx=15, ny=12, dx=200.0), "/nonexistent/x.grdecl", salt=body)
 
 
+def test_a_zone_exactly_two_cells_wide_is_resolved_whatever_the_float_noise_in_the_cell_size():
+    """The narrowest zone a grid may have is two cells: ``max_cell`` = dx exactly. A layer's cell size is ``x_len / nx``, which for
+    a tenth of the sizes between 40 and 60 m is a unit in the last place above the ``dx`` that made ``x_len`` (7 of these 57
+    raised on that alone, with 6 cells), so the comparison has a tolerance of 1e-9; a cell a thousandth wider is still refused."""
+    for dx in np.linspace(40.0, 60.0, 57):
+        body = sl.salt_body((CX, CY), (R, R))
+        sl.salt_upturn(body, 30.0, 2.0 * dx)
+        _build_geometry([layer(nx=6, ny=6, dx=float(dx))], salt=body)
+    body = sl.salt_body((CX, CY), (R, R))
+    sl.salt_upturn(body, 30.0, 100.0)
+    with pytest.raises(ValueError, match="wider than half"):
+        _build_geometry([layer(nx=6, ny=6, dx=50.05)], salt=body)
+
+
 def test_plot_section_and_to_pyvista_take_salt():
     body = sl.salt_body((CX, CY), (R, R))
     L = layer()
