@@ -38,6 +38,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+TIP_ASPECT = 2.15                   # tip-line length / height of a fault (Nicol et al. 1996)
+
 
 @dataclass
 class Fault:
@@ -53,7 +55,7 @@ class Fault:
     drag: tuple = (0.4, 0.2)       # reverse-drag reach on the hanging wall and footwall, x length (0: none)
     radius: float = math.inf       # signed trace curvature radius; inf: a straight trace
     z_center: float | None = None  # depth of the tip ellipse's centre; None: the stack's middle there
-    aspect: float = 2.15           # tip-line length / height
+    aspect: float = TIP_ASPECT     # tip-line length / height
     reverse: bool = False          # a reverse fault: the hanging wall moves up
     mult: float = 1.0              # transmissibility multiplier across the fault (MULTFLT)
     name: str = ""

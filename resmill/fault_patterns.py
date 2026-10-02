@@ -31,7 +31,7 @@ import math
 import numpy as np
 from scipy import ndimage
 
-from .faults import Fault, ww_profile
+from .faults import TIP_ASPECT, Fault, ww_profile
 from .structure import _spill_levels
 
 STYLES = ("four_way", "turtle", "faulted_anticline", "fold_belt", "fault_bounded", "low_relief", "tilted_blocks", "rollover")
@@ -249,7 +249,7 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
         if not throw > 0.0:
             return None
         t_loc = top_at(cx, cy)
-        half = 0.5 * length / 2.15 * sin_d
+        half = 0.5 * length / TIP_ASPECT * sin_d
         zc = t_loc + 0.5 * thickness + rng.normal(0.0, 0.6 * half) if z is None else z(half, t_loc)   # A16
         res = throw * _in_reservoir(zc, t_loc, thickness, half)
         if res < min_res:
@@ -262,7 +262,7 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
         sep, seg_throw = q * seg / ratio, throw * (seg / length) ** 0.92
         t, n = np.array([math.cos(angle), math.sin(angle)]), np.array([-math.sin(angle), math.cos(angle)])
         centres = [np.array([cx, cy]) + sgn * (0.5 * length - 0.5 * seg) * t + sgn * 0.5 * sep * n for sgn in (-1, 1)]
-        seg_res = min(seg_throw * _in_reservoir(zc, top_at(*c), thickness, 0.5 * seg / 2.15 * sin_d)
+        seg_res = min(seg_throw * _in_reservoir(zc, top_at(*c), thickness, 0.5 * seg / TIP_ASPECT * sin_d)
                       for c in centres)                                  # each segment at its own centre
         tips = [c + sgn * 0.5 * seg * t for c in centres for sgn in (-1, 1)]
         if (relay and length > 600.0 and sep >= 2.0 * cell and rng.uniform() < 0.25 and seg_res >= MIN_THROW  # R-11

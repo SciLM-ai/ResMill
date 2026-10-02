@@ -28,6 +28,8 @@ import numpy as np
 from scipy import ndimage
 from scipy.interpolate import RegularGridInterpolator
 
+from .faults import _frame, _plane, ww_profile
+
 
 def _as_field(obj):
     """Coerce Structure | callable | scalar to a plain callable f(x, y)."""
@@ -366,7 +368,6 @@ def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):
     return Structure(fn)
 
 
-
 def growth(fault, expansion, width, depth):
     """A zone's thickness factor for a zone laid down at ``depth`` (m) while ``fault`` was moving (growth strata).
 
@@ -380,8 +381,6 @@ def growth(fault, expansion, width, depth):
     does not depend on the depth. Pass it to ``to_grdecl(isochore=[...])``; it needs ``fault.z_center``, the depth scale of the
     tip ellipse.
     """
-    from .faults import _frame, _plane, ww_profile
-
     if fault.z_center is None:
         raise ValueError("growth needs fault.z_center, the depth scale of the fault's tip ellipse")
     if not (width is None or width > 0.0) or not expansion > 0.0:

@@ -46,7 +46,7 @@ from scipy.sparse import csgraph
 from . import structure as st
 from .export import _build_geometry
 from .fault_patterns import fold_faults
-from .faults import Fault, _plane, ww_profile
+from .faults import TIP_ASPECT, Fault, _plane, ww_profile
 from .layers.base import Layer
 from .structure import Structure, _spill_levels
 
@@ -55,7 +55,6 @@ PLAN_THICKNESS = 4.0                # m: the layer a trap is measured on
 TRIES = 32                          # a rollover whose masters leave no trap to frame its faults on is redrawn this often
 MIN_AREA = 1.0e6                    # m2: the trap that frames them is at least the P10 of the Gulf's rollover traps (BOEM, T25: 1.4 km2)
 MIN_CELLS = 9                       # and spans at least 3 x 3 planning cells, the least a fold can frame faults on
-TIP_ASPECT = 2.15                   # tip-line length / height of a fault (Nicol et al. 1996; Fault.aspect's default)
 D_OVER_L = 0.1                      # upper bound of displacement / length (Lathrop et al. 2022)
 RAMP_DIP = (50.0, 75.0)             # a Frio master's dip down to its bend, degrees: uniform (T14 50-60; six published faults 46-77) [J]
 FLATTEN = (1200.0, 5000.0)          # m: depth over which its tan(dip) falls by 1/e below the bend, log-uniform; the median, 2.45 km, is
