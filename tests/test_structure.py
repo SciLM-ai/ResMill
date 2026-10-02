@@ -224,7 +224,7 @@ def test_growth_is_one_at_the_footwall_cutoff_and_the_expansion_a_width_beyond_i
     x0 = 1000.0 + 100.0 / np.tan(np.radians(60.0))
     x = np.array([x0 - 500.0, x0, x0 + 75.0, x0 + 150.0, x0 + 300.0, x0 + 4000.0])
     assert g(x, np.full(6, 1000.0)) == pytest.approx([1.0, 1.0, 1.0 + 0.8 * 0.15625, 1.4, 1.8, 1.8], abs=1e-9)
-    f = growth_fault(detach=4500.0, dip=40.0)                              # listric: the trace is the arc's at 2,100 m
+    f = growth_fault(flatten=2500.0, dip=40.0)                             # listric: the trace is the curve's at 2,100 m
     h0 = float(_plane(f, 2000.0)[1](2100.0))
     xl = np.array([1000.0 + h0 - 1.0, 1000.0 + h0 + 300.0])
     assert st.growth(f, 1.8, 300.0, 2100.0)(xl, np.full(2, 1000.0)) == pytest.approx([1.0, 1.8], abs=1e-9)
@@ -243,33 +243,32 @@ def test_growth_dies_along_strike_with_the_throw_profile():
     assert g(far - 2500.0, 1000.0) == pytest.approx(1.0)                          # footwall
 
 
-@pytest.mark.parametrize("detach", [None, 4500.0])
-def test_growth_without_a_width_steps_up_over_the_horizons_heave(detach):
+@pytest.mark.parametrize("flatten", [None, 2500.0])
+def test_growth_without_a_width_steps_up_over_the_horizons_heave(flatten):
     """``width=None``: the zone thickens over the horizon's heave at the fault's centre line (the distance between its
     footwall and hanging-wall cutoffs), so the hanging wall begins at the full expansion. The heave of 50 m of throw is
-    50 / tan(60) = 28.9 m for a 60 degree plane, and R (sin(dip there) - sin(dip 50 m deeper)) for the circle of a 40 degree
-    fault flattening at 4,500 m; half way across it the factor is half way up."""
-    dip = 60.0 if detach is None else 40.0
-    f = growth_fault(detach=detach, dip=dip, z_center=2000.0)                  # throw 50 m at the centre line, trace at x = 1,000
-    if detach is None:
+    50 / tan(60) = 28.9 m for a 60 degree plane, and (L / tan(dip)) (exp(50 / L) - 1) for a 40 degree fault whose tan(dip)
+    falls by 1/e every L = 2.5 km below its bend (the horizon is at the bend); half way across it the factor is half way up."""
+    dip = 60.0 if flatten is None else 40.0
+    f = growth_fault(flatten=flatten, dip=dip, z_center=2000.0)                # throw 50 m at the centre line, trace at x = 1,000
+    if flatten is None:
         heave = 50.0 / np.tan(np.radians(dip))
     else:
-        radius = (detach - 2000.0) / (1.0 - np.cos(np.radians(dip)))
-        theta = lambda z: np.arccos(1.0 - (detach - z) / radius)
-        heave = radius * (np.sin(theta(2000.0)) - np.sin(theta(2050.0)))
+        heave = flatten / np.tan(np.radians(dip)) * (np.exp(50.0 / flatten) - 1.0)
     x = 1000.0 + heave * np.array([-0.2, 0.0, 0.5, 1.0, 1.5])
     assert st.growth(f, 2.0, None, 2000.0)(x, np.full(5, 1000.0)) == pytest.approx([1.0, 1.0, 1.5, 2.0, 2.0], abs=1e-6)
     assert st.growth(f, 2.0, None, 9000.0)(np.array([5000.0]), np.array([1000.0])) == pytest.approx(1.0)   # no throw there
 
 
-@pytest.mark.parametrize("detach", [None, 4500.0])
-def test_growth_thickens_the_zone_by_the_expansion_in_the_hanging_wall_only(detach):
+@pytest.mark.parametrize("flatten", [None, 2500.0])
+def test_growth_thickens_the_zone_by_the_expansion_in_the_hanging_wall_only(flatten):
     """As the isochore of a 40 m zone cut by a fault whose hanging wall moves rigidly (a plane) or by vertical shear (listric,
-    toward its flat): 5 m cells are EI x 5 m in the hanging wall far from the fault and 5 m in the footwall, none negative."""
+    toward its flattening plane): 5 m cells are EI x 5 m in the hanging wall far from the fault and 5 m in the footwall, none
+    negative."""
     from resmill.export import _build_geometry
     nx, ny, nz, dx = 160, 6, 8, 50.0
     layer = Layer(nx, ny, nz, nx * dx, ny * dx, 40.0, top_depth=2000.0, kzkx=0.1)
-    f = growth_fault(center=(1000.0, 150.0), detach=detach, dip=40.0 if detach else 60.0, throw=30.0, z_center=2020.0)
+    f = growth_fault(center=(1000.0, 150.0), flatten=flatten, dip=40.0 if flatten else 60.0, throw=30.0, z_center=2020.0)
     g = st.growth(f, 2.2, 200.0, 2020.0)
     _, _, zc, _ = _build_geometry([layer], isochore=[g], faults=[f])
     thick = np.diff(zc[:, 6, :], axis=1)

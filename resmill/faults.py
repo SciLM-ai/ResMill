@@ -12,13 +12,15 @@ repeat a section, so each column goes whole to one side), and its trace may curv
 chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surfaces across their slip
 (Candela et al. 2012), for the bends left where segments linked; Walsh et al. 2003).
 
-With ``detach`` the fault is listric: its plane is a circular arc, ``dip`` at the tip ellipse's centre and horizontal at the
-detachment depth, and the footwall is rigid while the hanging wall moves by vertical shear with constant heave (Gibbs 1983;
-White et al. 1986): the horizon of depth z with throw d at the fault has the heave H = trace(z + d) - trace(z) and drops by
-plane(h) - plane(h - H) under the column h from the trace. It is d at the fault and zero where the plane is flat, so the
-hanging wall rolls over toward the fault, and a planar plane gives the constant throw of a rigid hanging wall. ``hw_share``
-and ``drag`` play no part. (The plane is vertical above the arc's vertical point, a depth at which this kinematics carries
-no throw: keep it above the model, a dip at ``z_center`` of 70 degrees or less.)
+With ``flatten`` the fault is listric: its plane is straight at ``dip`` down to the tip ellipse's centre, as the faults of the
+Gulf's seismic sections are down to their bends, and below it tan(dip) falls by 1/e every ``flatten`` m of depth, so the plane
+bends sharply where the ramp ends and flattens into a long gentle tail (``flatten`` is 2.4 km at the median of six published
+faults, 2.2 km after Bruce 1973: Xiao & Suppe 1992; Ewing et al. 1986). The footwall is rigid while the hanging wall moves by
+vertical shear with constant heave (Gibbs 1983; White et al. 1986): the horizon of depth z with throw d at the fault has the
+heave H = trace(z + d) - trace(z) and drops by plane(h) - plane(h - H) under the column h from the trace. It is d at the fault,
+stays d down to the bend (a rigid hanging wall over a ramp) and falls away over the bend, where the plane flattens, so the
+hanging wall rolls over toward the fault above the bend; a planar plane (``flatten`` infinite) gives the constant throw of a
+rigid hanging wall. ``hw_share`` and ``drag`` play no part.
 
 :func:`apply_fault` displaces the interface stack in 3-D and reports which side of the fault each cell
 ended on; :func:`face_records` turns that into the stair-stepped cell faces the GRDECL export writes as
@@ -54,7 +56,7 @@ class Fault:
     bends: float = 0.0             # rms wander of the trace about its chord or arc, x length (0: none)
     seed: int | None = None        # draws the bends (required with them)
     kind: str = ""                 # the set a fault pattern drew it from (a label only)
-    detach: float | None = None    # depth (m) where the plane turns horizontal (listric fault); None: a planar fault
+    flatten: float | None = None   # listric: tan(dip) falls by 1/e per this much depth (m) below z_center; None: a planar fault
 
     def __post_init__(self):
         problems = [msg for bad, msg in (
@@ -69,10 +71,8 @@ class Fault:
             (not self.mult >= 0.0, "mult must be >= 0"),
             (not self.bends >= 0.0, "bends must be >= 0"),
             (self.bends > 0.0 and self.seed is None, "bends needs a seed"),
-            (self.detach is not None and not 0.0 < self.detach < math.inf, "detach must be a finite depth > 0"),
-            (self.detach is not None and self.reverse, "a listric fault (detach) is a normal fault: reverse must be False"),
-            (self.detach is not None and self.z_center is not None and not self.detach > self.z_center,
-             "detach must lie below z_center"),
+            (self.flatten is not None and not 0.0 < self.flatten < math.inf, "flatten must be a finite length > 0"),
+            (self.flatten is not None and self.reverse, "a listric fault (flatten) is a normal fault: reverse must be False"),
         ) if bad]
         if problems:
             raise ValueError(f"Fault {self.name!r}: " + "; ".join(problems))
@@ -134,23 +134,21 @@ def _corners(a):
     return np.repeat(np.repeat(a, 2, axis=0), 2, axis=1)
 
 
-def _listric(dip, zc, detach):
-    """The plane of a listric fault: a circular arc of radius R = (detach - zc) / (1 - cos dip), dipping ``dip`` degrees
-    where its trace is at depth ``zc`` and horizontal at ``detach``. Returns ``plane(h)``, its depth under a column ``h`` m
-    from that trace toward the hanging wall (``detach`` beyond the flat's start, R sin dip from the trace; a plane vertical
-    above the arc's vertical point rather than turning back), and ``trace(z)``, the inverse. Both are differences of
-    squares, so they stay accurate when the detachment is far enough to make the plane planar."""
-    a = math.radians(dip)
-    sin_d, cos_d = math.sin(a), math.cos(a)
-    radius = (detach - zc) / (2.0 * math.sin(0.5 * a) ** 2)
+def _listric(dip, zc, flatten):
+    """The plane of a listric fault: straight at ``dip`` degrees down to the bend, where its trace is at depth ``zc``, and
+    below it tan(dip) falls as exp(-(z - zc) / flatten): z = zc + flatten ln(1 + h tan(dip) / flatten) under a column ``h`` m
+    from the trace, a curve that leaves the ramp without a kink and is the ramp itself as ``flatten`` grows. Returns
+    ``plane(h)``, its depth under a column ``h`` m from that trace toward the hanging wall, and ``trace(z)``, the inverse
+    (the exponent is capped at 700, where it would overflow: a depth no model reaches)."""
+    tan_d = math.tan(math.radians(dip))
 
     def plane(h):
-        u = np.clip(np.asarray(h, dtype=float) / radius, sin_d - 1.0, sin_d)          # sin dip - sin(dip there)
-        return zc + radius * u * (2.0 * sin_d - u) / (np.sqrt(np.maximum(cos_d ** 2 + u * (2.0 * sin_d - u), 0.0)) + cos_d)
+        h = np.asarray(h, dtype=float)
+        return zc + np.minimum(h, 0.0) * tan_d + flatten * np.log1p(np.maximum(h, 0.0) * tan_d / flatten)
 
     def trace(z):
-        e = np.clip((np.asarray(z, dtype=float) - zc) / radius, -cos_d, 1.0 - cos_d)  # cos(dip there) - cos dip
-        return radius * e * (2.0 * cos_d + e) / (np.sqrt(np.maximum(sin_d ** 2 - e * (2.0 * cos_d + e), 0.0)) + sin_d)
+        z = np.asarray(z, dtype=float) - zc
+        return np.minimum(z, 0.0) / tan_d + flatten / tan_d * np.expm1(np.minimum(np.maximum(z, 0.0) / flatten, 700.0))
 
     return plane, trace
 
@@ -158,12 +156,10 @@ def _listric(dip, zc, detach):
 def _plane(fault, zc):
     """``plane(h)`` and ``trace(z)`` of ``fault``'s plane with its tip ellipse centred at depth ``zc``: the plane's depth
     under a column ``h`` m from the trace there (toward the hanging wall), and the distance of the plane at depth ``z``."""
-    if fault.detach is None:
+    if fault.flatten is None:
         tan_d = math.tan(math.radians(fault.dip))
         return (lambda h: zc + h * tan_d), (lambda z: (z - zc) / tan_d)
-    if not fault.detach > zc:
-        raise ValueError(f"Fault {fault.name!r}: detach ({fault.detach:g} m) must lie below the tip ellipse's centre ({zc:g} m)")
-    return _listric(fault.dip, zc, fault.detach)
+    return _listric(fault.dip, zc, fault.flatten)
 
 
 def apply_fault(fault, Xc, Yc, Zc):
@@ -189,7 +185,7 @@ def apply_fault(fault, Xc, Yc, Zc):
     def displacement(s, h, z):
         r = np.sqrt((s[..., None] / lx) ** 2 + ((z - zc) / sin_d / ly) ** 2)
         d = fault.throw * ww_profile(r)
-        if fault.detach is not None:                    # vertical shear: the horizon's heave from its throw, a rigid footwall
+        if fault.flatten is not None:                   # vertical shear: the horizon's heave from its throw, a rigid footwall
             return plane(h[..., None]) - plane(h[..., None] - (trace(z + d) - trace(z))), 0.0
         hp = np.abs(h[..., None] if fault.reverse else h[..., None] - trace(z))           # from the plane at depth z
         taper = [np.clip(1.0 - hp / (reach * fault.length), 0.0, None) ** 2 if reach > 0.0 else 1.0

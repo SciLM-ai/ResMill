@@ -349,149 +349,190 @@ def test_plot_section_and_to_pyvista_draw_faulted_models():
     assert grid.n_cells == NX * NY * NZ
 
 
-# ----- listric faults (Fault.detach): a circular plane flattening at a detachment, the hanging wall by vertical shear -----
+# ----- listric faults (Fault.flatten): a ramp, then tan(dip) decaying with depth; the hanging wall by vertical shear -----
 
-def research_rollover(delta_s, z_d, z_r, throw):
-    """The research's closed form (design_notes/structure_research/step4_rollover_calc.py), written out again: a circular
-    fault of surface dip ``delta_s`` (deg) turning flat at depth ``z_d`` (m), x measured from its surface trace; the horizon
-    at ``z_r`` has ``throw`` at the fault and, by vertical shear (constant heave), depth z_r + F(x) - F(x - H) beyond the
-    hanging-wall cutoff. Returns the fault's dip at z_r (deg), the heave H, and the depth as a function of the distance p
-    (m) east of the footwall cutoff."""
-    ds = math.radians(delta_s)
-    radius = z_d / (1.0 - math.cos(ds))
-    xb = radius * math.sin(ds)
+def log_plane(dip, z_c, flatten):
+    """The listric plane written out again with np.log and bisection (nothing of the code's log1p and expm1 forms): straight
+    at ``dip`` down to the bend (x < 0, x from the trace at z_c), then z_c + L ln(1 + x tan(dip) / L), L = ``flatten``, the
+    plane whose tan(dip) falls as exp(-(z - z_c) / L). Returns the plane's depth at x and, by bisection, x at a depth."""
+    t = math.tan(math.radians(dip))
 
     def plane(x):
         x = np.asarray(x, float)
-        u = np.clip((xb - x) / radius, -1.0, 1.0)
-        return np.where(x >= xb, z_d, z_d - radius * (1.0 - np.sqrt(1.0 - u ** 2)))
+        return np.where(x < 0.0, z_c + x * t, z_c + flatten * np.log(1.0 + np.maximum(x, 0.0) * t / flatten))
 
-    th = math.acos(1.0 - (z_d - z_r) / radius)
-    x_r = radius * (math.sin(ds) - math.sin(th))
-    xs = np.linspace(x_r, x_r + 20000.0, 400001)
-    heave = float(xs[int(np.argmin(np.abs(plane(xs) - (z_r + throw))))] - x_r)
-    return math.degrees(th), heave, lambda p: z_r + plane(x_r + p) - plane(x_r + p - heave)
+    def inverse(z):
+        z = np.asarray(z, float)
+        lo, hi = np.full(z.shape, -1.0e6), np.full(z.shape, 1.0e6)
+        for _ in range(100):
+            mid = 0.5 * (lo + hi)
+            below = plane(mid) < z
+            lo, hi = np.where(below, mid, lo), np.where(below, hi, mid)
+        return 0.5 * (lo + hi)
+
+    return plane, inverse
 
 
-def rollover_section(dip, detach, z_r, throw, dx=25.0, nx=320, **kw):
+def research_rollover(dip, z_c, flatten, z_r, throw):
+    """The rollover of a flat horizon at z_r over such a plane, by vertical shear with constant heave (Gibbs 1983; White et
+    al. 1986): the footwall cutoff is at x_c on the plane, the hanging-wall cutoff where the plane is z_r + throw, the heave
+    H between them, and the horizon's depth z_r + F(x_c + p) - F(x_c + p - H) at the distance p east of the footwall cutoff.
+    Returns H, x_c and that depth."""
+    plane, inverse = log_plane(dip, z_c, flatten)
+    x_c = float(inverse(z_r))
+    heave = float(inverse(z_r + throw)) - x_c
+    return heave, x_c, (lambda p: z_r + plane(x_c + p) - plane(x_c + p - heave))
+
+
+def rollover_section(dip, flatten, z_r, throw, dx=25.0, nx=320, z_center=None, **kw):
     """Top-interface corner depths along the middle row of a 10 m thick layer cut by a huge listric fault (so its throw does
-    not taper) whose trace at z_r passes x = 1000 m, the hanging wall to the east; returns x of the corners and depths."""
+    not taper) whose footwall cutoff at z_r passes x = 1000 m, the hanging wall to the east; returns x of the corners and
+    depths. The plane bends at ``z_center`` (default z_r, where the cutoff is): below the horizon the cutoff is on the ramp."""
+    zc = z_r if z_center is None else z_center
     layer = Layer(nx, 6, 2, nx * dx, 6 * dx, 10.0, top_depth=z_r, kzkx=0.1)
-    f = Fault(center=(1000.0, 3 * dx), strike=90.0, length=4.0e5, throw=throw, dip=dip, detach=detach, z_center=z_r, **kw)
+    f = Fault(center=(1000.0 + (zc - z_r) / math.tan(math.radians(dip)), 3 * dx), strike=90.0, length=4.0e5, throw=throw, dip=dip,
+              flatten=flatten, z_center=zc, **kw)
     xc, _, zc, _ = _build_geometry([layer], faults=[f])
     return xc[:, 6], zc[:, 6, 0]
 
 
-def test_a_listric_fault_with_a_far_detachment_is_the_planar_fault():
-    """As the detachment recedes the circle straightens: a listric fault with its detachment 10^9 m down gives the planar
-    fault's layers to 1 mm and the same sides, the planar fault with the whole throw on the hanging wall and no drag (what
-    vertical shear over a plane is)."""
+def test_a_listric_fault_with_a_long_flattening_is_the_planar_fault():
+    """As the depth scale of the dip's decay grows the plane straightens: a listric fault whose tan(dip) takes 10^10 m of depth
+    to fall by 1/e gives the planar fault's layers to 1 mm and the same sides, the planar fault with the whole throw on the
+    hanging wall and no drag (what vertical shear over a plane is)."""
     layer = thin_stack()
     kw = dict(center=(1510.0, 1500.0), strike=75.0, length=1500.0, throw=40.0, dip=60.0, z_center=TOP + 20.0)
     planar, listric = [], []
     _, _, za, _ = _build_geometry([layer], faults=[Fault(hw_share=1.0, drag=(0.0, 0.0), **kw)], _faces=planar)
-    _, _, zb, _ = _build_geometry([layer], faults=[Fault(detach=1.0e9, **kw)], _faces=listric)
+    _, _, zb, _ = _build_geometry([layer], faults=[Fault(flatten=1.0e10, **kw)], _faces=listric)
     assert np.abs(za - zb).max() < 1.0e-3
     assert np.array_equal(planar[0][1], listric[0][1])
 
 
-def test_the_listric_plane_is_the_circle_through_the_dip_at_z_center_flat_at_the_detachment():
-    """The plane is a circular arc: at z_center it is where the trace is and dips ``dip`` there, it flattens at ``detach``
-    (a horizontal run beyond R sin(dip) of the trace), never turns back, and trace(plane(h)) gives h back to 1e-9 m. R is
-    (detach - z_center) / (1 - cos dip), the arc's radius."""
+def test_the_listric_plane_is_the_ramp_above_its_bend_and_a_logarithm_below_it():
+    """Below z_center the plane is z_center + L ln(1 + h tan(dip) / L) (L = ``flatten``) from the trace there, to 1e-6 m
+    against the explicit form: its slope is tan(dip) at the bend and tan(dip) exp(-(z - z_center) / L) at any depth below,
+    measured on the plane itself, and trace(plane(h)) gives h back."""
     from resmill.faults import _listric
-    dip, zc, detach = 55.0, 2500.0, 4500.0
-    plane, trace = _listric(dip, zc, detach)
-    radius = (detach - zc) / (1.0 - math.cos(math.radians(dip)))
-    h = np.linspace(-1500.0, 3.0 * radius, 4001)
-    z = plane(h)
-    assert float(plane(0.0)) == pytest.approx(zc, abs=1e-9)
-    slope = (plane(1e-3) - plane(-1e-3)) / 2e-3
-    assert math.degrees(math.atan(slope)) == pytest.approx(dip, abs=1e-6)
-    assert np.all(np.diff(z) >= 0.0) and z[-1] == pytest.approx(detach, abs=1e-9)
-    assert np.all(z[h >= radius * math.sin(math.radians(dip))] == pytest.approx(detach, abs=1e-9))
-    on_arc = (z > zc - 400.0) & (z < detach - 1e-6)
-    assert np.abs(trace(z[on_arc]) - h[on_arc]).max() < 1e-9
-    # the circle itself: every point of the arc is R from its centre, which lies R above the flat's tangent point
-    cx, cz = radius * math.sin(math.radians(dip)), detach - radius
-    on = (h > cx - radius) & (h < cx)                                  # past the vertical point the plane stays vertical
-    assert np.abs(np.hypot(h[on] - cx, z[on] - cz) - radius).max() < 1e-6
+    dip, zc, flatten = 55.0, 2500.0, 2500.0
+    plane, trace = _listric(dip, zc, flatten)
+    exact, _ = log_plane(dip, zc, flatten)
+    h = np.linspace(-6000.0, 40000.0, 4601)
+    assert np.abs(plane(h) - exact(h)).max() < 1e-6
+    on = plane(h) < zc + 20000.0
+    assert np.abs(trace(plane(h)[on]) - h[on]).max() < 1e-6
+    hh = np.linspace(1.0, 30000.0, 301)
+    slope = (plane(hh + 1.0) - plane(hh - 1.0)) / 2.0
+    law = math.tan(math.radians(dip)) * np.exp(-(plane(hh) - zc) / flatten)
+    assert np.abs(slope / law - 1.0).max() < 1e-3
 
 
-@pytest.mark.parametrize("dip, zc, detach", [(35.0, 3000.0, 6000.0), (40.0, 2700.0, 7000.0), (55.0, 2500.0, 4500.0),
-                                             (30.0, 2500.0, 8000.0), (60.0, 2400.0, 5200.0)])
-def test_the_listric_plane_and_trace_are_finite_far_into_the_footwall_and_below_the_detachment(dip, zc, detach):
-    """The arc's two square roots reach 0 at its vertical point (landward) and at its flat (below the detachment), where
-    rounding made them -1e-17 and the whole footwall side, or every corner below the flat, NaN: they stay finite and
-    monotone over any distance and depth."""
+def test_the_listric_plane_is_a_ramp_at_the_dip_above_its_bend_and_leaves_it_without_a_kink():
+    """Published growth faults are steep and planar down to a bend (Xiao & Suppe 1992 Figs 20b and 22b, Ewing et al. 1986
+    Fig. 41: 46-77 degrees to 2-3 km): above z_center the plane is the straight line at ``dip`` through the trace (plane(h) =
+    z_center + h tan(dip), trace(z) = (z - z_center) / tan(dip), to 1e-9 m) and the curve below leaves it with the same slope,
+    so the plane has no kink at the bend."""
     from resmill.faults import _listric
-    plane, trace = _listric(dip, zc, detach)
-    h, z = np.linspace(-2.0e5, 2.0e5, 40001), np.linspace(0.0, 3.0 * detach, 40001)
+    dip, zc, flatten = 55.0, 2500.0, 2000.0
+    plane, trace = _listric(dip, zc, flatten)
+    tan_d = math.tan(math.radians(dip))
+    h, z = np.linspace(-3000.0, 0.0, 301), np.linspace(zc - 3000.0, zc, 301)
+    assert np.abs(plane(h) - (zc + h * tan_d)).max() < 1e-9
+    assert np.abs(trace(z) - (z - zc) / tan_d).max() < 1e-9
+    eps = 1e-3
+    assert (plane(eps) - plane(0.0)) / eps == pytest.approx(tan_d, rel=1e-3)
+    assert (plane(0.0) - plane(-eps)) / eps == pytest.approx(tan_d, rel=1e-9)
+
+
+@pytest.mark.parametrize("dip, zc, flatten", [(35.0, 3000.0, 800.0), (40.0, 2700.0, 2500.0), (55.0, 2500.0, 5000.0),
+                                              (30.0, 2500.0, 300.0), (60.0, 2400.0, 1.0e6)])
+def test_the_listric_plane_and_trace_are_finite_and_monotone_over_any_distance_and_depth(dip, zc, flatten):
+    """The plane's logarithm and the trace's exponential stay finite and monotone over any distance (200 km into either
+    wall) and depth (a thousand kilometres: the exponent is capped, as an unreachable depth is far beyond the model)."""
+    from resmill.faults import _listric
+    plane, trace = _listric(dip, zc, flatten)
+    h, z = np.linspace(-2.0e5, 2.0e5, 40001), np.linspace(0.0, 1.0e6, 40001)
     assert np.isfinite(plane(h)).all() and np.isfinite(trace(z)).all()
     assert np.all(np.diff(plane(h)) >= 0.0) and np.all(np.diff(trace(z)) >= 0.0)
 
 
-def test_a_rollover_has_the_closed_form_amplitude_heave_and_width_of_vertical_shear():
-    """Circular fault, surface dip 55 deg, detachment 4.5 km, horizon at 2.5 km with 300 m of throw (the research's table:
-    dip at the horizon 35.9 deg, heave 438 m, steepest drag dip 4.2 deg, 90 % of the drag gone 5.24 km from the cutoff):
-    the grid's top surface follows the closed form depth z + F(h) - F(h - H) at every corner clear of the fault, drags down
-    by the throw at the cutoff, and measures those numbers."""
-    dip, heave, depth = research_rollover(55.0, 4500.0, 2500.0, 300.0)
-    assert dip == pytest.approx(35.9, abs=0.05) and heave == pytest.approx(438.0, abs=1.0)
-    x, z = rollover_section(dip, 4500.0, 2500.0, 300.0)
+def test_a_rollover_has_the_closed_form_heave_amplitude_and_width_of_vertical_shear():
+    """Plane of 55 degrees bending at the horizon (2,500 m) with tan(dip) falling by 1/e every 2.5 km, 300 m of throw: the heave
+    is (L / tan(dip)) (exp(T / L) - 1) = 223.2 m, and the grid's top surface follows the explicit construction z + F(h) -
+    F(h - H) at every corner clear of the fault (0.05 m), leaves the footwall alone, has the construction's steepest drag dip and a ramp of treads the width of the heave."""
+    heave, x_c, depth = research_rollover(55.0, 2500.0, 2500.0, 2500.0, 300.0)
+    assert heave == pytest.approx(2500.0 / math.tan(math.radians(55.0)) * math.expm1(300.0 / 2500.0), abs=1e-6)
+    assert heave == pytest.approx(223.2, abs=0.1) and x_c == pytest.approx(0.0, abs=1e-6)
+    x, z = rollover_section(55.0, 2500.0, 2500.0, 300.0)
     east = x > 1000.0 + heave + 50.0
     assert np.abs(z[east] - depth(x[east] - 1000.0)).max() < 0.05
-    west = x < 1000.0 - 50.0
-    assert np.abs(z[west] - 2500.0).max() < 1e-6
-    first = np.argmax(east)                                           # the drag starts at the throw and falls no faster than its steepest dip
-    assert 0.0 <= 300.0 - (z[first] - 2500.0) <= math.tan(math.radians(4.3)) * (x[first] - 1000.0 - heave)
-    drag = z - 2500.0
-    pos = x[east] - 1000.0 - heave
-    dips = np.degrees(np.arctan(np.diff(z[east]) / np.diff(x[east])))
-    assert -dips.min() == pytest.approx(4.2, abs=0.15)                                               # steepest drag dip
-    width = pos[np.argmax(drag[east] < 0.1 * drag[east][0])]
-    assert width == pytest.approx(5240.0, abs=100.0)
+    assert np.abs(z[x < 1000.0 - 50.0] - 2500.0).max() < 1e-6
+    steepest = np.degrees(np.arctan(-np.diff(z[east]) / np.diff(x[east]))).max()
+    on_grid = np.degrees(np.arctan(-np.diff(depth(x[east] - 1000.0)) / np.diff(x[east]))).max()          # the same corners
+    assert steepest == pytest.approx(on_grid, abs=0.05)
     gap = (x > 1000.0) & (x < 1000.0 + heave) & (np.abs(z - 2500.0) > 1.0)
     assert 0.5 * np.count_nonzero(gap) * 25.0 == pytest.approx(heave, abs=3 * 25.0)                  # treads span the heave
 
 
-def test_a_deeper_detachment_gives_a_broader_flatter_roll_and_a_bigger_throw_a_bigger_one():
-    """The research's table: with 300 m of throw the steepest drag dip is 4.2, 3.2 and 2.7 deg for detachments at 4.5, 6
-    and 7.5 km, and 8.5 deg for 600 m of throw at 4.5 km."""
-    for z_d, throw, steepest in ((4500.0, 300.0, 4.2), (6000.0, 300.0, 3.2), (7500.0, 300.0, 2.7), (4500.0, 600.0, 8.5)):
-        dip, heave, _ = research_rollover(55.0, z_d, 2500.0, throw)
-        x, z = rollover_section(dip, z_d, 2500.0, throw, nx=480)
+def test_a_horizon_cut_on_the_ramp_is_dragged_down_rigidly_until_the_bend_and_rolls_over_there():
+    """Ramp 55 degrees, bend at 3,500 m (1 km below the horizon at 2,500 m), L = 1.5 km, 300 m of throw: the footwall cutoff
+    is on the ramp, the heave is 300 / tan(55) = 210 m, and the hanging wall lies a throw down, level, from the hanging-wall
+    cutoff to the bend (700 m from the footwall cutoff), where the roll begins and the drag falls away: the grid's top
+    surface follows the explicit construction (z + F(h) - F(h - H)) at every corner clear of the fault, to 0.05 m."""
+    heave, x_c, depth = research_rollover(55.0, 3500.0, 1500.0, 2500.0, 300.0)
+    assert heave == pytest.approx(300.0 / math.tan(math.radians(55.0)), abs=1e-6) and x_c == pytest.approx(-1000.0 / math.tan(math.radians(55.0)))
+    x, z = rollover_section(55.0, 1500.0, 2500.0, 300.0, z_center=3500.0, aspect=1e-6)      # a tall tip ellipse: the throw is the same at the bend
+    east = x > 1000.0 + heave + 50.0
+    assert np.abs(z[east] - depth(x[east] - 1000.0)).max() < 0.05
+    level = (x > 1000.0 + heave + 50.0) & (x < 1000.0 - x_c - 50.0)
+    assert level.sum() > 10 and np.abs(z[level] - 2800.0).max() < 0.05          # the throw, all the way to the bend
+    after = x > 1000.0 - x_c + 100.0
+    assert np.all(np.diff(z[after]) <= 1e-9) and 2500.0 < z[-1] < 2800.0 - 100.0   # rolls up, never past the horizon
+    assert np.all(z[x < 950.0] == 2500.0)                                       # the footwall is not moved
+
+
+def test_a_shorter_flattening_gives_a_tighter_roll_and_a_bigger_throw_a_bigger_one():
+    """The explicit construction against the grid for flattening lengths of 1, 2.5 and 5 km and throws of 300 and 600 m
+    (bend at the horizon): the steepest drag dip of the grid is the construction's to 0.05 degrees, steeper for a shorter
+    L and for a bigger throw."""
+    steep = {}
+    for flatten, throw in ((1000.0, 300.0), (2500.0, 300.0), (5000.0, 300.0), (2500.0, 600.0)):
+        heave, _, depth = research_rollover(55.0, 2500.0, flatten, 2500.0, throw)
+        x, z = rollover_section(55.0, flatten, 2500.0, throw, nx=480)
         east = x > 1000.0 + heave + 50.0
         dips = np.degrees(np.arctan(np.diff(z[east]) / np.diff(x[east])))
-        assert -dips.min() == pytest.approx(steepest, abs=0.2)
+        on_grid = np.degrees(np.arctan(np.diff(depth(x[east] - 1000.0)) / np.diff(x[east])))          # the same corners
+        assert -dips.min() == pytest.approx(-on_grid.min(), abs=0.05)
+        steep[flatten, throw] = -dips.min()
+    assert steep[1000.0, 300.0] > steep[2500.0, 300.0] > steep[5000.0, 300.0] and steep[2500.0, 600.0] > steep[2500.0, 300.0]
 
 
-def test_the_listric_hanging_wall_drags_by_the_throw_at_the_fault_and_lies_still_beyond_the_flat():
-    """Vertical shear: no drag past the fault's flat (R sin(dip) + heave from the trace), the drag falls monotonically from
-    the fault, no cell has negative thickness, and the footwall is not moved at all (its share of the throw is zero)."""
-    x, z = rollover_section(35.9, 4500.0, 2500.0, 300.0, nx=480)
+def test_the_listric_hanging_wall_drags_by_the_throw_at_the_fault_and_falls_monotonically_from_it():
+    """Vertical shear: the drag falls monotonically from the fault, stays positive (a tail that never quite dies), no cell
+    has negative thickness, and the footwall is not moved at all (its share of the throw is zero)."""
+    layer = Layer(480, 6, 2, 480 * 25.0, 6 * 25.0, 10.0, top_depth=2500.0, kzkx=0.1)
+    f = Fault(center=(1000.0, 75.0), strike=90.0, length=4.0e5, throw=300.0, dip=40.0, flatten=2500.0, z_center=2500.0)
+    xc, _, zc, _ = _build_geometry([layer], faults=[f])
+    x, z = xc[:, 6], zc[:, 6, 0]
     east = x > 1000.0 + 438.0 + 50.0
     drag = z[east] - 2500.0
-    assert np.all(np.diff(drag) <= 1e-9) and drag[-1] == pytest.approx(0.0, abs=1e-9)
-    assert np.all(drag[x[east] > 1000.0 + 438.0 + 6.4e3] == pytest.approx(0.0, abs=1e-9))
-    assert np.all(z[x < 950.0] == 2500.0)
+    assert np.all(np.diff(drag) <= 1e-9) and drag[-1] > 0.0
+    assert np.all(z[x < 950.0] == 2500.0) and np.all(np.diff(zc, axis=2) >= -1e-9)
 
 
-def test_a_listric_fault_refuses_values_that_make_no_arc():
-    """A detachment at or above the tip ellipse's centre, a non-positive one, and a reverse listric fault have no arc."""
+def test_a_listric_fault_refuses_values_that_make_no_plane():
+    """A flattening depth that is zero, negative or infinite, and a reverse listric fault, have no plane."""
     base = dict(center=(1500.0, 1000.0), strike=90.0, length=1200.0, throw=20.0)
-    for bad in (dict(detach=0.0), dict(detach=-5.0), dict(detach=2000.0, z_center=2000.0), dict(detach=3000.0, reverse=True)):
+    for bad in (dict(flatten=0.0), dict(flatten=-5.0), dict(flatten=math.inf), dict(flatten=3000.0, reverse=True)):
         with pytest.raises(ValueError):
             Fault(**{**base, **bad})
-    with pytest.raises(ValueError):                                    # the default centre is the stack's middle, known only there
-        _build_geometry([flat_layer()], faults=[Fault(**base, detach=TOP + 10.0)])
 
 
 def test_a_listric_fault_lists_every_contact_across_it_and_every_tread(tmp_path):
     """FAULTS for a listric fault: every face on which a cell meets the other side, wherever along the face, and every cell
     resting on the other side, as for a planar one (twisted trace, so a face may touch only between its pillars)."""
     layer = thin_stack()
-    f = Fault(**{**TWISTED, "dip": 50.0}, detach=TOP + 1500.0, z_center=TOP + 25.0, name="F1")
+    f = Fault(**{**TWISTED, "dip": 50.0}, flatten=1500.0, z_center=TOP + 25.0, name="F1")
     faces = []
     _, _, zc, act = _build_geometry([layer], faults=[f], _faces=faces)
     to_grdecl(layer, tmp_path / "m.grdecl", faults=[f])
