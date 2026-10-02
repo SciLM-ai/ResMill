@@ -230,17 +230,27 @@ def drape_faces(facies, storey, draped, perms, size, thickness, mud_perm):
     return tuple(out)
 
 
+def _stream_seed(seed):
+    """Seed words of the drapes' own random stream: the layer's seed and a tag. With no seed the sand followed numpy's global
+    generator, so the stream is seeded from that generator's state, which is read and never advanced: the drapes repeat when the
+    caller seeds numpy, as the sand does."""
+    if seed is not None:
+        return [int(seed), _STREAM]
+    _, key, pos = np.random.get_state()[:3]
+    return [_STREAM, int(pos), *key.tolist()]
+
+
 def place_drapes(facies, storey, depth_norm, perms, size, drapes, mud_perm, seed=None):
     """The multipliers ``(mult_x, mult_y, mult_z)`` of ``drapes`` (see :func:`check_drapes`; ``hole_range_m`` is the
     practical range in metres and must be given) on a facies cube with its storeys, :func:`drape_faces` of
     :func:`draped_columns`. ``mud_perm`` is the permeability of a drape without ``perm``; ``seed`` seeds the drape's own
-    random stream (None: fresh entropy)."""
+    random stream (None: numpy's global state, read and not advanced)."""
     from .channel import _RANGE_PER_SIGMA          # the range convention of noise_range_m
 
     s = check_drapes(drapes)
     if s["hole_range_m"] is None:
         raise ValueError("drapes needs hole_range_m here (ChannelLayer.create_geology defaults it to half a channel)")
-    rng = np.random.default_rng(None if seed is None else [int(seed), _STREAM])
+    rng = np.random.default_rng(_stream_seed(seed))
     sigma = tuple(s["hole_range_m"] / _RANGE_PER_SIGMA / d for d in size[:2])
     draped = draped_columns((facies == 3) | (facies == 4), storey, depth_norm, s["coverage"], s["margin_bias"], sigma,
                             rng, s["coverage_concentration"])

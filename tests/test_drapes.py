@@ -451,6 +451,21 @@ def test_drapes_are_off_by_default_and_change_no_rock():
     assert np.array_equal(_layer(coverage=0.6, margin_bias=0.2).mult_z, on.mult_z)
 
 
+def test_without_a_seed_the_drapes_follow_numpys_global_state_and_leave_it_alone():
+    """``seed=None`` makes the engine follow numpy's global generator, so a caller who seeds that gets the same sand; the
+    drapes then repeat too (they used to draw fresh entropy), and leave the generator where the same build without drapes
+    leaves it."""
+    def built(**kw):
+        np.random.seed(7)
+        return _build(seed=None, **kw), _global_state()
+
+    (a, state_a), (b, state_b), (off, state_off) = built(drapes=dict(coverage=0.6)), built(drapes=dict(coverage=0.6)), built()
+    assert np.array_equal(a.facies, b.facies) and np.array_equal(a.facies, off.facies)
+    assert all(np.array_equal(getattr(a, k), getattr(b, k)) for k in ("mult_x", "mult_y", "mult_z"))
+    assert (np.asarray(a.mult_z) < 1.0).sum() > 100
+    assert state_a == state_b == state_off
+
+
 def test_full_coverage_drapes_every_contact_of_a_younger_fill_with_older_sand_and_nothing_else():
     """The multipliers are below 1 exactly on the faces between a younger fill cell (CH or LA) and an older-storey sand
     cell: the lower face of an upper younger cell, or either side wall of a younger cell. Storeys from the engine's own
