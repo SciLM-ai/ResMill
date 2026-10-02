@@ -104,11 +104,13 @@ def test_the_domino_extension_is_the_rigid_dominos(gullfaks):
 
 
 def test_the_labels_say_what_was_built(gullfaks):
-    """The record carries the pinned values, the throws the blocks have, and a count of faults by kind."""
+    """The record carries the pinned values, the throws the blocks have, the extension beta of Fossen & Hesthammer's eq. 9 (1.41 at 15 and 30
+    degrees; the pitch over the horizontal width, 1.46, is its own label), and a count of faults by kind."""
     m, _, _, t = gullfaks
     L = m.labels
     assert (L["kind"], L["tilt_deg"], L["dip_deg"], L["width_m"], L["azimuth_deg"]) == ("domino", 15.0, 30.0, 2000.0, 90.0)
-    assert L["beta"] == pytest.approx(1.0 + TAN15 / TAN30)
+    assert L["beta"] == pytest.approx(1.41, abs=0.005)                         # Fossen & Hesthammer's eq. 9 at 15 and 30 degrees
+    assert L["pitch_over_width"] == pytest.approx(1.464, abs=0.001)            # the fault's pitch over its block's horizontal width: 1 + 1 / 2
     assert L["n_main"] == len([f for f in m.faults if f.kind == "block"]) == len(L["throws_m"])
     assert L["fault_kinds"]["block"] == L["n_main"] and L["n_faults"] == len(m.faults)
     assert np.sum(L["throws_m"][1:-1]) == pytest.approx(np.sum(t[:-1, 3] - t[1:, 1]), rel=0.1)
@@ -178,7 +180,7 @@ def test_a_horst_graben_alternates_its_hanging_walls_with_steep_faults_and_littl
         faults = blocks_of(m)
         assert [f.hanging_wall for f in faults] == [-1 if k % 2 == 0 else 1 for k in range(len(faults))]
         assert all(55.0 <= f.dip <= 70.0 and 50.0 <= f.throw <= 500.0 for f in faults)
-        assert 0.5 <= m.labels["tilt_deg"] <= 5.0 and m.labels["beta"] == 1.0
+        assert 0.5 <= m.labels["tilt_deg"] <= 5.0 and m.labels["beta"] == m.labels["pitch_over_width"] == 1.0
 
 
 def test_a_dominos_faults_are_long_enough_for_a_displacement_over_length_of_a_tenth():

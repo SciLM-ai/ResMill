@@ -15,8 +15,9 @@ to the exporter as it is, one layer per zone for a rollover's ``zones``::
 side of beds tilted 3-20 degrees (10 % of cases up to 30). Each block is a rigid plate: the structure is a tilt, and each fault
 displaces the whole of one side (``hw_share`` 0.5, no drag) by the column offset ``tan(tilt) x`` (fault spacing), so that the
 horizon is a sawtooth with no net dip: blocks ``width`` wide at the horizon, a throw (cutoff to cutoff along the plane) of
-``width tan(tilt)``, a heave of throw / tan(dip) and an extension beta = 1 + tan(tilt) / tan(dip) of the blocks' horizontal
-widths, sin(alpha + theta) / sin(theta) of their lengths along the beds (Fossen & Hesthammer 1998; T6, T9). Tilt and throw taper
+``width tan(tilt)``, a heave of throw / tan(dip), a pitch over the blocks' horizontal width of 1 + tan(tilt) / tan(dip)
+(``pitch_over_width``) and the extension of their lengths along the beds beta = sin(alpha + theta) / sin(theta) (``beta``; Fossen &
+Hesthammer 1998, eq. 9; T6, T9). Tilt and throw taper
 along the strike like the faults' tip ellipse, so the blocks plunge toward the fault tips and each footwall crest closes
 laterally. ``kind="horst_graben"``: alternating hanging walls, dips 55-70 degrees, a tilt under 5 degrees (T11). Transfer
 faults (0-2) cross the blocks; the faults inside the trap are drawn by :func:`resmill.fault_patterns.fold_faults`.
@@ -232,15 +233,15 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
     n, t = _axes(azimuth)
     extent_n, extent_t = abs(x_len * n[0]) + abs(y_len * n[1]), abs(x_len * t[0]) + abs(y_len * t[1])
     diagonal = math.hypot(x_len, y_len)
-    beta = 1.0 + tan_t / tan_d if domino else 1.0
-    pitch = width * beta                                                  # the fault spacing at the horizon
+    pitch_ratio = 1.0 + tan_t / tan_d if domino else 1.0                  # a fault's pitch over its block's horizontal width: W + heave over W
+    pitch = width * pitch_ratio                                           # the fault spacing at the horizon
     count = int(np.clip(round(extent_n / pitch), 1, 6))
     place = (np.arange(count) - 0.5 * (count - 1)) * pitch + rng.uniform(-0.1, 0.1, count) * pitch
     gaps = np.diff(place, prepend=place[0] - pitch)
     wobble = 10.0 ** rng.normal(0.0, scatter, count) if scatter > 0.0 else np.ones(count)
     if domino:
-        offset = np.minimum(gaps * tan_t * wobble, 1500.0 * beta)         # each fault's column offset, its spacing x tan(tilt)
-        cutoff = offset / beta                                            # cutoff to cutoff along the plane: width tan(tilt)
+        offset = np.minimum(gaps * tan_t * wobble, 1500.0 * pitch_ratio)  # each fault's column offset, its spacing x tan(tilt)
+        cutoff = offset / pitch_ratio                                     # cutoff to cutoff along the plane: width tan(tilt)
     else:
         cutoff = offset = np.exp(rng.uniform(math.log(50.0), math.log(500.0), count)) * wobble     # T8: 50-500 m
     length = max(1.2 * diagonal, float(cutoff.max()) / sin_d / D_OVER_L)  # from displacement / length at most 0.1
@@ -278,7 +279,8 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
     faults += _population("tilted_blocks", frame, x_len, y_len, grid, top, thickness, density, int(rng.integers(2 ** 31)),
                           (ratio, _azimuth_of(hw_dir)), 1.0 - antithetic)
     labels = dict(style="tilted_blocks", kind=kind, seed=int(seed), azimuth_deg=azimuth, tilt_deg=float(tilt), dip_deg=float(dip),
-                  width_m=float(width), pitch_m=float(pitch), beta=float(beta), n_main=count, density_per_km2=density,
+                  width_m=float(width), pitch_m=float(pitch), pitch_over_width=float(pitch_ratio),
+                  beta=math.sin(math.radians(tilt + dip)) / math.sin(math.radians(dip)) if domino else 1.0, n_main=count, density_per_km2=density,
                   throws_m=[float(c) for c in cutoff], heave_m=[float(c) / tan_d for c in cutoff],
                   length_m=float(length), antithetic_share=antithetic, regional_ratio=ratio)
     return _finish(faults, structure, None, x_len, y_len, grid, top, labels, frame)
