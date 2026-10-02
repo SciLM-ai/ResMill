@@ -267,6 +267,14 @@
   that reach it as separate trees with mud between, and the net-to-gross lands at the target plus the
   last network's share. It replaces `n_generations` and `level_z`; the progradation follows each level's
   height. Default `None`: outputs are bit-identical.
+- `mouth_bar_thickness_depths` (`DeltaLayer`, tree mode): every mouth bar's peak thickness in depths of its own
+  tip's channel (a bar at a bifurcation: of the parent branch), whatever `mouth_bar_width_factor` makes its width. A bar
+  is otherwise `mouth_bar_hw_ratio + mouth_bar_dw_ratio` of its half-width thick, so its thickness over the depth of
+  its channel is that ratio times the channel's width per depth, and a tree's tips are narrower per depth than its
+  trunk (a branch of discharge share q has width per depth `q**0.1` of the trunk's, then the taper): ratios worked out
+  for the trunk (1.25 depths of an 8 m, 320 m trunk, Reynolds 1999's mouth bar over distributary channel) gave bars of
+  0.74 tip depths (P10-P90 0.60-0.88, 102 tips at the anchors). The engine's `distal_tips` of a tree now carry the
+  channel's depth as a sixth element. `None`, the default: outputs are bit-identical.
 - `branch_levees=True` (`fluvial`, so `DeltaLayer` too; tree mode): `mLVwidth` and `mLVheight` are the
   trunk's, and a branch of discharge share q gets them times q**`width_exp` and q**`depth_exp`, its own
   width and depth ratios. Every branch otherwise has the trunk's levee, 60 m wide beside a 30 m

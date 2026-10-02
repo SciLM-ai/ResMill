@@ -609,8 +609,10 @@ class fluvial:
         self._entry_x_offset = 0.0
         # Endpoints of every streamline that ended up active at the
         # close of a level — used by DeltaLayer to paint optional
-        # mouth-bar lobes at the prograding front.
-        self.distal_tips: list[tuple[float, float, float]] = []
+        # mouth-bar lobes at the prograding front: (x, y, chelev, heading),
+        # and in tree mode (bifurcate=True) also the tip's full channel width
+        # and the depth of the channel (a bifurcation's bar: of the parent).
+        self.distal_tips: list[tuple[float, ...]] = []
 
         # Azimuth (back-compat with delta-style rotated stamping)
         self.azimuth_rad = float(np.deg2rad(azimuth))
@@ -2015,7 +2017,7 @@ class fluvial:
             return
         branches = [dict(cx=tcx, cy=tcy, q=1.0, order=0, splits=0,
                          protect=max(1, int(self.min_avul_node_frac * n)), tip=at_front, merged=False)]
-        bars = []                                          # (x, y, heading, width): a bar at every bifurcation
+        bars = []                                          # (x, y, heading, width, depth): a bar at every bifurcation
         reg = np.radians(450.0 - self.mCHazi)             # regional flow, walk frame, math radians
         lim = np.radians(80.0)
         for _ in range(self.n_bifurcations):
@@ -2090,7 +2092,8 @@ class fluvial:
                                     tip=bool(d_front), merged=False, splits=0)
             # the bar that split the channel sits between the two branches: about
             # half the parent's width, so record it as a tip of that width
-            bars.append((float(pcx[k]), float(pcy[k]), head, 1.0 * half_of(parent['q'])))
+            bars.append((float(pcx[k]), float(pcy[k]), head, 1.0 * half_of(parent['q']),
+                         base_depth * parent['q'] ** self.depth_exp))
             branches[self._index_of(branches, parent)] = up
             branches.append(down)
             branches.append(dict(cx=cx_t, cy=cy_t, q=q_child, order=parent['order'] + 1, splits=0,
@@ -2152,12 +2155,13 @@ class fluvial:
                 hy = -dx * self._sin_az + dy * self._cos_az
                 tip_half = float(self._chwidth_arr[-1]) if self._chwidth_arr is not None else self.CHhalfwidth
                 self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)),
-                                         2.0 * tip_half))
-        for bx, by, bhead, bw in bars:
+                                         2.0 * tip_half, float(self.CHdepth)))
+        for bx, by, bhead, bw, bdepth in bars:
             tx, ty = self._rot_xy(bx, by)
             hx = np.cos(bhead) * self._cos_az + np.sin(bhead) * self._sin_az
             hy = -np.cos(bhead) * self._sin_az + np.sin(bhead) * self._cos_az
-            self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)), float(bw)))
+            self.distal_tips.append((float(tx), float(ty), float(self.chelev), float(np.arctan2(hy, hx)), float(bw),
+                                     float(bdepth)))
 
     @staticmethod
     def _index_of(branches, b):

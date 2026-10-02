@@ -166,20 +166,26 @@ def _paint_mouth_bar_into_engine(engine, tip_x, tip_y, tip_z, heading,
                     engine.facies[ix, iy, iz] = facies_code
 
 
-def _paint_mouth_bars(canvas, tips, length_factor, width_factor, hw_ratio, dw_ratio, fallback):
+def _paint_mouth_bars(canvas, tips, length_factor, width_factor, hw_ratio, dw_ratio, fallback, thickness_depths=None):
     """Paint a mouth bar at every tip into ``canvas`` (anything with the engine's ``facies``,
     ``x``, ``y`` and cell sizes).
 
     A tree tip carries its own channel width and its bar is sized by it (length
     ``2 * length_factor * width``, half-width ``width_factor * width``); a tip without
-    one takes the bar size ``fallback = (length, half-width)``.
+    one takes the bar size ``fallback = (length, half-width)``. The bar's peak thickness is
+    ``hw_ratio + dw_ratio`` of its half-width (the bar hangs from the channel top, so only
+    the sum counts), or, with ``thickness_depths``, that many depths of its tip's channel
+    (a tree tip records its depth; one that does not keeps the ratio).
     """
     for tip in tips:
         tx, ty, tz, head = tip[:4]
         length, half_width = fallback if len(tip) < 5 else (
             length_factor * float(tip[4]) * 2.0, width_factor * float(tip[4]))
+        thin = hw_ratio + dw_ratio
+        if thickness_depths is not None and len(tip) > 5 and half_width > 0.0:
+            thin = thickness_depths * float(tip[5]) / half_width
         _paint_mouth_bar_into_engine(
-            canvas, tx, ty, tz, head, length, half_width, hw_ratio, dw_ratio,
+            canvas, tx, ty, tz, head, length, half_width, thin, 0.0,
             facies_code=3,   # LA = lateral-accretion / bar
         )
 
@@ -233,7 +239,8 @@ class DeltaLayer(ChannelLayer):
     """
 
     @staticmethod
-    def _ntg_stop(target_cells, sand_cells, paint_bars, length_factor, width_factor, hw_ratio, dw_ratio, fallback):
+    def _ntg_stop(target_cells, sand_cells, paint_bars, length_factor, width_factor, hw_ratio, dw_ratio, fallback,
+                  thickness_depths=None):
         """The engine's ``after_tree`` hook of ``tree_ntg_stop`` for one generation.
 
         After each network it paints the mouth bars of the tips that network recorded (when
@@ -247,7 +254,7 @@ class DeltaLayer(ChannelLayer):
             nonlocal painted
             if paint_bars:
                 _paint_mouth_bars(engine, engine.distal_tips[painted:], length_factor, width_factor,
-                                  hw_ratio, dw_ratio, fallback)
+                                  hw_ratio, dw_ratio, fallback, thickness_depths)
                 painted = len(engine.distal_tips)
             return sand_cells(engine) >= target_cells
 
@@ -262,6 +269,7 @@ class DeltaLayer(ChannelLayer):
                        mouth_bar_width_factor: float = 1.6,
                        mouth_bar_hw_ratio: float = 0.06,
                        mouth_bar_dw_ratio: float = 0.08,
+                       mouth_bar_thickness_depths: float | None = None,
                        facies_props: dict | None = None,
                        poro_realization_mult: float = 1.0,
                        perm_realization_mult: float = 1.0,
@@ -331,7 +339,17 @@ class DeltaLayer(ChannelLayer):
             reference channel full-width.
         mouth_bar_hw_ratio / mouth_bar_dw_ratio :
             Dimensionless bar thickness above / depth below the
-            channel datum at the bar axis.
+            channel datum at the bar axis, as fractions of the bar's half-width
+            (the bar builds downward from the channel top, so only their sum
+            counts). A bar twice as wide is then twice as thick.
+        mouth_bar_thickness_depths : float | None
+            Only in tree mode (``bifurcate=True``). ``None``: as above. A number
+            sets every bar's peak thickness to that many depths of its own tip's
+            channel (a bar at a bifurcation: of the parent branch), whatever
+            ``mouth_bar_width_factor`` makes its width, and replaces the two
+            ratios. A tip's width per depth falls below the trunk's (``q**0.1`` and
+            the taper), so a ratio to the half-width that gives the trunk's
+            channel the thickness gives the tips' bars less.
         tree_ntg_stop : bool
             Only with ``bifurcate=True``, which ignores ``NTGtarget``: grow
             networks in every generation until the layer holds its cumulative
@@ -444,7 +462,7 @@ class DeltaLayer(ChannelLayer):
         accum_depth_norm = np.full((nx_, ny_, nz_), 0.5, dtype=np.float32)
         accum_poro_mult = np.ones((nx_, ny_, nz_), dtype=np.float32)
         accum_log_perm_offset = np.zeros((nx_, ny_, nz_), dtype=np.float32)
-        accum_distal_tips: list[tuple[float, float, float, float]] = []
+        accum_distal_tips: list[tuple[float, ...]] = []
         last_engine = None
         event_group = {}   # each generation is one storey
         # Every branch of every generation's distributary tree
@@ -468,7 +486,8 @@ class DeltaLayer(ChannelLayer):
                     paint_mouth_bars, mouth_bar_length_factor, mouth_bar_width_factor,
                     mouth_bar_hw_ratio, mouth_bar_dw_ratio,
                     fallback=(mouth_bar_length_factor * 2.0 * cfg_gen['mCHwdratio'] * cfg_gen['mCHdepth'],
-                              mouth_bar_width_factor * cfg_gen['mCHwdratio'] * cfg_gen['mCHdepth']))
+                              mouth_bar_width_factor * cfg_gen['mCHwdratio'] * cfg_gen['mCHdepth']),
+                    thickness_depths=mouth_bar_thickness_depths)
             engine = fluvial(
                 nx=nx_, ny=ny_, nz=nz_,
                 xsiz=self.dx, ysiz=self.dy, zsiz=self.dz,
@@ -509,7 +528,8 @@ class DeltaLayer(ChannelLayer):
             shim.x = last_engine.x; shim.y = last_engine.y
             shim.xsiz = self.dx; shim.ysiz = self.dy; shim.zsiz = self.dz
             _paint_mouth_bars(shim, accum_distal_tips, mouth_bar_length_factor, mouth_bar_width_factor,
-                              mouth_bar_hw_ratio, mouth_bar_dw_ratio, fallback=(MB_L, MB_W))
+                              mouth_bar_hw_ratio, mouth_bar_dw_ratio, fallback=(MB_L, MB_W),
+                              thickness_depths=mouth_bar_thickness_depths)
 
         self._finalize_facies_table(
             accum_facies, facies_props=facies_props,

@@ -407,3 +407,55 @@ def test_a_mouth_bar_is_as_long_and_as_wide_as_asked():
     widest = plan.sum(axis=1).max() * size
     assert widest == pytest.approx(300.0, abs=2 * size)
     assert plan.sum(axis=1).argmax() * size + size / 2 - 200.0 == pytest.approx(200.0, abs=60.0)
+
+
+# --------------------------------------------------------------------------
+# opt-in bar thickness in depths of the tip's own channel
+# --------------------------------------------------------------------------
+
+def _bar_canvas(n=160, size=10.0, nz=40, zsiz=0.5):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(facies=np.full((n, n, nz), -1, dtype=np.int8), x=np.arange(n) * size + size / 2,
+                           y=np.arange(n) * size + size / 2, xsiz=size, ysiz=size, zsiz=zsiz)
+
+
+def _bar_peak_thickness(tip, thickness_depths=None):
+    """Metres of sand in the widest column of the bar painted at ``tip`` (heading +x, crest at 19.5 m)."""
+    from resmill.layers.delta import _paint_mouth_bars
+
+    canvas = _bar_canvas()
+    _paint_mouth_bars(canvas, [tip], 6.0, 2.0, 0.06, 0.08, fallback=(1.0, 1.0), thickness_depths=thickness_depths)
+    return float((canvas.facies >= 1).sum(axis=2).max()) * canvas.zsiz
+
+
+def test_a_bar_is_as_thick_as_asked_in_depths_of_its_own_channel_whatever_its_width():
+    """Without ``thickness_depths`` a bar's peak is 0.06 + 0.08 of its half-width, so a bar twice as wide is twice as
+    thick (a 50 m tip: half-width 100 m, 14 m; a 100 m one 28 m). With it the peak is that many depths of the tip's
+    channel, 1.25 x 4 m = 5 m at either width, to within a cell (0.5 m)."""
+    narrow, wide = (300.0, 600.0, 19.5, 0.0, 50.0, 4.0), (300.0, 600.0, 19.5, 0.0, 100.0, 4.0)
+    assert _bar_peak_thickness(narrow) == pytest.approx(14.0, abs=0.5 + 0.5)
+    assert _bar_peak_thickness(wide) == pytest.approx(19.5, abs=0.5)         # the 20 m column is full
+    for tip in (narrow, wide):
+        assert _bar_peak_thickness(tip, thickness_depths=1.25) == pytest.approx(5.0, abs=0.5 + 0.01)
+    deeper = (300.0, 600.0, 19.5, 0.0, 50.0, 8.0)
+    assert _bar_peak_thickness(deeper, thickness_depths=1.25) == pytest.approx(10.0, abs=0.5 + 0.01)
+
+
+def test_a_tip_without_a_depth_keeps_its_ratio_of_the_half_width():
+    """The engine records no depth for the tip of a level's streamline outside the tree mode, and a bar of such a tip is
+    built as before even when ``thickness_depths`` is given."""
+    tip = (300.0, 600.0, 19.5, 0.0, 50.0)
+    assert _bar_peak_thickness(tip, thickness_depths=1.25) == _bar_peak_thickness(tip)
+
+
+def test_a_tree_tip_records_the_depth_of_its_own_channel_and_the_bars_follow_it():
+    """A branch of discharge share q has depth 4 q^0.4 m: the tips of the tree (trunk depth 4 m, 3 % of the discharge
+    is the least a branch splits at) hold depths from the trunk's down to about 2 m, and a bar of 1.25 depths is
+    thinner than one of 2.5 on the same networks (``n_trees`` fixed, so only the bars differ)."""
+    thin = _tree_delta(n_trees=4, mouth_bar_thickness_depths=0.5)
+    thick = _tree_delta(n_trees=4, mouth_bar_thickness_depths=2.5)
+    tips = np.array(thin._distal_tips)
+    assert tips.shape[1] == 6 and len(tips) > 10
+    assert 0.0 < tips[:, 5].min() < 3.0 and tips[:, 5].max() < 6.0
+    assert (thick.facies == 3).sum() > 1.5 * (thin.facies == 3).sum()
