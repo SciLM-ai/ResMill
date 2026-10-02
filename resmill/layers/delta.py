@@ -184,6 +184,22 @@ def _paint_mouth_bars(canvas, tips, length_factor, width_factor, hw_ratio, dw_ra
         )
 
 
+def _spread_levels(z_first, z_last, n):
+    """``n`` channel-top levels from ``z_first`` to ``z_last`` in the order 0, 1, 1/2, 1/4, 3/4, 1/8, ... of
+    their span (both ends, then the van der Corput points): any prefix of ``2**m + 1`` of them is evenly
+    spaced, so a stop part-way through leaves no part of the layer bare."""
+    def radical_inverse(m):
+        value, scale = 0.0, 0.5
+        while m:
+            value += scale * (m & 1)
+            m >>= 1
+            scale *= 0.5
+        return value
+
+    fractions = [0.0, 1.0][:n] + [radical_inverse(m) for m in range(1, max(n - 1, 1))]
+    return [z_first + (z_last - z_first) * u for u in fractions[:n]]
+
+
 class DeltaLayer(ChannelLayer):
     """Distributary-fan delta — Alluvsim-faithful event-loop simulation.
 
@@ -262,6 +278,7 @@ class DeltaLayer(ChannelLayer):
                        noise_range_m: tuple | None = None,
                        fining_top_kvkh: float | None = None,
                        tree_ntg_stop: bool = False,
+                       max_levels: int | None = None,
                        seed: int | None = None,
                        **kwargs):
         """Generate a prograding distributary-fan delta.
@@ -329,6 +346,18 @@ class DeltaLayer(ChannelLayer):
             share (less only if ``n_trees`` runs out) instead of at what
             ``n_trees`` happens to give. ``False``: ``n_trees`` networks, the
             older ones abandoned.
+        max_levels : int | None
+            Only with ``tree_ntg_stop``. ``None`` keeps ``n_generations`` levels, up to
+            ``n_trees`` networks piled at each (a layer that needs 100 networks then holds
+            them at a few levels, and every plan view is one solid fan). A number grows
+            the layer level by level instead: ``n_trees`` networks (1 is the point) at each
+            of up to ``max_levels`` channel tops spread from the floor to the roof (both
+            ends, the middle, the quarter points, ..., so a stop leaves no part of the layer
+            bare), until the layer holds ``NTGtarget`` (sand cells, mouth bars included,
+            counted once). The plan view of a layer then shows the few networks that reach
+            it as discrete distributaries with mud-filled bays between, and the net-to-gross
+            comes out at the target plus at most the last network's share. It replaces
+            ``n_generations`` and ``level_z``; the progradation follows each level's height.
         seed : int | None
             Master seed; each generation seeds with ``seed + igen`` so
             generations are independent but reproducible.
@@ -349,6 +378,8 @@ class DeltaLayer(ChannelLayer):
 
         if tree_ntg_stop and not cfg.get('bifurcate'):
             raise ValueError("tree_ntg_stop needs the distributary tree: pass bifurcate=True")
+        if max_levels is not None and not tree_ntg_stop:
+            raise ValueError("max_levels grows the layer to its net-to-gross: pass tree_ntg_stop=True")
 
         # Wire direct branch-spread control
         cfg['stdev_branch_azi'] = float(max(branch_spread_deg, 0.0))
@@ -361,7 +392,11 @@ class DeltaLayer(ChannelLayer):
         # below the floor with a one-cell sand sliver in slice 0.
         z_len = self.nz * self.dz
         z_bot = max(self.dz, float(cfg.get('mCHdepth', DELTA_FAN['mCHdepth'])))
-        if 'level_z' in cfg and cfg['level_z'] is not None:
+        if max_levels is not None:
+            cfg.pop('level_z', None)
+            n_generations = max(int(max_levels), 1)
+            chelev_per_gen = _spread_levels(z_bot, z_len, n_generations)
+        elif 'level_z' in cfg and cfg['level_z'] is not None:
             chelev_per_gen = list(cfg.pop('level_z'))
             if len(chelev_per_gen) != n_generations:
                 raise ValueError(
@@ -392,6 +427,9 @@ class DeltaLayer(ChannelLayer):
             )
         else:
             trunk_per_gen = np.full(n_generations, base_trunk)
+        if max_levels is not None:      # the levels are not in order of height: the progradation follows each one's
+            height = (np.asarray(chelev_per_gen) - z_bot) / max(z_len - z_bot, 1e-9)
+            trunk_per_gen = np.clip(base_trunk + progradation_fraction * height, 0.0, 0.95)
 
         # Run n_generations independent simulations and merge.
         # Merge rule: per cell, take the generation with the
@@ -418,11 +456,12 @@ class DeltaLayer(ChannelLayer):
             if cfg.get('bifurcate') and progradation_fraction > 0.0 and n_generations > 1:
                 # the front progrades: each generation's lobes end further out
                 cfg_gen['front_radius'] = float(cfg.get('front_radius', 1.5)) * (
-                    1.0 + progradation_fraction * igen / (n_generations - 1))
+                    1.0 + progradation_fraction * (igen / (n_generations - 1) if max_levels is None else height[igen]))
             after_tree = None
             if tree_ntg_stop:
+                pace = 1.0 if max_levels is not None else (igen + 1) / n_generations     # levels have no pace of their own
                 after_tree = self._ntg_stop(
-                    float(cfg_gen['NTGtarget']) * nx_ * ny_ * nz_ * (igen + 1) / n_generations,
+                    float(cfg_gen['NTGtarget']) * nx_ * ny_ * nz_ * pace,
                     lambda engine: np.count_nonzero((accum_facies >= 1) | (engine.facies >= 1)),
                     paint_mouth_bars, mouth_bar_length_factor, mouth_bar_width_factor,
                     mouth_bar_hw_ratio, mouth_bar_dw_ratio,
@@ -451,6 +490,8 @@ class DeltaLayer(ChannelLayer):
             event_group.update(dict.fromkeys(engine.event_levels, igen))
             self.tree_branches.extend(dict(gen=igen, **b) for b in getattr(engine, 'tree_branches', []))
             last_engine = engine
+            if max_levels is not None and np.count_nonzero(accum_facies >= 1) >= float(cfg_gen['NTGtarget']) * nx_ * ny_ * nz_:
+                break           # the layer holds its sand: no further level
 
         # Optional mouth-bar painting at every recorded distal tip (tree_ntg_stop
         # painted each network's bars as it went)

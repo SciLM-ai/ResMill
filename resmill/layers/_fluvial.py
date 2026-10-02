@@ -368,6 +368,12 @@ class fluvial:
         # ``tree_ntg_stop`` uses it. None: ``n_trees`` networks, the older
         # ones abandoned.
         after_tree: Callable[[fluvial], bool] | None = None,
+        # ``branch_levees``: a tree's levees follow their own branch. ``mLVwidth`` and
+        # ``mLVheight`` are then the trunk's, and a branch of discharge share q gets
+        # them times q ** width_exp and q ** depth_exp, its own width and depth ratios.
+        # False: every branch has the trunk's levee, so a small distributary is flanked
+        # by banks wider than itself and a crowd of them leaves no interdistributary mud.
+        branch_levees: bool = False,
         # When ``True``, ``ntime`` is interpreted as the per-level event
         # cap and the global event counter is reset at the top of every
         # level — so each of the ``nlevel`` levels gets its own full
@@ -588,6 +594,7 @@ class fluvial:
         self.width_exp = float(width_exp)
         self.depth_exp = float(depth_exp)
         self.after_tree = after_tree
+        self.branch_levees = bool(branch_levees)
         self.tree_branches: list[dict] = []
         if mCHentry_x_offset_per_level is None:
             self.mCHentry_x_offset_per_level = None
@@ -2134,6 +2141,9 @@ class fluvial:
             lv_height = _gauss_clip(self.mLVheight, self.stdevLVheight, lo=0.0)
             lv_asym = _gauss_clip(self.mLVasym, self.stdevLVasym, lo=0.0)
             lv_thin = _gauss_clip(self.mLVthin, self.stdevLVthin, lo=0.0)
+            if self.branch_levees:
+                lv_width *= (self.CHdepth / base_depth) ** (self.width_exp / self.depth_exp)
+                lv_height *= self.CHdepth / base_depth
             self._stamp_levee(lv_depth, lv_width, lv_height, lv_asym, lv_thin)
             if b['tip'] and self.cx.size > 1:
                 dx, dy = self.cx[-1] - self.cx[-2], self.cy[-1] - self.cy[-2]

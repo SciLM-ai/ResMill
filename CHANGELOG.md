@@ -230,6 +230,21 @@
   one at 0.501 for 0.5 (bars 4 x 1.5). The engine takes the stop as a hook, `after_tree(engine)`, called
   after each network: a True ends the level's networks and none is abandoned. Off by default: outputs
   are bit-identical.
+- `max_levels=N` (`DeltaLayer`, with `tree_ntg_stop=True`): the layer is grown level by level instead of
+  piling networks at `n_generations` levels. The stop of `tree_ntg_stop` with `n_trees` large puts 100 or
+  more networks at each of a few levels, and since every plan view then holds the union of them (a
+  network covers 3-6 % of a field-scale plan view) each is one solid fan with no interdistributary
+  mud. With `max_levels`, `n_trees` networks (1) are grown at each of up to `max_levels` channel tops
+  spread from the floor to the roof (both ends, the middle, the quarter points, ...: any `2**m + 1` of
+  them are evenly spaced), until the layer holds `NTGtarget`; a plan view then shows the few networks
+  that reach it as separate trees with mud between, and the net-to-gross lands at the target plus the
+  last network's share. It replaces `n_generations` and `level_z`; the progradation follows each level's
+  height. Default `None`: outputs are bit-identical.
+- `branch_levees=True` (`fluvial`, so `DeltaLayer` too; tree mode): `mLVwidth` and `mLVheight` are the
+  trunk's, and a branch of discharge share q gets them times q**`width_exp` and q**`depth_exp`, its own
+  width and depth ratios. Every branch otherwise has the trunk's levee, 60 m wide beside a 30 m
+  distributary, and the levee sheets of a hundred overlapping networks fill the interdistributary area.
+  Default `False`: outputs are bit-identical.
 - `dome()` gains `aspect` and `azimuth` (elongated four-way closures);
   `examples/anticline_meander.py` and `examples/angular_unconformity.py`.
 
