@@ -32,7 +32,7 @@
   of their own, and `to_grdecl` writes them as MULTX, MULTY and MULTZ
   (times a fault seal's; a later BOX / MULTX erases them where MULTIPLY
   'MULTX' keeps them). `sample_drapes` draws a reservoir's settings. A
-  cell's storey is looked up once per flow event: same result, ten times
+  cell's storey is looked up once per flow event: same result, 8-10 times
   faster. Off by default: outputs are bit-identical to before.
 - `distinct_events=True` (`ChannelLayer`): give every flow event its own
   (poro_mult, log_perm_offset) pair. Both are clipped at +-2 sd, so two

@@ -146,7 +146,7 @@ def storey_map(mask, poro_mult_field, log_perm_offset_field, event_group) -> np.
     """The storey of every cell of ``mask``: the level ``event_group`` gives for the cell's flow event, which the engine
     stamps into the two fields as a pair (``fluvial.event_levels``, float32 keys). -1 outside the mask, for an event the map
     does not know, and for every cell when ``event_group`` is empty. The map is looked up once per distinct event, not per
-    cell, and the events are found on the pair's 8 bytes read as one integer (a row-wise ``np.unique`` is ten times
+    cell, and the events are found on the pair's 8 bytes read as one integer (a row-wise ``np.unique`` is 8-10 times
     slower)."""
     storey = np.full(mask.shape, -1, dtype=np.int64)
     if event_group and mask.any():
