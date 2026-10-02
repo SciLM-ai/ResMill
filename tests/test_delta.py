@@ -459,3 +459,20 @@ def test_a_tree_tip_records_the_depth_of_its_own_channel_and_the_bars_follow_it(
     assert tips.shape[1] == 6 and len(tips) > 10
     assert 0.0 < tips[:, 5].min() < 3.0 and tips[:, 5].max() < 6.0
     assert (thick.facies == 3).sum() > 1.5 * (thin.facies == 3).sum()
+
+
+def test_a_tips_bar_is_sized_by_the_tips_width_and_the_two_factors():
+    """A tip 50 m wide with a length factor of 6 and a width factor of 2 has a bar 2 x 6 x 50 = 600 m long and 2 x 50 = 100 m
+    from its axis to its edge at the widest, 200 m across (and a bar painted from a width factor of 4 is twice as wide)."""
+    from resmill.layers.delta import _paint_mouth_bars
+
+    def footprint(width_factor):
+        canvas = _bar_canvas()
+        _paint_mouth_bars(canvas, [(300.0, 600.0, 19.5, 0.0, 50.0, 4.0)], 6.0, width_factor, 0.06, 0.08, fallback=(1.0, 1.0))
+        plan = (canvas.facies >= 1).any(axis=2)
+        xs = np.where(plan.any(axis=1))[0]
+        return (xs.max() - xs.min() + 1) * 10.0, plan.sum(axis=1).max() * 10.0
+
+    length, across = footprint(2.0)
+    assert length == pytest.approx(600.0, abs=20.0) and across == pytest.approx(200.0, abs=20.0)
+    assert footprint(4.0)[1] == pytest.approx(2.0 * across, abs=30.0)

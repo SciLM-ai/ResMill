@@ -16,6 +16,7 @@ _SAND_SHARE_MIN = 0.5    # a cell with at least this sand share is sand (3)
 _MUD_SHARE_MAX = 0.2     # below this sand share it is mud (-1), the Tanqua's distal fringe (under 20 % sandstone); in between the heterolithic fringe (2)
 _MIN_CAP_SHARE = 1e-3    # mud thinner than this share of a cell is dust of the overlap arithmetic, not a thin cap
 _NET_LOG10_PERM = 0.0    # a facies is net rock above 1 mD (ResSimMill's net cut-off)
+_AIM_TOLERANCE = 0.005   # a net share this far above the aim is no miss: the bisection stops about there
 
 
 def _compensation_weights(surface, dz, dh_ave, scale):
@@ -389,7 +390,7 @@ class LobeLayer(Layer):
             raise ValueError(f"the net-to-gross must lie between 0 and 1, not {ntg}")
         lo, hi = 0.0, (1.0 - floor) * dz * max(float(np.max(b - a)) for a, b in zip(surfaces[:-1], surfaces[1:]))
         least = stack(hi)[3]
-        missed = least > ntg
+        missed = least > ntg + _AIM_TOLERANCE
         if missed:
             warnings.warn(f"the net-to-gross {ntg} is below the least this stack of stamps can hold, {least:.3f} (a mud cap "
                           f"as thick as the thickest stamp, a fringe sand fraction of {floor}, erosion {erosion}): "

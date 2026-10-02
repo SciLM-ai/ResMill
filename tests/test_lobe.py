@@ -208,6 +208,15 @@ def test_the_cap_of_a_thin_stamp_keeps_the_fringes_sand_fraction():
     assert mud[0, 0, 0] == pytest.approx(0.7) and mud[1, 0, 1] == pytest.approx(0.8) and mud[2, 0, 1] == pytest.approx(1.0)
 
 
+def test_a_stamp_thinner_than_half_a_cell_still_carries_its_cap():
+    """The stack's mud does not depend on the grid: stamps 0.3 and 0.6 of a cell thick (the margins of a lobe on coarse cells) are
+    capped with 0.3 and 0.6 m of mud like any other (with a fringe fraction of 0, the whole deposit is mud when M is large)."""
+    mud, _, _ = _stamp_mud(_stack([0.3, 0.6, 4.0]), nz=4, dz=1.0, mud_cap=5.0, erosion=0.0, floor=0.0)
+    np.testing.assert_allclose(mud[:, 0, 0].sum(), 0.3)
+    np.testing.assert_allclose(mud[:, 0, 1].sum(), 0.6)
+    np.testing.assert_allclose(mud[:, 0, 2].sum(), 4.0)
+
+
 def test_mud_above_the_top_of_the_layer_is_cut_off():
     mud, _, _ = _stamp_mud(_stack([6.0]), nz=4, dz=1.0, mud_cap=2.0, erosion=0.0, floor=0.0)   # cap [4, 6]: above the layer
     assert mud.sum() == 0.0
@@ -418,3 +427,19 @@ def test_the_decay_of_a_thin_stamp_is_clipped_when_asked():
                                             azimuth_std=10.0, upthinning=False, compensation_scale=0.1, clip_decay=clip)
         peaks[clip] = float(allporo[-1].max())
     assert peaks[False] > 0.36 and peaks[True] <= 0.35 + 1e-9
+
+
+def test_the_interlobe_mode_clips_the_porosity_decay_of_its_stamps_and_the_others_do_not(monkeypatch):
+    """``create_geology`` hands ``clip_decay`` to the stamping (the ring of porosity above the design maximum is the interlobe mode's to
+    remove); without ``interlobe_erosion`` it is off, as it always was."""
+    seen = []
+    original = LobeLayer._lobemodeling
+
+    def spy(self, *args, **kwargs):
+        seen.append(kwargs.get("clip_decay"))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(LobeLayer, "_lobemodeling", spy)
+    _rocky({-1: dict(MUD)}, ntg=0.5)
+    _interlobe(ntg=0.9)
+    assert seen == [False, True]
