@@ -155,7 +155,9 @@ def test_each_storeys_coverage_is_a_beta_draw_that_holds_the_mean():
     share = draped_columns(fill, storey, dn, c, 0.0, (1.0, 1.0), np.random.default_rng(0), concentration=k).mean(axis=(1, 2))
     assert share.mean() == pytest.approx(c, abs=0.04)
     assert share.var() == pytest.approx(c * (1 - c) / (k + 1), abs=0.02)
-    assert (share >= 0.95).mean() == pytest.approx(1 - betainc(c * k, (1 - c) * k, 0.95), abs=0.04) == pytest.approx(0.25, abs=0.05)
+    sealed = (share >= 0.95).mean()
+    assert sealed == pytest.approx(1 - betainc(c * k, (1 - c) * k, 0.95), abs=0.04)
+    assert sealed == pytest.approx(0.25, abs=0.05)                          # Barton: continuous in about a quarter of the elements
     assert (share <= 0.05).mean() > 0.1 and share.min() == 0.0 and share.max() == 1.0       # bare and sealed storeys both occur
     tight = draped_columns(fill, storey, dn, c, 0.0, (1.0, 1.0), np.random.default_rng(1), concentration=1e9).mean(axis=(1, 2))
     assert np.abs(tight - c).max() < 2.0 / 576
