@@ -24,8 +24,10 @@ Salt is a mask and two terms of the structure, nothing more (rows N1-N39 of ``st
   The upturn shifts the strata vertically and so keeps their vertical thickness: the thickness measured along the
   bed's normal is already ``cos(dip)`` of it, and ``a`` thins it further. :func:`salt_sequence` is the hook or wedge
   halokinetic sequence (Giles & Rowan 2012): the upturn of a narrow (50-200 m) or broad (300-1,000 m) folding zone and
-  :func:`salt_truncation`, the unconformity that cuts the lifted beds off at a high or a low angle and so pinches the reservoir
-  out within the zone (the beds of a corner-point column cannot overturn, so a hook is as steep as :data:`MAX_DIP`).
+  :func:`salt_truncation`, the unconformity that cuts the lifted beds off at the angle its ``cut`` gives (``Sequence.angle``,
+  and :func:`truncation_cut` the cut for an angle): a hook is cut at over 70 degrees by a nearly flat unconformity that pinches
+  the reservoir out within the zone, or by a small cut that keeps the interval to the wall (the beds of a corner-point column
+  cannot overturn, so a hook is as steep as :data:`MAX_DIP`).
 * :func:`base_of_salt` is the surface a salt sheet rests on, for ``to_grdecl(erode_above=...)``: cells above it are
   salt (inactive), the cells it cuts are truncated against it, and a reservoir below it is a subsalt trap (N30-N35).
 
@@ -305,11 +307,12 @@ def salt_truncation(upturn, datum, cut):
 
     Where ``upturn`` (:func:`salt_upturn`) lifts the beds the surface is ``datum`` (the reservoir's top before the upturn: the
     fold, its roughness and the top depth, any Structure-like) lifted by the fraction ``1 - cut`` of the upturn, so ``cut`` is
-    the share of the lift it removes: 1 a flat surface (the beds are cut off at their full dip), 0 none. A reservoir ``h``
-    thick is gone where ``cut`` x lift >= ``h``: it pinches out within the folding zone (Pichel & Jackson: up to 200 m from
-    the salt for a hook, 300-1000 m for a wedge). Beyond the zone the surface lies far above the model and cuts nothing, so
-    faults there keep their footwalls. It cuts the faulted stack, as the faults of a tier end at the unconformity above
-    (Coleman et al. 2018)."""
+    the share of the lift it removes: 1 a flat surface (the beds are cut off at their full dip), 0 none. The angle between the
+    beds and the surface at the contact is ``dip - atan((1 - cut) tan dip)``. A reservoir ``h`` thick is gone where ``cut`` x
+    lift >= ``h``: it pinches out within the folding zone (Pichel & Jackson: up to 200 m from the salt for a hook, 300-1000 m
+    for a wedge), and survives to the wall where ``cut`` x the peak lift stays under ``h``. Beyond the zone the surface lies far
+    above the model and cuts nothing, so faults there keep their footwalls. It cuts the faulted stack, as the faults of a tier
+    end at the unconformity above (Coleman et al. 2018)."""
     if not 0.0 <= cut <= 1.0:
         raise ValueError(f"cut must lie in [0, 1], got {cut}")
     datum, lift = _as_field(datum), _as_field(upturn)
@@ -322,7 +325,12 @@ def salt_truncation(upturn, datum, cut):
     return Structure(fn)
 
 
-Sequence = namedtuple("Sequence", "upturn truncation relief dip")
+Sequence = namedtuple("Sequence", "upturn truncation relief dip angle")
+
+
+def _dip(taper, power):
+    """The dip (degrees) at which the beds of a fold of this ``taper`` meet the contact: atan(p tan(taper)), capped at MAX_DIP."""
+    return min(math.degrees(math.atan(power * math.tan(math.radians(taper)))), MAX_DIP)
 
 
 def salt_sequence(salt, width, taper, cut, datum, power=2.0, z_ref=None):
@@ -330,17 +338,37 @@ def salt_sequence(salt, width, taper, cut, datum, power=2.0, z_ref=None):
     ``structure=`` and ``erode_above=``), from what Giles & Rowan (2012) and Pichel & Jackson (EarthArXiv 657) measure.
 
     ``width`` is the folding zone and ``taper`` the angle of the line from the fold's inflection point to its tip, so the
-    relief is ``width x tan(taper)`` (at ``power`` 2, a parabola, the beds meet the contact at ``atan(2 tan taper)``,
-    capped at :data:`MAX_DIP`). Hooks have 20-200 m zones (P10-P90 38-181 m; 36 % of the 96 sequences of the Precaspian walls,
-    50 % on upright and 19 % on inclined walls) and tapers of 40-86 degrees; wedges 300-1,970 m (P10-P90 375-1,020 m) and
-    8-49 degrees; ``cut`` follows the truncation angle (over 70 degrees for a hook: near 1; under 30 for a wedge: below
-    0.7). ``datum`` is the reservoir's top before the upturn (see :func:`salt_truncation`). Like :func:`salt_upturn` it
-    registers ``width`` on the body: the grid must have cells of at most half of it, a hook's 50-200 m included."""
+    relief is ``width x tan(taper)`` (at ``power`` 2, a parabola, the beds meet the contact at ``atan(2 tan taper)``, capped
+    at :data:`MAX_DIP`; the relief is W tan(taper) up to a taper of about 80 degrees and W tan(85) / 2 above it). Hooks have
+    20-200 m zones (P10-P90 38-181 m; 36 % of the 96 sequences of the Precaspian walls, 50 % on upright and 19 % on inclined
+    walls) and tapers of 40-86 degrees; wedges 300-1,970 m (P10-P90 375-1,020 m) and 8-49 degrees. ``cut`` is the share of the
+    lift the unconformity removes (see :func:`salt_truncation`) and the truncation angle at the contact, which Giles & Rowan
+    put over 70 degrees for a hook and under 30 for a wedge, is ``Sequence.angle`` = dip - atan((1 - cut) tan dip): not a
+    function of ``cut`` alone (a cut of 0.85-1 gives 46-75 degrees at a dip of 75), so :func:`truncation_cut` gives the cut for
+    the angle wanted. A hook that pinches the reservoir out is cut at over 70 degrees (a cut of 0.97-1), one that keeps the
+    interval to the wall by a ``cut`` x ``relief`` under its thickness. ``Sequence.dip`` is the dip the grid has (capped).
+    ``datum`` is the reservoir's top before the upturn (see :func:`salt_truncation`). Like :func:`salt_upturn` it registers
+    ``width`` on the body: the grid must have cells of at most half of it, a hook's 50-200 m included."""
     if not 0.0 <= taper < 90.0:
         raise ValueError(f"taper must lie in [0, 90) degrees, got {taper}")
-    dip = math.degrees(math.atan(power * math.tan(math.radians(taper))))
+    dip = _dip(taper, power)
     up = salt_upturn(salt, dip, width, power, z_ref)
-    return Sequence(up, salt_truncation(up, datum, cut), width * math.tan(math.radians(min(dip, MAX_DIP))) / power, dip)
+    truncation = salt_truncation(up, datum, cut)
+    angle = dip - math.degrees(math.atan((1.0 - cut) * math.tan(math.radians(dip))))
+    return Sequence(up, truncation, width * math.tan(math.radians(dip)) / power, dip, angle)
+
+
+def truncation_cut(taper, angle, power=2.0):
+    """The ``cut`` for :func:`salt_sequence` that makes the unconformity meet the beds at ``angle`` degrees at the contact:
+    ``1 - tan(dip - angle) / tan(dip)``, the dip being that of a fold of this ``taper`` (``atan(power tan taper)``, capped at
+    :data:`MAX_DIP`). The angle cannot exceed the dip (a flat unconformity gives the dip itself), so a hook cut at over 70 degrees
+    (Giles & Rowan 2012) needs a taper above ``atan(tan(70) / power)`` = 54 degrees at power 2, and then a cut of 0.969-1."""
+    dip = _dip(taper, power)
+    if not 0.0 <= angle <= dip:
+        raise ValueError(f"beds dipping {dip:.1f} degrees at the contact cannot be cut at {angle:g} degrees "
+                         f"(the largest angle is the dip, for a flat unconformity)")
+    tan = math.tan(math.radians(dip))
+    return 1.0 - math.tan(math.radians(dip - angle)) / tan if tan > 0.0 else 0.0
 
 
 class SaltBase(Structure):

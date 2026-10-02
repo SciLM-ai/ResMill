@@ -8,9 +8,10 @@ import numpy as np
 import pytest
 
 from resmill import salt as sl
-from resmill.export import _build_geometry
+from resmill.export import _build_geometry, to_grdecl
 from resmill.faults import Fault
 from resmill.layers.base import Layer
+from tests.test_export import read_grdecl, zcorn_cube
 
 TOP, P = 2000.0, 2.0
 CONTACT = 100.0                                                  # m: the contact of every wall below, salt to its south
@@ -137,3 +138,119 @@ def test_the_cells_a_truncation_removes_are_inactive_but_not_salt_in_the_labels(
     assert labels["volume_fraction"] == pytest.approx(salt.mean())
     cut = inactive & ~salt
     assert cut.any() and not (labels["mask"][cut]).any()
+
+
+# --- the two forms of a hook (the owner's ruling of 2026-10-02) -----------------------------------------------------------
+
+def written(tmp_path, width, taper, cut, nz, dz, dx):
+    """The model of :func:`build` written by ``to_grdecl`` and read back: its ZCORN cube (2nx, 2ny, 2nz), ACTNUM and sequence."""
+    m = build(width, taper, cut, nz, dz, dx)
+    path = to_grdecl(m["L"], tmp_path / "hook.grdecl", structure=m["seq"].upturn, erode_above=m["seq"].truncation, salt=m["body"])
+    blocks = read_grdecl(path)
+    return {**m, "z": zcorn_cube(blocks, m["nx"], m["ny"], nz),
+            "act": np.asarray(blocks["ACTNUM"]).reshape((m["nx"], m["ny"], nz), order="F")}
+
+
+def thickness(w):
+    """The reservoir's thickness (m) at each pillar row 0..ny-1 of the written grid: base of the last layer less top of the first."""
+    return w["z"][0, 0::2, -1][:w["ny"]] - w["z"][0, 0::2, 0][:w["ny"]]
+
+
+def contact_angle(w):
+    """The angle (degrees) between the beds and the unconformity at the contact, from the written ZCORN of a reservoir thick enough
+    to survive there: the dips of its base (the beds) and of its top (the surface that cuts them), each extrapolated to the contact
+    from the slopes over the first two pillar intervals (d = dx / 2 and 3 dx / 2) as 1.5 s1 - 0.5 s2."""
+    j, dx = int(round(CONTACT / w["dx"])), w["dx"]
+    dips = []
+    for k in (-1, 0):
+        d = w["z"][0, 0::2, k][:w["ny"]]
+        s1, s2 = (d[j + 1] - d[j]) / dx, (d[j + 2] - d[j + 1]) / dx
+        dips.append(math.degrees(math.atan(1.5 * s1 - 0.5 * s2)))
+    return dips[0] - dips[1]
+
+
+def lift_at(d, width, taper):
+    """The upturn's lift (m) at distance d from the contact: A (1 - d / W)^2, A = W tan(taper), as drawn."""
+    return width * math.tan(math.radians(taper)) * np.clip(1.0 - d / width, 0.0, 1.0) ** 2
+
+
+def test_a_hook_that_pinches_the_reservoir_out_is_cut_at_over_70_degrees_on_the_written_grid(tmp_path):
+    """The pinch-out form meets Giles & Rowan's definition (a truncation angle over 70 degrees) by construction. A hook of
+    W = 100 m and taper 62 degrees has beds that meet the contact at atan(2 tan 62) = 75.11 degrees; cut at 72 degrees takes
+    cut = 1 - tan(3.11) / tan(75.11) = 0.9856 of the 188.1 m of lift, so a reservoir of 60 m is gone where
+    0.9856 x 188.1 (1 - d / 100)^2 >= 60, from d_p = 100 (1 - sqrt(60 / 185.4)) = 43.1 m to the contact."""
+    width, taper, angle, h0, dx = 100.0, 62.0, 72.0, 60.0, 2.5
+    cut = sl.truncation_cut(taper, angle)
+    assert cut == pytest.approx(1.0 - math.tan(math.radians(75.1124 - angle)) / math.tan(math.radians(75.1124)), abs=1e-4)
+    assert cut == pytest.approx(0.9856, abs=1e-4)
+    thin = written(tmp_path, width, taper, cut, 12, 5.0, dx)
+    assert thin["seq"].angle == pytest.approx(angle) and thin["seq"].dip == pytest.approx(75.1124, abs=1e-3)
+    d = np.arange(thin["ny"]) * dx - CONTACT                                      # distance of each pillar row from the contact
+    outside = d > 0.0
+    assert thickness(thin)[outside] == pytest.approx(np.clip(h0 - cut * lift_at(d[outside], width, taper), 0.0, None), abs=0.015)
+    d_p = width * (1.0 - math.sqrt(h0 / (cut * width * math.tan(math.radians(taper)))))
+    assert d_p == pytest.approx(43.1, abs=0.05)
+    live = [j for j in range(thin["ny"] - 1) if thin["act"][0, j].any() and d[j] >= 0.0]
+    assert d_p < d[live[0] + 1] <= d_p + dx + 1e-9                                 # the first live column starts where it is thick enough
+    assert not thin["act"][0, :live[0]][d[:live[0]] >= 0.0].any()                  # and nothing lives between it and the salt
+    thick = written(tmp_path, width, taper, cut, 60, 10.0, dx)
+    assert contact_angle(thick) == pytest.approx(angle, abs=0.5) and contact_angle(thick) > 70.0
+
+
+@pytest.mark.parametrize("taper,angle", [(60.0, 71.0), (70.0, 78.0), (80.0, 84.0)])
+def test_the_pinch_out_form_is_over_70_degrees_for_any_taper_that_can_reach_it(tmp_path, taper, angle):
+    """Another hook, W = 150 m (lift 260, 412 and 850 m) on 1,500 m of reservoir that survives to the contact: the measured
+    angle is the one asked for, whatever the taper."""
+    width, dx = 150.0, 2.5
+    thick = written(tmp_path, width, taper, sl.truncation_cut(taper, angle), 100, 15.0, dx)
+    assert contact_angle(thick) == pytest.approx(angle, abs=0.6) and contact_angle(thick) > 70.0
+
+
+def test_a_hook_that_keeps_the_interval_runs_it_up_to_the_wall_at_a_low_angle_on_the_written_grid(tmp_path):
+    """The keep form: a cut of 0.2 of the 188.1 m lift removes 37.6 m at the contact and 0.2 x 188.1 (1 - d / 100)^2 beyond it, so
+    a reservoir of 60 m keeps 22.4 m at the wall and every column is live up to it; the beds are cut at
+    75.11 - atan(0.8 tan 75.11) = 3.49 degrees, far under 70."""
+    width, taper, cut, h0, dx = 100.0, 62.0, 0.2, 60.0, 2.5
+    thin = written(tmp_path, width, taper, cut, 12, 5.0, dx)
+    assert thin["seq"].angle == pytest.approx(3.49, abs=0.01)
+    d = np.arange(thin["ny"]) * dx - CONTACT
+    outside = d >= 0.0
+    t = thickness(thin)
+    assert t[outside] == pytest.approx(h0 - cut * lift_at(d[outside], width, taper), abs=0.015)
+    assert t[outside].min() == pytest.approx(h0 - cut * width * math.tan(math.radians(taper)), abs=0.02)       # 22.4 m at the wall
+    assert t[outside].min() > 22.0
+    first_cell = int(round(CONTACT / dx))                                          # the cell whose inner face is the contact
+    assert thin["act"][0, first_cell:].any(axis=1).all() and not thin["act"][0, first_cell - 1].any()
+    thick = written(tmp_path, width, taper, cut, 60, 10.0, dx)
+    assert contact_angle(thick) == pytest.approx(3.49, abs=0.5) and contact_angle(thick) < 70.0
+
+
+def test_the_cut_of_an_angle_is_the_inverse_of_the_angle_of_a_cut():
+    """cut = 1 - tan(dip - angle) / tan(dip): at taper 62 (dip 75.11) an angle of 70 degrees takes a cut of 0.9762, the dip itself
+    (a flat unconformity) a cut of 1 and 0 degrees a cut of 0; at taper 86 the dip is capped at 85 and 80 degrees take
+    1 - tan(5) / tan(85) = 0.9923. The least taper for 70 degrees is atan(tan(70) / 2) = 53.95; below it the angle is refused."""
+    assert sl.truncation_cut(62.0, 70.0) == pytest.approx(0.9762, abs=1e-4)
+    assert sl.truncation_cut(62.0, math.degrees(math.atan(2.0 * math.tan(math.radians(62.0))))) == pytest.approx(1.0, abs=1e-9)
+    assert sl.truncation_cut(62.0, 0.0) == 0.0
+    assert sl.truncation_cut(86.0, 80.0) == pytest.approx(0.9923, abs=1e-4)
+    assert sl.truncation_cut(54.0, 70.0) == pytest.approx(0.99978, abs=1e-5)
+    body = sl.salt_body((0.0, 0.0), (500.0, 500.0))
+    for taper, angle in ((62.0, 72.0), (40.0, 30.0), (86.0, 80.0), (30.0, 5.0)):
+        seq = sl.salt_sequence(body, 100.0, taper, sl.truncation_cut(taper, angle), datum=TOP)
+        assert seq.angle == pytest.approx(angle, abs=1e-9)
+    for taper, angle in ((53.9, 70.0), (50.0, 70.0), (62.0, 76.0), (62.0, -1.0)):
+        with pytest.raises(ValueError, match="cannot be cut"):
+            sl.truncation_cut(taper, angle)
+
+
+def test_the_sequence_reports_the_dip_and_relief_the_grid_has_when_the_dip_is_capped(tmp_path):
+    """A taper of 86 degrees would give a dip of 88 and a relief of W tan(88) / 2, but the grid caps the dip at 85: the
+    relief is 100 tan(85) / 2 = 571.5 m (not 1,430 m), the dip 85, and the written base is lifted by that much at the contact."""
+    w = written(tmp_path, 100.0, 86.0, 0.0, 12, 5.0, 5.0)
+    assert w["seq"].dip == 85.0 and w["seq"].relief == pytest.approx(571.5, abs=0.1)
+    j = int(round(CONTACT / w["dx"]))
+    base = w["z"][0, 0::2, -1]
+    assert base[w["ny"] - 1] - base[j] == pytest.approx(571.5, abs=0.5)       # the contact is placed to a few cm on a grid of 62 m
+    plain = sl.salt_sequence(w["body"], 100.0, 40.0, 0.5, datum=TOP)
+    assert plain.dip == pytest.approx(math.degrees(math.atan(2.0 * math.tan(math.radians(40.0)))))
+    assert plain.relief == pytest.approx(100.0 * math.tan(math.radians(40.0)), rel=1e-9)
