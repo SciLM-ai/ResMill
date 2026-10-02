@@ -104,6 +104,9 @@ def test_storey_map_is_the_level_of_each_cells_flow_event():
     assert np.array_equal(got, expected)
     assert (got[pick == 8] == -1).all() and (got[~mask] == -1).all() and got.max() == 2
     assert (storey_map(mask, pm, po, {}) == -1).all() and (storey_map(mask, pm, po, None) == -1).all()
+    assert np.array_equal(storey_map(mask, pm.astype(np.float64), po.astype(np.float64), group), expected)   # float32 keys
+    pairs_in_c_order = np.asfortranarray(pm), np.asfortranarray(po)                                         # any memory layout
+    assert np.array_equal(storey_map(mask, *pairs_in_c_order, group), expected)
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -371,7 +374,7 @@ MUD = {-1: {"poro": 0.12, "log10_perm": -3.0}}
 
 def _build(seed=5, **kw):
     layer = ChannelLayer(nx=100, ny=70, nz=12, x_len=1000.0, y_len=700.0, z_len=12.0, top_depth=2000.0)
-    layer.create_geology(seed=seed, facies_props=MUD, **{**GEOLOGY, **kw})
+    layer.create_geology(seed=seed, **{"facies_props": MUD, **GEOLOGY, **kw})
     return layer
 
 
@@ -400,6 +403,20 @@ def _global_state():
 
 
 EVENT_SDS = dict(event_poro_sd=2.0, event_log_perm_sd=0.01)       # nearly every event clips to a corner pair: pairs repeat
+
+
+def test_a_cells_storey_is_looked_up_once_for_levee_fading_and_for_drapes(monkeypatch):
+    """Levee fading and drapes both need every sand cell's storey; the lookup (seconds on a million-cell layer) runs once when
+    either is on, also when both are, and not at all when neither is."""
+    from resmill.layers import channel
+    calls, real = [], channel.storey_map
+    monkeypatch.setattr(channel, "storey_map", lambda *a, **k: calls.append(1) or real(*a, **k))
+    levee = dict(levee_ntg_decay_m=150.0, facies_props={**MUD, 2: {"ntg": 0.55, "bed_poro": 0.27, "bed_log10_perm": 2.0}})
+    drapes = dict(drapes=dict(coverage=0.5))
+    for kw, expected in (({}, 0), (drapes, 1), (levee, 1), ({**levee, **drapes}, 1)):
+        calls.clear()
+        _build(**kw)
+        assert len(calls) == expected, kw
 
 
 def test_distinct_events_give_every_sand_cell_the_level_of_the_event_that_stamped_it(monkeypatch):

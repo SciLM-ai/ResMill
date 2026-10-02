@@ -257,13 +257,14 @@ class ChannelLayer(Layer):
         # Opt-in levee fading: sandier levee cells near the channel belt, muddier away from it.
         levee = props.get(2, {})
         faded_levee = False
+        storey = None            # every sand cell's storey, looked up once for levee fading and for drapes
         if levee_ntg_decay_m is not None and ("ntg" in levee or "ntg_crest" in levee) and (self.facies == 2).any():
             from scipy.ndimage import distance_transform_edt
             lv = self.facies == 2
             fill = (self.facies == 3) | (self.facies == 4)
             # Each levee cell is measured from the channels of its own storey (the level of the flow
             # event that built it, from ``event_group``), not from channels above or below it.
-            storey = storey_map(lv | fill, poro_mult_field, log_perm_offset_field, event_group)
+            storey = storey_map(self.facies >= 1, poro_mult_field, log_perm_offset_field, event_group)
             dist = np.zeros(self.facies.shape)
             for level in np.unique(storey[lv]):
                 belt = (fill & ((storey == level) if level >= 0 else True)).any(axis=2)
@@ -439,7 +440,8 @@ class ChannelLayer(Layer):
             perms = (self.perm_mat * (1.0 if self.kx_mult is None else self.kx_mult),
                      self.perm_mat * (1.0 if self.ky_mult is None else self.ky_mult),
                      self.perm_mat * (self.kzkx if self.kvkh_mat is None else self.kvkh_mat))
-            storey = storey_map(self.facies >= 1, poro_mult_field, log_perm_offset_field, event_group)
+            if storey is None:
+                storey = storey_map(self.facies >= 1, poro_mult_field, log_perm_offset_field, event_group)
             self.mult_x, self.mult_y, self.mult_z = place_drapes(
                 self.facies, storey, depth_norm, perms, (self.dx, self.dy, self.dz), drapes,
                 10.0 ** float(props[-1]["log10_perm"]), drape_seed)
