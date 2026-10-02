@@ -12,8 +12,9 @@ Salt is a mask and two terms of the structure, nothing more (rows N1-N39 of ``st
   tested at each cell's own depth, so a cell beneath an overhang stays active: that is the trap beneath the overhang that 5 of
   the 9 producing East Texas stocks have (N27). ``overhang=(L, H)`` gives it an underside L wide and H high (the grid
   holds the reservoir interval only, so the part of a trap beneath an overhang is as wide as the underside reaches across the
-  interval, ``h0 / (s + H / L)`` for beds of slope ``s``: a steep underside leaves one cell, a gentle one many). Pillars are vertical, so the wall is a staircase on cell faces; the error of
-  its position is under half a cell, and the upturn beside it must be at least two cells wide (:attr:`SaltBody.max_cell`).
+  interval, ``h0 / (s + H / L)`` for beds of slope ``s``: a steep underside leaves one cell, a gentle one many). Pillars are
+  vertical, so the wall is a staircase on cell faces; the error of its position is under half a cell, and the upturn beside it must
+  be at least two cells wide (:attr:`SaltBody.max_cell`).
 * :func:`salt_upturn` lifts the strata toward the wall by ``A (1 - d/W)^p`` over a folding zone of width ``W`` (d the
   horizontal distance from the contact), with ``A = W tan(dip) / p`` so that the strata meet the contact at ``dip``
   (the largest upturn dip, 5-50 degrees in East Texas, N9; to 85 degrees and overturned in deep water, N15, N16). The
@@ -207,15 +208,15 @@ def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, 
     dipping at ``dip`` degrees (0: vertical); ``flare`` = d(radius)/dz changes both semi-axes per metre of depth (< 0
     an overhang, > 0 a pedestal; N3, N8); ``lobes`` (0 to 0.3) is the outline's rms irregularity as a fraction of the
     smaller semi-axis, drawn from ``seed`` (required with lobes); ``shape`` is the superellipse exponent (2 an ellipse,
-    larger flatter-sided: walls). ``rough`` (0 to :data:`MAX_ROUGH`, a fraction of the smaller semi-axis) adds the
-    irregularity of real outlines at the smaller scales: irregularity of real outlines at the smaller scales: octaves of ranges from one radius (half the long axis of a wall, if
-    larger) halving down to :data:`MIN_RANGE` (150 m), each of sd ``rough x radius x (range / radius)^hurst`` (the Santos stock and the Sigsbee ``rough x radius x (range / radius)^hurst`` (the Santos stock and the Sigsbee
-    feeders show 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave: ``hurst`` about 1.2),
-    displacing the outline along its normal and moving with its lean; ``seed`` is required with it. ``overhang`` =
-    (lateral extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck) from H above it upward, linearly
-    between: an underside dipping ``atan(H / L)`` from horizontal, that a reservoir lifted into it meets (East Texas
-    stocks overhang by 0.15-2.6 km, P50 0.37 km, over 0.5-2.4 km of height, an underside of 35-68 degrees; the shoulders of
-    Precaspian walls are 0.3-1.5 km wide at 15-30 degrees). Returns a :class:`SaltBody`.
+    larger flatter-sided: walls). ``rough`` (0 to :data:`MAX_ROUGH`, a fraction of the smaller semi-axis) adds the irregularity
+    of real outlines at the smaller scales: octaves of :func:`resmill.structure.roughness` from a range of one radius (half the
+    long axis of a wall, if larger) halving down to :data:`MIN_RANGE` (150 m), each of sd ``rough x radius x (range /
+    radius)^hurst``, displacing the outline along its normal and moving with its lean (the Santos stock and the Sigsbee
+    feeders show 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave: ``hurst`` about 1); ``seed``
+    is required with it. ``overhang`` = (lateral extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck)
+    from H above it upward, linearly between: an underside dipping ``atan(H / L)`` from horizontal, which a reservoir lifted
+    into it meets (East Texas stocks overhang by 0.15-2.6 km, P50 0.37 km, over 0.5-2.4 km of height, an underside of 35-68
+    degrees; the shoulders of Precaspian walls are 0.3-1.5 km wide at 15-30 degrees). Returns a :class:`SaltBody`.
     """
     return SaltBody(center, axes, azimuth, z_ref, lean, flare, lobes, shape, seed, rough, hurst, overhang)
 
