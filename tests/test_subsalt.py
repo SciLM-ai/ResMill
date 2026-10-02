@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import numpy as np
 import pytest
 
+from resmill import fault_seal
 from resmill import salt as sl
 from resmill import structure as st
 from resmill.export import _build_geometry
@@ -17,6 +18,14 @@ from resmill.layers.base import Layer
 
 NX, NY, DX, TOP = 80, 60, 50.0, 2000.0
 CENTER = (0.5 * NX * DX, 0.5 * NY * DX)
+
+# fault-seal-3c gave fault_blocks a capillary argument and called a block's spill_depth its contact_depth; these tests hold on either
+CAPILLARY = [fault_seal.Capillary(delta_rho=300.0)] if hasattr(fault_seal, "Capillary") else []
+
+
+def contact_depth(block):
+    """The depth a trap's oil reaches: ``contact_depth`` (3c and after) or ``spill_depth``."""
+    return block["contact_depth"] if "contact_depth" in block else block["spill_depth"]
 
 
 def layer(nz=60, dz=2.0):                                                # 120 m of reservoir, more than the 80 m relief
@@ -61,7 +70,7 @@ def blocks_of(zc, act):
     perm = np.full(act.shape, 100.0)
     mults = face_multipliers([], zc, act, np.full(act.shape, 0.1), (perm, perm, perm), DX, DX, Seal())
     with finishes_within(30):
-        return fault_blocks(zc, act, [], mults, DX, DX)
+        return fault_blocks(zc, act, [], mults, DX, DX, *CAPILLARY)
 
 
 def test_the_spill_flood_ends_on_a_wall_of_dead_columns():
@@ -147,9 +156,9 @@ def test_a_cut_of_half_the_relief_makes_a_three_way_trap_against_the_salt():
     assert stats2["area"] == pytest.approx(stats["area"], rel=1e-9)      # the same outline at the spill level
     assert (~np.isnan(eff)).all() and np.isclose(eff, cut).any()         # the stack is thicker than the relief: no hole
     block = blocks_of(zc2, act2)[0]
-    assert block["spill_depth"] == pytest.approx(stats2["spill_depth"], abs=1e-6)
+    assert contact_depth(block) == pytest.approx(stats2["spill_depth"], abs=1e-6)
     assert block["crest_depth"] == pytest.approx(cut, abs=1e-3)
-    assert block["height"] == pytest.approx(0.5 * relief, rel=1e-3) and block["spill_depth"] > block["crest_depth"]
+    assert block["height"] == pytest.approx(0.5 * relief, rel=1e-3) and contact_depth(block) > block["crest_depth"]
 
 
 def test_a_dipping_base_of_salt_cuts_one_side_of_the_crest():
@@ -187,9 +196,9 @@ def test_a_salt_stock_inside_the_trap_is_a_wall_the_trap_does_not_leak_through()
     dead = ~act2.any(axis=2)
     block = blocks_of(zc2, act2)[0]
     assert dead.sum() > 0 and not (block["mask"] & dead).any()
-    assert block["spill_depth"] == pytest.approx(stats["spill_depth"], abs=1e-6)       # the salt gave no way out
+    assert contact_depth(block) == pytest.approx(stats["spill_depth"], abs=1e-6)       # the salt gave no way out
     assert block["area"] == pytest.approx(stats["area"] - dead.sum() * DX ** 2, rel=0.01)
-    assert block["height"] == pytest.approx(block["spill_depth"] - block["crest_depth"])
+    assert block["height"] == pytest.approx(contact_depth(block) - block["crest_depth"])
     assert block["crest_depth"] > stats["spill_depth"] - stats["height"] + 1.0            # the crest went into the salt
 
 
@@ -213,7 +222,7 @@ def test_a_trap_beneath_an_overhang_has_the_underside_of_the_salt_as_its_crest()
         crests[flare] = block["crest_depth"]
         tm = top_map(zc, act)
         stats = st.closure_stats(np.where(np.isnan(tm), 1e9, tm), DX, DX)
-        assert stats["crest"] == block["crest"] and stats["spill_depth"] == pytest.approx(block["spill_depth"], abs=1e-6)
+        assert stats["crest"] == block["crest"] and stats["spill_depth"] == pytest.approx(contact_depth(block), abs=1e-6)
         assert stats["height"] == pytest.approx(block["height"], abs=1e-6)
         under = act.any(axis=2) & (act[:, :, 0] == 0)                           # salt on top, sediment beneath
         if flare == 0.0:
