@@ -43,7 +43,7 @@ from collections import namedtuple
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .structure import Structure, _as_field, _axes, _mid, roughness, surface
+from .structure import Structure, _as_field, _axes, _mid, _wave_sum, _waves, roughness, surface
 
 # Salt thickness over discovered subsalt reservoirs (m): SMI 200, GB 171, WC 505, Mica, GB 165, Hickory, Tahiti (N30,
 # Moore & Brooks 2009 and the MMS pages): median 1.0 km, the canopy "more than 15,000 ft (4,572 m) thick in some places".
@@ -90,8 +90,7 @@ class SaltBody:
         self.overhang = None if overhang is None else (float(overhang[0]), float(overhang[1]))
         self.radius = min(self.axes)                                   # lobes are a fraction of it
         rng = np.random.default_rng(seed)
-        self._waves = [(rng.uniform(1.5, 3.5, 6) / self.radius, rng.uniform(0.0, 2.0 * np.pi, 6),
-                        rng.uniform(0.0, 2.0 * np.pi, 6)) for _ in range(2)] if lobes else None
+        self._waves = _waves(rng) if lobes else None
         self._rough = float(rough)
         self._warp = self._roughen(rough, float(hurst), rng) if rough else None
         self._widths = []                                              # the folding zones of the terms built on this body
@@ -140,10 +139,8 @@ class SaltBody:
             q = np.clip(u + half, 0.0, 2.0 * half), np.clip(v + half, 0.0, 2.0 * half)
             u, v = u + fu.fn(*q), v + fv.fn(*q)
         if self._waves:
-            amp = self.lobes * self.radius * math.sqrt(2.0 / 6.0)
-            du, dv = (amp * sum(np.cos(k * (math.cos(a) * u + math.sin(a) * v) + ph) for k, a, ph in zip(*wave))
-                      for wave in self._waves)
-            u, v = u + du, v + dv
+            du, dv = _wave_sum(self._waves, u / self.radius, v / self.radius)
+            u, v = u + self.lobes * self.radius * du, v + self.lobes * self.radius * dv
         a, b = self.axes[0] + self._widen(dz), self.axes[1] + self._widen(dz)
         with np.errstate(divide="ignore", invalid="ignore"):
             g = (np.abs(u / a) ** self.shape + np.abs(v / b) ** self.shape) ** (1.0 / self.shape)
