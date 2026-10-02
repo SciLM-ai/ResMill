@@ -122,14 +122,15 @@ class Belts:
                     j.append(seg[c:c + _CHUNK][held])
                     pid.append(owner[held])
                     node.append(self._node[ix[c:c + _CHUNK] + a, iy[c:c + _CHUNK] + b][held])
-            found = self._intersect(x, y, np.concatenate(j), np.concatenate(pid), np.concatenate(node), np.cos(np.radians(min_angle)))
+            found = self._intersect(x, y, np.concatenate(j), np.concatenate(pid), np.concatenate(node),
+                                    np.cos(np.radians(min_angle)))
             if found is not None:
                 return found
         return None
 
     def _intersect(self, x, y, j, pid, n, cos_min):
-        """The first crossing (by segment of (x, y), then position on it) of segments ``j`` of (x, y) with segments n - 3 ... n + 3
-        of kept paths ``pid``, at an angle of at least arccos(``cos_min``), or None."""
+        """The first crossing (by segment of (x, y), then position on it) of segments ``j`` of (x, y) with the segments
+        n - 3 ... n + 3 of kept paths ``pid``, at an angle of at least arccos(``cos_min``), or None."""
         if j.size == 0:
             return None
         first = np.array(self.start)

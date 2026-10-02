@@ -81,7 +81,7 @@ def crossing_sites(log, width, step, min_angle=20.0, reach=3.0):
     """
     lineages = log.lineages()
     rep = {key: tuple(c[::3] for c in events[len(events) // 2]) for key, events in lineages.items()}
-    belt = {key: cKDTree(np.column_stack([np.concatenate([e[0][::3] for e in events]), np.concatenate([e[1][::3] for e in events])]))
+    belt = {key: cKDTree(np.column_stack([np.concatenate([e[axis][::3] for e in events]) for axis in (0, 1)]))
             for key, events in lineages.items()}
     box = {key: (path[0].min(), path[0].max(), path[1].min(), path[1].max()) for key, path in rep.items()}
     m = max(2, int(round(reach * width / (3 * step))))
