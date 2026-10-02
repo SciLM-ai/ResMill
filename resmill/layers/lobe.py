@@ -8,12 +8,13 @@ from .channel import FACIES_PROPS, _correlated_noise
 from .drapes import thin_barrier
 from ._fluvial import _gauss_clip
 
-# ``facies_props`` entries a lobe uses: -1 mud rock, 2 the heterolithic fringe (its rock, and ``ntg_floor``, the sand share of a
-# lobe's margin, which ``interlobe_erosion`` needs), 3 the sand (its rock is poro_ave, perm_ave, poro_std and perm_std).
+# ``facies_props`` entries a lobe uses: -1 mud rock, 2 the heterolithic fringe (its rock, and ``ntg_floor``, the sand share
+# of a lobe's margin, which ``interlobe_erosion`` needs), 3 the sand (its rock is poro_ave, perm_ave, poro_std, perm_std).
 _FACIES_KEYS = {-1: {"poro", "log10_perm", "poro_sd", "log10_perm_sd", "kvkh"},
                 2: {"ntg_floor", "poro", "log10_perm", "poro_sd", "log10_perm_sd", "kvkh"}, 3: {"kvkh"}}
 _SAND_SHARE_MIN = 0.5    # a cell with at least this sand share is sand (3)
-_MUD_SHARE_MAX = 0.2     # below this sand share it is mud (-1), the Tanqua's distal fringe (under 20 % sandstone); in between the heterolithic fringe (2)
+# below this sand share a cell is mud (-1), the Tanqua's distal fringe (under 20 % sandstone); in between, the heterolithic fringe (2)
+_MUD_SHARE_MAX = 0.2
 _MIN_CAP_SHARE = 1e-3    # mud thinner than this share of a cell is dust of the overlap arithmetic, not a thin cap
 _NET_LOG10_PERM = 0.0    # a facies is net rock above 1 mD (ResSimMill's net cut-off)
 _AIM_TOLERANCE = 0.005   # a net share this far above the aim is no miss: the bisection stops about there
@@ -90,7 +91,8 @@ def _cap_cells(mud, moment, dz):
     inside = (facies == 3) & (mud > _MIN_CAP_SHARE * dz)
     height = np.divide(moment, mud, out=np.zeros_like(mud), where=mud > 0.0)
     thin = np.zeros_like(mud)
-    thin[..., 1:] += np.where(inside & (height >= 0.5), mud, 0.0)[..., :-1]      # the upper face of cell k is the lower face of k + 1
+    # the upper face of cell k is the lower face of cell k + 1
+    thin[..., 1:] += np.where(inside & (height >= 0.5), mud, 0.0)[..., :-1]
     thin[..., 1:] += np.where(inside & (height < 0.5), mud, 0.0)[..., 1:]
     return s, facies, thin
 
@@ -290,8 +292,9 @@ class LobeLayer(Layer):
             self._calibrated_rock(structure, jitter, facies_props)
         else:
             fringe = facies_props[2]
+            fringe_net = float(fringe["log10_perm"]) > _NET_LOG10_PERM
             mud, moment, self.interlobe = self._interlobe_cells(
-                ntg, interlobe_erosion, float(fringe.get("ntg_floor", 0.0)), float(fringe["log10_perm"]) > _NET_LOG10_PERM)
+                ntg, interlobe_erosion, float(fringe.get("ntg_floor", 0.0)), fringe_net)
             self._calibrated_rock(structure, jitter, facies_props, stack=(mud, moment))
 
         # ``lobe_id`` keeps the per-lobe stacking index (1..N) for users
@@ -401,9 +404,9 @@ class LobeLayer(Layer):
             mid = 0.5 * (lo + hi)
             lo, hi = (mid, hi) if stack(mid)[3] > ntg else (lo, mid)
         mud, moment, amalgamated, net = stack(hi)
-        return (np.swapaxes(mud, 0, -1), np.swapaxes(moment, 0, -1),
-                dict(mud_thickness_m=hi, amalgamated=amalgamated, net_cells=net, sand_fraction=1.0 - float(mud.mean()) / dz,
-                     aim_missed=bool(missed)))
+        outcome = dict(mud_thickness_m=hi, amalgamated=amalgamated, net_cells=net,
+                       sand_fraction=1.0 - float(mud.mean()) / dz, aim_missed=bool(missed))
+        return np.swapaxes(mud, 0, -1), np.swapaxes(moment, 0, -1), outcome
 
     def _lobemodeling(self, dh_ave=4.0, dh_std=0.5, r_ave=450.0, r_std=20.0,
                       asp=1.5, azimuth=0.0, azimuth_std=10.0, m=100,
