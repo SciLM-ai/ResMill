@@ -392,3 +392,20 @@ def test_meta_gives_the_nominal_closure_and_the_report_the_realized_one_a_mound_
     assert abs(main["closure"] - rough["meta"]["closure_nominal"]) > 1.0
     assert main["closure"] == pytest.approx(_fine_traps(rough, 2000.0, x_len, y_len)[0]["height"], abs=1.5 * 0.021 * dx +
                                             0.08 * main["closure"])
+
+
+@pytest.mark.parametrize("aspect", [0.5, 2.2])
+def test_a_mound_is_whole_in_the_middle_whatever_its_aspect_so_the_taper_is_limited_by_its_half_width(aspect):
+    """A lens of 3.4 km2 as a mound tapers over the least of the taper that the angle draws (1.9 km for 10 m at 0.3
+    degrees) and its half-length along dip or across it, so that it is as thick as the sand in its middle (10 m, to 2 %)
+    whether it is long and narrow (aspect 0.5: half-width 0.69 km, the limit) or short and wide (2.2: half-length
+    0.7 km)."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    built = strat_trap("lens", x_len, y_len, 2000.0, [10.0], seed=2, dip=1.1, taper_angle=0.3, area=3.4e6, aspect=aspect,
+                       warp=0.0)
+    length = _length(3.4e6, aspect)
+    assert built["meta"]["taper_m"] == pytest.approx(0.5 * length * min(1.0, aspect))
+    assert built["meta"]["taper_m"] < 10.0 / np.tan(np.radians(0.3))
+    layers = _layers(x_len, y_len, dx, [10.0], dz=1.0)
+    _, _, zc, _ = _build_geometry(layers, **built["kwargs"])
+    assert (zc[:, :, -1] - zc[:, :, 0]).max() == pytest.approx(10.0, rel=0.02)

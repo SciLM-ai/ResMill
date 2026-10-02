@@ -403,12 +403,12 @@ def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):
 
 
 
-def _signed_distance(solid, x_len, y_len, step):
+def _signed_distance(solid, x_len, y_len):
     """The signed distance (m) from the edge of the region where ``solid(x, y)`` holds, positive inside it and negative
     outside, as a surface over ``[0, x_len] x [0, y_len]``: Euclidean distance transforms of the region and of the rest
-    on a grid of ``step`` m (default 1/800 of the longer side), taken to the edge between two pixels. A region that
-    fills the model, or is not in it, has no edge to measure from and is far from it everywhere."""
-    step = float(step) if step else max(x_len, y_len) / 800.0
+    on a grid of 1/800 of the longer side, taken to the edge between two pixels. A region that fills the model, or is
+    not in it, has no edge to measure from and is far from it everywhere."""
+    step = max(x_len, y_len) / 800.0
     xs = np.linspace(0.0, x_len, int(np.ceil(x_len / step)) + 1)
     ys = np.linspace(0.0, y_len, int(np.ceil(y_len / step)) + 1)
     inside = np.asarray(solid(*np.meshgrid(xs, ys, indexing="ij")), dtype=bool)
@@ -423,8 +423,7 @@ def _signed_distance(solid, x_len, y_len, step):
     return surface(np.where(inside, distance(inside) - half, half - distance(~inside)), x_len, y_len)
 
 
-def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, level=0.0, step=None, edge=None,
-          grow=0.0):
+def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, edge=None, grow=0.0):
     """A thickness factor for ``to_grdecl(isochore=[...])``: 0 where the sand is absent, rising to 1 over ``taper_m``
     metres in from the edge of the sand as u (2 - u), u the share of the taper: a wedge whose slope is zero where it
     reaches full thickness, so there is no hinge or step there, and which ends at the edge at twice the mean slope, a
@@ -432,12 +431,12 @@ def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, 
 
     The sand is the side of a pinch-out line that the azimuth normal points to (the dip direction of :func:`ramp`),
     the line lying ``position`` m along it from the model's origin; and/or the footprint of ``outline``, a Structure
-    that is negative inside it (a :func:`closure` without tilt, or any other; the union of several is their minimum),
-    cut where it is below ``level``. With both the sand is their union: an outline centred on the line is a tongue
-    protruding updip from a sheet; with the outline alone (``position`` None) it is an enclosed lens. The factor
-    rises with the distance in from the edge of the sand, so the taper is as long all round a lobate lens, or at the
-    base of a tongue, as it is across a straight line. The footprint is measured on a grid of ``step`` m (default
-    1/800 of the longer side), so ``x_len`` and ``y_len`` (the model's size) are needed with an outline.
+    that is negative inside it (a :func:`closure` without tilt, or any other; the union of several is their minimum).
+    With both the sand is their union: an outline centred on the line is a tongue protruding updip from a sheet; with
+    the outline alone (``position`` None) it is an enclosed lens. The factor rises with the distance in from the edge
+    of the sand, so the taper is as long all round a lobate lens, or at the base of a tongue, as it is across a
+    straight line. The footprint is measured on a grid of 1/800 of the longer side, so ``x_len`` and ``y_len`` (the
+    model's size) are needed with an outline.
 
     ``edge`` (a Structure, m, e.g. :func:`relief`) is added to that distance, fading out linearly over the taper:
     where it is +R the sand's limit reaches R m farther out and the contour of the factor at a share u of the taper
@@ -461,8 +460,8 @@ def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, 
     if outline is None:
         signed = lambda x, y: along(x, y) - position
     else:
-        signed = _signed_distance(lambda x, y: (np.asarray(outline(x, y)) < level)
-                                  | (False if position is None else along(x, y) > position), x_len, y_len, step)
+        signed = _signed_distance(lambda x, y: (np.asarray(outline(x, y)) < 0.0)
+                                  | (False if position is None else along(x, y) > position), x_len, y_len)
 
     def fn(x, y):
         x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)

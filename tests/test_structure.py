@@ -446,3 +446,39 @@ def test_taper_grow_widens_the_sand_all_round_before_the_taper_is_measured():
     assert h(3000.0 + r, 2000.0 + 0.0 * r) == pytest.approx(_wedge((1300.0 - r) / 300.0), abs=0.03)
     assert st.taper(position=1000.0, taper_m=300.0)(0.0, 1100.0) == st.taper(position=1000.0, taper_m=300.0, grow=0.0)(
         0.0, 1100.0)
+
+
+@pytest.mark.parametrize("grow,lo,hi,band", [(0.0, 620.0, 990.0, (-0.009, -0.002)), (300.0, 1005.0, 1290.0, (0.003, 0.012))],
+                         ids=["inside", "the rim outside"])
+def test_taper_outline_distance_is_taken_to_the_edge_between_pixels_and_its_bias_is_small(grow, lo, hi, band):
+    """The distance from the footprint's edge is taken to the edge between two pixels, on both sides. Over 400 points
+    spread round a disc of 1,000 m, inside it (radius 620 to 990 m) and in a rim of 300 m outside it, the factor's mean
+    error against the exact wedge is the digital disc's own (-0.005 inside, +0.007 outside: a fifth to a third of a
+    7.5 m pixel), and not the 0.01-0.02 more or less that a distance measured to the pixel's centre on either side
+    would carry."""
+    taper_m = 400.0 if grow == 0.0 else 300.0
+    f = st.taper(None, taper_m, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0, grow=grow)
+    rng = np.random.default_rng(3)
+    r, a = rng.uniform(lo, hi, 400), rng.uniform(0.0, 2.0 * np.pi, 400)
+    exact = _wedge((1000.0 - r + grow) / taper_m)
+    error = f(3000.0 + r * np.cos(a), 2000.0 + r * np.sin(a)) - exact
+    assert band[0] < error.mean() < band[1] and np.abs(error).max() < 0.05
+
+
+def test_relief_octaves_halve_from_the_range_to_the_floor_whose_streams_are_the_seeds_children(monkeypatch):
+    """The octaves of ``relief`` are ranges that halve from ``range_m`` to the last one not below ``floor_m``, as many
+    as the floor leaves (6 for the default 32nd of the range, 3 for 400 m of 1,500), each of the SD range ** hurst
+    scaled to ``sd``: seen through ``roughness``, so that an octave below the floor, or at 3 times its neighbour (which
+    would also cost gigabytes), is caught at once."""
+    calls = []
+    monkeypatch.setattr(st, "roughness", lambda sd, r, x_len, y_len, seed=None: calls.append((sd, r, seed)) or st.Structure(
+        lambda x, y: 0.0 * np.asarray(x)))
+    for floor, n in ((None, 6), (400.0, 2), (1500.0, 1)):
+        calls.clear()
+        st.relief(10.0, 1500.0, 6000.0, 4000.0, hurst=0.6, floor_m=floor, seed=7)
+        ranges = np.array([c[1] for c in calls])
+        assert len(calls) == n and np.allclose(ranges, 1500.0 / 2.0 ** np.arange(n))
+        assert ranges.min() >= (1500.0 / 32.0 if floor is None else floor) - 1e-9
+        sds = np.array([c[0] for c in calls])
+        assert np.sqrt((sds ** 2).sum()) == pytest.approx(10.0) and np.allclose(sds[1:] / sds[:-1], 0.5 ** 0.6)
+        assert [c[2].spawn_key for c in calls] == [(i,) for i in range(n)]

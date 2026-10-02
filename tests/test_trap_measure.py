@@ -315,3 +315,11 @@ def test_the_contact_limit_is_the_shallowest_column_of_the_edge_for_the_pool_tha
     deep = _chain([12, 6, 10, 8, 14, 9, 11, 20], exit=True)           # an exit of 20 m, the primary pool's spill
     assert {t["crest_depth"]: t["contact_limit"] for t in _traps(deep, 1.0, 1.0, min_height=0.0)} == {6.0: 20.0, 8.0: 10.0,
                                                                                                         9.0: 14.0}
+
+
+def test_effective_grain_size_is_the_equation_exactly():
+    """Berg's eq. 33, D = (1.89 k n^-5.1)^0.5 cm with k in mD and n in percent, to rounding: 900 mD at 32 % is 0.0599 mm
+    (his Milbur sand, 6.0e-5 m in Table 1, whose grain sizes are rounded to two digits and hold the constant to 3 % only)."""
+    k, n = np.array([900.0, 25.0, 5.0]), np.array([0.32, 0.24, 0.20])
+    assert effective_grain_size(k, n) == pytest.approx(1e-2 * np.sqrt(1.89 * k * (100.0 * n) ** -5.1), rel=1e-12)
+    assert effective_grain_size(900.0, 0.32) == pytest.approx(5.99e-5, rel=1e-3)

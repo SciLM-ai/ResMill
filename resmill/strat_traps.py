@@ -36,15 +36,17 @@ WANDER_TONGUE, WANDER_TAPER = 0.2, 0.25     # the most an edge may wander, of th
 #                                             the taper (an erosion surface, or across a nose): more breaks the sand into
 #                                             pieces that hold no trap (the owner's range, 2026-10-02, judgement [J])
 RIM_SHARE = 0.25                    # of column / tan(dip), the widest rim that leaves the oil a column: the rim's width [J]
+FIT = 0.4                           # the rims of the shapes lie within 0.4 of the model's size each way of its centre [J]
+GAPS = (0.1, 0.5)                   # gaps between the tongues of an edge, as shares of their mean width [J]
 
 
 def _packed(widths, rng):
     """Offsets (m) along strike that set bodies of the given full ``widths`` side by side in a random order with gaps
-    of 10-50 % of their mean width, the row centred on 0."""
+    of 10-50 % [J] of their mean width, the row centred on 0."""
     widths = np.asarray(widths, dtype=float)
     order = rng.permutation(len(widths))
     w = widths[order]
-    start = np.concatenate([[0.0], np.cumsum(w[:-1] + rng.uniform(0.1, 0.5, len(w) - 1) * w.mean())])
+    start = np.concatenate([[0.0], np.cumsum(w[:-1] + rng.uniform(*GAPS, len(w) - 1) * w.mean())])
     centres = start + 0.5 * w
     offsets = np.empty(len(w))
     offsets[order] = centres - 0.5 * (start[-1] + w[-1])
@@ -119,7 +121,7 @@ def _shapes(nose, area, aspect, tongues, lens):
 
 def _line_shift(sizes, offsets, x_len, y_len, dip_dir, strike, lens):
     """How far along dip from the model's centre (m) the line goes (the middle of a lens: 0): as far updip as the rims
-    of all the shapes fit within 80 % of the model's size; a ValueError where they do not fit at all."""
+    of all the shapes fit within 80 % [J] of the model's size; a ValueError where they do not fit at all."""
     with np.errstate(divide="ignore"):                       # the model's half-length along dip, through its centre
         half = float(min(0.5 * x_len / abs(dip_dir[0]), 0.5 * y_len / abs(dip_dir[1])))
     phi = np.linspace(0.0, 2.0 * np.pi, 73)                                    # the rim of a shape, its base too
@@ -128,7 +130,7 @@ def _line_shift(sizes, offsets, x_len, y_len, dip_dir, strike, lens):
         for (up, down, wide), v in zip(sizes, offsets):
             rim = (shift + np.where(np.cos(phi) < 0.0, up, down) * np.cos(phi))[:, None] * dip_dir \
                 + (v + wide * np.sin(phi))[:, None] * strike
-            if not (np.abs(rim) <= 0.4 * np.array([x_len, y_len])).all():
+            if not (np.abs(rim) <= FIT * np.array([x_len, y_len])).all():
                 return False
         return True
 
@@ -339,6 +341,9 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     A combination trap takes its lateral closure from a ``nose``, the keywords of :func:`resmill.structure.closure`
     (``area``, ``height`` and ``aspect`` are required, ``height`` at most :data:`MAX_NOSE`; give no ``tilt``: the
     plane is the dip) centred where the line passes through its crest, so the trap closes by the nose's ``height``.
+
+    The defaults (``range_m`` 1 km, ``hurst`` 0.75, ``warp`` 0.3, the floor of a 32nd of the range) are judgements [J];
+    the sampler draws them (a Hurst exponent of 0.4-0.8, the edge's own wander, 0.5-2 m of relief on the tops).
 
     The shapes sit on the dip direction through the middle of the model, as far updip as their rims fit within 80 % of
     the model's size (a lens in the middle); a shape that does not fit, or lobes that the warp pushes within 2 % of the

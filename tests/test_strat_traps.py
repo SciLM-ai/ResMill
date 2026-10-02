@@ -98,8 +98,9 @@ def test_an_enclosed_lens_is_sealed_and_holds_the_dip_times_its_whole_length(dip
     """A lens hung from a flat top holds the tangent of the dip times its length along dip. A mound (the base the plane
     of the beds, the top convex up) holds what its own geometry gives, found on the fine map: for a parabolic cap of
     thickness T and length L along dip the top lies T (s / R)^2 below the plane of the base at s from its middle,
-    R = L / 2, and the closure is T (1 + tan(dip) L / (4 T))^2 where that is more than tan(dip) L (a gentle dip, the
-    mound's own thickness raising the crest) and tan(dip) L where it is not (the crest at the updip rim)."""
+    R = L / 2, and with x = tan(dip) L / (4 T) the closure is T (1 + x)^2 for x <= 1 (a gentle dip: the crest inside the
+    mound, the mound's own thickness raising it) and 4 x T = tan(dip) L, the nominal, for x >= 1 (the crest at the
+    updip rim): at P50 x = 0.67 and 28 m, at P90 x = 2.6 and 103 m."""
     x_len, y_len, dx = model
     built = strat_trap("lens", x_len, y_len, 2000.0, [10.0], seed=2, dip=dip, taper_angle=0.5, area=area,
                        aspect=aspect, warp=0.0, mound=mound)
@@ -111,8 +112,10 @@ def test_an_enclosed_lens_is_sealed_and_holds_the_dip_times_its_whole_length(dip
     fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
     assert fine["limited_by"] == "sealed"
     if mound:
-        cap = 10.0 * (1.0 + expected / 40.0) ** 2
-        assert 0.97 * expected < fine["height"] < max(expected, cap) + 2.0
+        x = expected / 40.0
+        assert fine["height"] == pytest.approx(10.0 * (1.0 + x) ** 2 if x <= 1.0 else expected, rel=0.03, abs=0.3)
+    else:
+        assert fine["height"] == pytest.approx(expected, rel=0.02, abs=0.3)
     assert trap["height"] == pytest.approx(fine["height"], abs=1.5 * cell + 0.02 * expected)
     assert trap["crest_depth"] == pytest.approx(fine["crest_depth"], abs=cell)
     assert area * 0.97 < trap["area"] < area * 1.10
@@ -496,3 +499,21 @@ def test_a_report_of_layers_that_are_not_the_ones_the_trap_was_built_for_is_refu
                    _layers(7000.0, 6000.0, 50.0, [10.0]), _layers(8000.0, 6000.0, 50.0, [5.0, 5.0])):
         with pytest.raises(ValueError, match="built for"):
             trap_report(layers, built)
+
+
+@pytest.mark.parametrize("kind,kw", [("pinchout", dict(taper_angle=0.5)), ("truncation", dict(taper_angle=0.5, dip=1.2)),
+                                     ("onlap", dict(taper_angle=0.5))])
+def test_a_sand_of_several_layers_thins_over_its_whole_thickness_as_one_layer_of_that_thickness_does(kind, kw):
+    """Three sand layers of 4 m are one sand of 12 m: the taper (``meta["taper_m"]``), the subcrop strip and the
+    thickness of every column are those of a single layer of 12 m, not of the first layer's 4 m (a taper of 458 m
+    where 1,375 m is drawn), whichever surface cuts the sand."""
+    x_len, y_len, dx = 4000.0, 6000.0, 25.0
+    args = dict(dict(dip=1.5, area=None), **kw)
+    many = strat_trap(kind, x_len, y_len, 2000.0, [4.0, 4.0, 4.0], seed=1, **args)
+    one = strat_trap(kind, x_len, y_len, 2000.0, [12.0], seed=1, **args)
+    assert many["meta"]["thickness"] == 12.0 and many["meta"]["taper_m"] == pytest.approx(12.0 / np.tan(np.radians(0.5)))
+    assert many["meta"]["taper_m"] == one["meta"]["taper_m"]
+    zm = _build_geometry(_layers(x_len, y_len, dx, [4.0, 4.0, 4.0], dz=1.0), **many["kwargs"])[2]
+    z1 = _build_geometry(_layers(x_len, y_len, dx, [12.0], dz=1.0), **one["kwargs"])[2]
+    assert np.allclose(zm[:, :, -1] - zm[:, :, 0], z1[:, :, -1] - z1[:, :, 0], atol=1e-6)
+    assert np.allclose(zm[:, :, 0], z1[:, :, 0], atol=1e-6)
