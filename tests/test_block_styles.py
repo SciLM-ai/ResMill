@@ -103,6 +103,34 @@ def test_the_domino_extension_is_the_rigid_dominos(gullfaks):
     assert beta == pytest.approx(1.41, abs=0.03)
 
 
+@pytest.mark.parametrize("azimuth", [33.0, 200.0])
+def test_a_domino_at_an_oblique_azimuth_has_the_same_blocks_along_its_dip_direction(azimuth):
+    """The domino above runs along a grid axis. The same Gullfaks-like system dipping toward azimuth 33 or 200 degrees, read on a 16 km square of
+    40 m cells along its dip direction through the map's centre (the cell tops, interpolated every 20 m), has the same blocks: each tilted
+    15.0 degrees (to 0.1), the throw across a block's fault its width times tan(15 degrees) (0.95-1.06 block by block, so within 8 %, and
+    1 % over the blocks) and the heave of those throws 1 / tan(30 degrees) of their sum (within 6 %: a 40 m cell smears each step)."""
+    from scipy import ndimage
+    x_len = y_len = 16000.0
+    dx = 40.0
+    m = tilted_blocks(x_len, y_len, dx, TOP, THICK, 3, **{**GULLFAKS, "azimuth": azimuth})
+    faults = [dataclasses.replace(f, bends=0.0, seed=None, radius=math.inf) for f in m.faults if f.kind == "block"]
+    nx = int(x_len / dx)
+    _, _, zc, _ = _build_geometry([Layer(nx, nx, 1, x_len, y_len, THICK, top_depth=TOP, kzkx=0.1)], structure=m.structure, faults=faults)
+    top = 0.25 * (zc[0::2, 0::2, 0] + zc[1::2, 0::2, 0] + zc[0::2, 1::2, 0] + zc[1::2, 1::2, 0])
+    n = np.array([math.sin(math.radians(azimuth)), math.cos(math.radians(azimuth))])           # the beds deepen along n
+    s = np.arange(-7000.0, 7000.0, 20.0)
+    z = ndimage.map_coordinates(top, [(0.5 * x_len + s * n[0]) / dx - 0.5, (0.5 * y_len + s * n[1]) / dx - 0.5], order=1)
+    t = teeth(s, z)
+    assert len(t) >= 4
+    for crest, _, deep, _ in t[:-1]:
+        inside = (s > crest + 300.0) & (s < deep - 300.0)
+        assert math.degrees(math.atan(np.polyfit(s[inside], z[inside], 1)[0])) == pytest.approx(15.0, abs=0.1)
+    width, throw, heave = t[:-1, 2] - t[:-1, 0], t[:-1, 3] - t[1:, 1], t[1:, 0] - t[:-1, 2]
+    assert throw == pytest.approx(width * TAN15, rel=0.08)
+    assert throw.sum() == pytest.approx(width.sum() * TAN15, rel=0.02)
+    assert heave.sum() == pytest.approx(throw.sum() / TAN30, rel=0.06)
+
+
 def test_the_labels_say_what_was_built(gullfaks):
     """The record carries the pinned values, the throws the blocks have, the extension beta of Fossen & Hesthammer's eq. 9 (1.41 at 15 and 30
     degrees; the pitch over the horizontal width, 1.46, is its own label), and a count of faults by kind."""
@@ -348,7 +376,7 @@ def test_the_hanging_wall_zones_next_to_the_master_are_as_thick_as_the_index_say
     trace = _plane(f, f.z_center)[1]
     heave = float(trace(f.z_center + f.throw) - trace(f.z_center))
     _, h_centre = _frame(f, np.array([f.center[0]]), np.array([f.center[1]]))       # the wandering trace's offset at the centre, along the dip
-    cutoff = f.center[0] + float(trace(TOP + thick + 20.0)) + heave - h_centre[0]     # the base's hanging-wall cutoff, a little deeper in the ramped top
+    cutoff = f.center[0] + float(trace(TOP + thick + 20.0)) + heave - h_centre[0]     # the base's hanging-wall cutoff (a little deep)
     for beyond in (100.0, 1000.0, 2500.0):
         i = int(np.argmin(np.abs(x - (cutoff + beyond))))
         assert zone[i, 1] / zone[:20, 1].mean() == pytest.approx(expansion, rel=1e-3)
