@@ -460,6 +460,35 @@ def test_the_master_faults_are_placed_by_the_tip_ellipse_below_the_reservoir(dra
                 assert f.ramp_base is None and rec["ramp_base_m"] is None
 
 
+@pytest.mark.parametrize("fixture, size, kinds", [("drawn_blocks", (8000.0, 6000.0), ("block", "transfer")),
+                                                   ("mid_rollovers", (12000.0, 9000.0), ("master",))])
+def test_the_faults_inside_a_trap_reach_their_five_metres_at_the_real_top(request, fixture, size, kinds):
+    """S6 counts the faults of 5 m or more in the reservoir. They are drawn on a smooth fold of the trap, flat around it, while the real top
+    has the tilt, the roll and the steps of the model's own faults (hundreds of metres a block away): the tip ellipse of each is carried by the
+    difference between the two depths at its centre. On the planning layer built again from the model's own faults, over every cell that holds
+    rock, 95 % of the population reach 5 m in a reservoir of 40 m (before: 73 % of a tilted-block model's, 86 % of a rollover's; the rest of
+    the drawn sets, a graben's steps, are not counted at 5 m even where they are drawn)."""
+    from resmill.block_styles import PLAN_THICKNESS
+    reached = total = 0
+    for m in request.getfixturevalue(fixture):
+        grid, (x_len, y_len) = m.labels["planning_dx_m"], size
+        nx, ny = max(int(round(x_len / grid)), 3), max(int(round(y_len / grid)), 3)
+        _, _, zc, _ = _build_geometry([Layer(nx, ny, 1, x_len, y_len, PLAN_THICKNESS, top_depth=TOP)], structure=m.structure,
+                                      faults=[f for f in m.faults if f.kind in kinds])
+        top, thin = zc[:, :, 0], (zc[:, :, 1] - zc[:, :, 0]).reshape(nx, 2, ny, 2).min(axis=(1, 3))
+        depth = 0.25 * (top[0::2, 0::2] + top[1::2, 0::2] + top[0::2, 1::2] + top[1::2, 1::2])
+        for f in (f for f in m.faults if f.kind not in kinds):
+            i, j = min(int(f.center[0] // (x_len / nx)), nx - 1), min(int(f.center[1] // (y_len / ny)), ny - 1)
+            if thin[i, j] < 0.8 * PLAN_THICKNESS:                              # a cut-out: its top is a fault plane, not a horizon
+                continue
+            half = 0.5 * f.length / f.aspect * math.sin(math.radians(f.dip))
+            gap = max(abs(f.z_center - (depth[i, j] + 0.5 * THICK)) - 0.5 * THICK, 0.0)       # to the nearest depth of the reservoir
+            share = (1.0 - gap / half) ** 1.5 * math.sqrt(1.0 + 3.0 * gap / half) if gap < half else 0.0       # Walsh and Watterson
+            total += 1
+            reached += f.throw * share >= 5.0
+    assert total > 200 and reached / total >= 0.95
+
+
 def test_the_graben_and_the_antithetic_share_of_a_rollovers_population_are_the_researchs(monkeypatch):
     """T23, T24: the faults inside a rollover's trap come from fold_faults (style "rollover": the keystone graben half the
     time) with the regional extension across the master and 40-70 % of the regionally oriented faults antithetic."""

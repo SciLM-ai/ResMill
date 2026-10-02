@@ -40,7 +40,7 @@ import math
 from dataclasses import dataclass, field, replace
 
 import numpy as np
-from scipy import sparse
+from scipy import ndimage, sparse
 from scipy.sparse import csgraph
 
 from . import structure as st
@@ -111,7 +111,7 @@ def _measure(x_len, y_len, dx, top, structure, faults):
     nothing. A cell is in a trap where its depth lies above its spill depth (the deepest point of the shallowest path to the
     map's edge that crosses no fault: :func:`resmill.structure._spill_levels`); a trap is a connected set of such cells.
     Returns ``area`` (m2), ``height`` (m, the relief at the crest), ``crest`` (i, j) and its ``crest_xy`` (m),
-    ``crest_depth``, ``spill_depth``, ``mask`` and the cell size ``cell``.
+    ``crest_depth``, ``spill_depth``, ``mask``, the cell size ``cell`` and the ``depth`` map (infinite where a cell holds no rock).
     """
     nx, ny = max(int(round(x_len / dx)), 3), max(int(round(y_len / dx)), 3)
     cell = (x_len / nx, y_len / ny)
@@ -146,7 +146,7 @@ def _measure(x_len, y_len, dx, top, structure, faults):
     crest = (int(crest[0]), int(crest[1]))
     return dict(area=float(mask.sum()) * cell[0] * cell[1], height=float(relief[crest]), crest=crest, mask=mask, cell=cell,
                 crest_xy=((crest[0] + 0.5) * cell[0], (crest[1] + 0.5) * cell[1]), crest_depth=float(depth[crest]),
-                spill_depth=float(spill[crest]))
+                spill_depth=float(spill[crest]), depth=depth)
 
 
 def _trap_label(trap):
@@ -160,7 +160,10 @@ def _population(style, trap, x_len, y_len, dx, top, thickness, density, seed, re
     """The faults inside a block model's trap, from ``fold_faults`` on a smooth fold of that trap (none without a trap).
 
     The fold has the measured trap's area, relief, aspect and axis and its crest at the trap's real depth, so that the faults
-    are drawn on a closure that frames it.
+    are drawn on a closure that frames it. The fold is smooth and flat around the trap, while the real top has the tilt, the roll
+    or the steps of the model's own faults, so each fault's tip ellipse is then carried by the difference between the real top's depth
+    at its centre (the planning map; over a cut-out, the nearest cell with rock) and the fold's, which puts it where it was drawn against the reservoir
+    (only 66 % of a tilted-block model's faults and 72 % of a rollover's reached the 5 m the density counts at the real top before).
     """
     if trap is None:
         return []
@@ -171,8 +174,14 @@ def _population(style, trap, x_len, y_len, dx, top, thickness, density, seed, re
     aspect = float(np.clip(math.sqrt(max(vals[1], 1e-12) / max(vals[0], 1e-12)), 1.0, 8.0))
     fold = st.closure(area=trap["area"], height=trap["height"], aspect=aspect, azimuth=_azimuth_of(vecs[:, 1]),
                       center=(float(centre[0]), float(centre[1])))
-    return fold_faults(style, fold, x_len, y_len, dx, density, trap["crest_depth"] + trap["height"], thickness, seed,
-                       regional=regional, basinward=basinward)
+    datum = trap["crest_depth"] + trap["height"]
+    faults = fold_faults(style, fold, x_len, y_len, dx, density, datum, thickness, seed, regional=regional, basinward=basinward)
+    rock = np.isfinite(trap["depth"])                                      # a centre over a cell with no rock (a cut-out) takes the nearest one's
+    top = trap["depth"][tuple(ndimage.distance_transform_edt(~rock, return_distances=False, return_indices=True))]
+    for f in faults:
+        i, j = (int(np.clip(f.center[k] // c, 0, n - 1)) for k, (c, n) in enumerate(zip((cx, cy), top.shape)))
+        f.z_center += float(top[i, j]) - (datum + float(np.ravel(fold(np.array([f.center[0]]), np.array([f.center[1]])))[0]))
+    return faults
 
 
 def _finish(faults, structure, isochore, x_len, y_len, grid, top, labels, structure_trap):
