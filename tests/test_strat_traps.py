@@ -135,6 +135,10 @@ def test_a_barrier_column_below_the_spill_limits_the_trap_and_one_above_it_does_
     assert not (held["mask"] & ~free["mask"]).any()
     (roomy,) = zone_trap(zc, act, dx, dx, column=100.0)
     assert roomy["limited_by"] == "spill" and roomy["height"] == free["height"]
+    (shut,) = zone_trap(zc, act, dx, dx, column=0.0)                  # a barrier that holds nothing: no trap
+    assert shut["height"] == 0.0 and shut["area"] == 0.0 and shut["limited_by"] == "barrier"
+    with pytest.raises(ValueError, match="column"):
+        zone_trap(zc, act, dx, dx, column=-1.0)
 
 
 # Berg (1975, AAPG Bull. 59:939-956), Table 1: effective grain sizes D (m), fluids and the oil columns he calculated

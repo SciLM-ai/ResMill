@@ -80,6 +80,8 @@ def zone_trap(zc, act, dx, dy, k=None, column=None):
     (``limit_depth`` - ``crest_depth``), and the ``area`` (m2) and ``mask`` of the columns shallower than the limit
     that join the crest (all of a sealed body: it fills to its deepest point). A body with no closure has height 0.
     """
+    if column is not None and column < 0.0:
+        raise ValueError(f"column must not be negative, not {column}")
     depth = zone_top(zc, act, k)
     alive = np.isfinite(depth)
     spill = _spill_levels(depth)
