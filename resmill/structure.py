@@ -23,6 +23,7 @@ axis (fold hinge, fault trace) runs along ``(cos az, -sin az)``.
 """
 
 import heapq
+import math
 
 import numpy as np
 from scipy import ndimage
@@ -205,28 +206,39 @@ def surface(arr, x_len, y_len):
 
 def _spill_levels(depth, wall_x=None, wall_y=None):
     """Each cell's spill depth: the deepest point of the shallowest path from it to the map's edge (a priority
-    flood from the edge, 4-connected). ``wall_x`` (nx-1, ny) and ``wall_y`` (nx, ny-1) mark sealed cell edges the
-    path may not cross (between i and i+1, j and j+1); a cell no path reaches keeps an infinite level."""
+    flood from the edge, 4-connected). ``wall_x`` (nx-1, ny) and ``wall_y`` (nx, ny-1) give the pass level of each cell
+    edge (between i and i+1, j and j+1): a path crosses it at the highest of its level so far, the next cell's depth
+    and that pass level, so +inf seals the edge and -inf leaves it free (a boolean array seals its True edges). A cell
+    no path reaches keeps an infinite level."""
     nx, ny = depth.shape
-    spill = np.full(depth.shape, np.inf)
+    walls = [None if w is None else np.where(w, np.inf, -np.inf).tolist() if w.dtype == bool else w.tolist()
+             for w in (wall_x, wall_y)]
+    depth = depth.tolist()                              # plain lists: the loop below reads single cells
+    spill = [[math.inf] * ny for _ in range(nx)]
+    done = [[False] * ny for _ in range(nx)]
     heap = []
     for i in range(nx):
         for j in range(ny):
             if i in (0, nx - 1) or j in (0, ny - 1):
-                spill[i, j] = depth[i, j]
-                heap.append((depth[i, j], i, j))
+                spill[i][j] = depth[i][j]
+                heap.append((depth[i][j], i, j))
     heapq.heapify(heap)
     while heap:
         level, i, j = heapq.heappop(heap)
+        if done[i][j]:
+            continue
+        done[i][j] = True
         for a, b in ((i - 1, j), (i + 1, j), (i, j - 1), (i, j + 1)):
-            if not (0 <= a < nx and 0 <= b < ny) or spill[a, b] != np.inf:
+            if not (0 <= a < nx and 0 <= b < ny) or done[a][b]:
                 continue
-            if (wall_x is not None and a != i and wall_x[min(a, i), j]) or \
-                    (wall_y is not None and b != j and wall_y[i, min(b, j)]):
-                continue
-            spill[a, b] = max(depth[a, b], level)
-            heapq.heappush(heap, (spill[a, b], a, b))
-    return spill
+            across_x = a != i                               # the edge lies between i and i+1, else j and j+1
+            wall = walls[0] if across_x else walls[1]
+            gate = -math.inf if wall is None else wall[min(a, i)][j] if across_x else wall[i][min(b, j)]
+            cost = max(depth[a][b], level, gate)
+            if cost < spill[a][b]:
+                spill[a][b] = cost
+                heapq.heappush(heap, (cost, a, b))
+    return np.array(spill, dtype=float)
 
 
 def closure_stats(depth, dx, dy, crest=None):
