@@ -377,6 +377,20 @@ def test_the_roughness_is_reduced_where_its_slope_would_fold_the_outline_and_the
     assert all(b.rough_scale == 1.0 for b in unguarded) and sum(pieces(b) for b in unguarded) >= 4
 
 
+def test_the_outline_of_a_body_that_has_islands_is_its_main_curve_and_the_distance_honours_the_islands(monkeypatch):
+    """With the slope guard off (rough 0.05 at hurst 0 on a 3 km body folds the warp: 3-8 islands and holes), the contact has
+    several loops: ``outline`` returns the longest, round the body, and ``distance`` is zero on every loop, the smallest
+    island's included."""
+    monkeypatch.setattr(sl, "_MAX_SLOPE", 9.0)
+    body = sl.salt_body((CX, CY), (3000.0, 1800.0), azimuth=30.0, rough=0.05, hurst=0.0, seed=2)
+    loops = body._contact(body.z_ref)[0]
+    assert len(loops) >= 4
+    small = min(loops, key=len)
+    assert len(body.outline()) == max(len(l) for l in loops) > 10 * len(small)
+    assert np.abs(body.distance(small[:, 0], small[:, 1])).max() < 1.0
+    assert body.inside(CX, CY) and np.hypot(*(body.outline().mean(axis=0) - [CX, CY])) < 600.0
+
+
 def test_a_grid_point_on_the_contact_does_not_repeat_a_vertex_of_the_outline():
     """A circle of 300 m on a grid of 6 m has grid points exactly on it (g = 1), where marching squares writes the same point three
     times: the outline has no segment of length zero, so its tangents and its segment weights are defined."""
