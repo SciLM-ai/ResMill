@@ -66,12 +66,12 @@ def fold_trap(style, x_len, y_len, dx, top, thickness, closure, roughness=None, 
                 n_faults=len(drawn), fault_sets=sorted({fault.kind for fault in drawn}))
     kwargs = dict(structure=structure, faults=drawn)
     if rim is not None:
-        kwargs["outline"] = _outline(fold, structure, closure, center, x_len, y_len, dx, top, meta["crest"], rim)
+        kwargs["outline"] = trap_outline(fold, structure, closure, center, x_len, y_len, dx, top, meta["crest"], rim)
         meta.update(rim=float(rim), outline_columns=int(kwargs["outline"].sum()))
     return dict(kwargs=kwargs, meta=meta)
 
 
-def _outline(fold, structure, closure, center, x_len, y_len, dx, top, crest, rim):
+def trap_outline(fold, structure, closure, center, x_len, y_len, dx, top, crest, rim):
     """The columns of the closure and ``rim`` m around it, ``(nx, ny)`` bool. The closure is the ellipse of ``closure``
     (``area``, ``aspect``, ``azimuth``) about ``center``, joined with the trap of ``top`` plus the fold and with that
     of ``structure``, the fold plus its roughness (the closure as it came out, which a low relief can move far from
@@ -86,12 +86,20 @@ def _outline(fold, structure, closure, center, x_len, y_len, dx, top, crest, rim
     along = (x - center[0]) * math.cos(azimuth) - (y - center[1]) * math.sin(azimuth)
     across = (x - center[0]) * math.sin(azimuth) + (y - center[1]) * math.cos(azimuth)
     footprint = (along / (aspect * across_half)) ** 2 + (across / across_half) ** 2 <= 1.0
-    ci, cj = min(nx - 1, int(crest[0] // sx)), min(ny - 1, int(crest[1] // sy))
-    i0, j0 = max(ci - 2, 0), max(cj - 2, 0)
     for surface in (fold,) if structure is fold else (fold, structure):
         depth = top + surface(x, y)
-        window = depth[i0:ci + 3, j0:cj + 3]
-        cell = tuple(int(n + o) for n, o in zip(np.unravel_index(int(np.argmin(window)), window.shape), (i0, j0)))
+        cell = crest_cell(depth, crest, sx, sy)
         footprint |= st.closure_stats(depth, sx, sy, crest=cell)["mask"]
         footprint[cell] = True
     return st.outline(footprint, sx, sy, rim)
+
+
+def crest_cell(depth, crest, sx, sy):
+    """The shallowest column of ``depth`` ((nx, ny), the column centres' depths) within two columns of ``crest`` ((x, y) in m,
+    columns ``sx`` by ``sy`` m): the crest of the trap on a rough surface, where the fold's own crest column may not be the
+    shallowest."""
+    nx, ny = depth.shape
+    ci, cj = min(nx - 1, int(crest[0] // sx)), min(ny - 1, int(crest[1] // sy))
+    i0, j0 = max(ci - 2, 0), max(cj - 2, 0)
+    window = depth[i0:ci + 3, j0:cj + 3]
+    return tuple(int(n + o) for n, o in zip(np.unravel_index(int(np.argmin(window)), window.shape), (i0, j0)))

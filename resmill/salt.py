@@ -332,8 +332,9 @@ def salt_truncation(upturn, datum, cut):
 Sequence = namedtuple("Sequence", "upturn truncation relief dip angle")
 
 
-def _dip(taper, power):
-    """The dip (degrees) at which the beds of a fold of this ``taper`` meet the contact: atan(p tan(taper)), capped at MAX_DIP."""
+def sequence_dip(taper, power=2.0):
+    """The dip (degrees) at which the beds of a fold of this ``taper`` meet the contact: atan(p tan(taper)), capped at MAX_DIP;
+    the relief of a folding zone ``W`` wide is then ``W tan(dip) / power`` (:attr:`Sequence.relief`)."""
     return min(math.degrees(math.atan(power * math.tan(math.radians(taper)))), MAX_DIP)
 
 
@@ -355,7 +356,7 @@ def salt_sequence(salt, width, taper, cut, datum, power=2.0, z_ref=None):
     ``width`` on the body: the grid must have cells of at most half of it, a hook's 50-200 m included."""
     if not 0.0 <= taper < 90.0:
         raise ValueError(f"taper must lie in [0, 90) degrees, got {taper}")
-    dip = _dip(taper, power)
+    dip = sequence_dip(taper, power)
     up = salt_upturn(salt, dip, width, power, z_ref)
     truncation = salt_truncation(up, datum, cut)
     angle = dip - math.degrees(math.atan((1.0 - cut) * math.tan(math.radians(dip))))
@@ -367,7 +368,7 @@ def truncation_cut(taper, angle, power=2.0):
     ``1 - tan(dip - angle) / tan(dip)``, the dip being that of a fold of this ``taper`` (``atan(power tan taper)``, capped at
     :data:`MAX_DIP`). The angle cannot exceed the dip (a flat unconformity gives the dip itself), so a hook cut at over 70 degrees
     (Giles & Rowan 2012) needs a taper above ``atan(tan(70) / power)`` = 54 degrees at power 2, and then a cut of 0.969-1."""
-    dip = _dip(taper, power)
+    dip = sequence_dip(taper, power)
     if not 0.0 <= angle <= dip:
         raise ValueError(f"beds dipping {dip:.1f} degrees at the contact cannot be cut at {angle:g} degrees "
                          f"(the largest angle is the dip, for a flat unconformity)")

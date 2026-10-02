@@ -44,6 +44,22 @@
   with the trap of the fold and with the one that came out with its roughness, each around the crest, and the crest's
   column, dilated by `rim` as `structure.outline` does) and `outline_columns` in `meta`; without `rim` nothing
   changes.
+- `salt_traps.salt_flank_trap` and `subsalt_trap`: the two salt traps composed from `salt`'s pieces, as `fold_trap`
+  composes the fold styles (every value, seeds included, is an argument; `{"kwargs": ..., "meta": ...}` back). A flank
+  trap places the contact `wall_at` of the closure's half-width beyond the crest on the side away from the salt
+  (`normal`, degrees), so the crest is cut off, centres a stock or wall (`body`: the keywords of `salt_body`, with
+  `lobes`, `rough`, `hurst`, `overhang=(L, H)`) on it, and upturns the strata over a folding zone `width` wide: plain
+  (`dip`, `thinning`, exponent held under `relief_cap`) or as a halokinetic sequence (`taper`, and the unconformity as
+  the truncation `angle` through `truncation_cut`, or as the `loss` of the reservoir's thickness at the wall: a hook
+  that pinches out needs a taper over 54 degrees, one that keeps the interval a `loss`). The contact's reference depth
+  is the overhang's neck (`neck` of its height below the lifted beds' top) or `waist` m below the middle of the
+  reservoir. Its faults are the `salt_flank` set, `radial_rate` per km of contact included. A subsalt trap puts the
+  base of a salt sheet on the fold's trap, read on the rough surface at the shallowest column near its crest: `kind`
+  `"truncated"` cuts the crest by `cut` of its relief, `"cover"` lies `margin` m above it; the base dips, is rugose
+  (zero at the crest column) and carries the sheet's thickness. Both take `rim` (the outline cut of `fold_trap`) and
+  `roughness`/`faults` dicts as `fold_trap` does. New module; `salt.sequence_dip` is the public name of the helper
+  `_dip` that gave a sequence's dip, and `fold_traps.trap_outline` and `crest_cell` the shared parts of `fold_trap`'s
+  outline (hashes of `fold_trap` for the six styles, with and without a rim, are as before).
 - `to_grdecl(report=dict)` and `fault_seal.block_inputs`, `blocks_at`, `block_labels`: the fault blocks of a model for
   any fluid, without writing the grid again. `fault_blocks` needed the corner stack and the faces, which only
   `to_grdecl` holds, and its contacts depend on the fluid (`Capillary.delta_rho`), drawn after the model. `report` is
