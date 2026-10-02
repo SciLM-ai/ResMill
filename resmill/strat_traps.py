@@ -214,6 +214,22 @@ def _line_shift(sizes, offsets, x_len, y_len, dip_dir, strike, lens):
     return shift
 
 
+def _floors(wander, range_m, relief_sd, relief_range, floor_m, cell):
+    """The finest wavelength (m) of the edge's relief and of the top's: ``floor_m`` if it is given, else a 32nd of the
+    range but not under two cells (a ValueError if there is neither a ``floor_m`` nor a ``cell`` to read it from, or
+    if a range is shorter than that)."""
+    if floor_m is None and cell is None and (wander or relief_sd):
+        raise ValueError("a sand edge or top with relief needs the cell width (cell, m: the floor of its octaves is "
+                         "two cells) or the floor itself (floor_m)")
+    floors = [floor_m if floor_m is not None else max(r / 32.0, 2.0 * (cell or 0.0)) for r in (range_m, relief_range)]
+    for used, r, f, name in ((wander, range_m, floors[0], "range_m"), (relief_sd, relief_range, floors[1],
+                                                                       "relief_range")):
+        if used and f > r:
+            raise ValueError(f"{name} ({r:g} m) is below the finest wavelength of its relief ({f:g} m: two cells): "
+                             f"use a longer range or a finer grid")
+    return floors
+
+
 def _footprint(nose, parts, offsets, at, dip_dir, strike, azimuth, warp, lens, seeds):
     """What outlines the sand: ``(fold, outline, line)``, the nose's fold (None without one), the footprint of the
     tongues (a Structure, negative inside; None for a straight line or a nose) and where the line lies along dip
@@ -262,7 +278,7 @@ def _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_
 
 def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.0, azimuth=0.0, taper_angle=0.3,
                area=3.4e6, aspect=2.2, warp=0.3, tongues=(), stagger=0.0, wander=0.0, range_m=1000.0, hurst=0.75,
-               floor_m=None, relief_sd=0.0, relief_range=2000.0, mound=True, nose=None):
+               floor_m=None, cell=None, relief_sd=0.0, relief_range=2000.0, mound=True, nose=None):
     """Build one stratigraphic trap on a plane monocline: the arguments for :func:`resmill.export.to_grdecl`
     (``**result["kwargs"]``) and what was drawn and expected (``result["meta"]``). ``kind`` is one of :data:`KINDS`:
 
@@ -305,7 +321,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     than the one above, along the line and round every tongue, so the sand's top is the first layer's and the layers
     below it step back (the stacked, offset ridges of USGS DDS-33 fig. 8).
 
-    The sand limit is irregular from ``floor_m`` up to ``range_m`` (1/32 of it unless given): ``wander`` (m) is the rms
+    The sand limit is irregular from ``floor_m`` up to ``range_m``: ``wander`` (m) is the rms
     displacement of the limit, of the line and of every tongue's outline, a :func:`resmill.structure.relief` surface
     of Hurst exponent ``hurst`` (the exponent of the edge's own structure function, which the test reads back; the
     realized edge's dimension is about 1.5 - hurst / 2 where the relief dominates, the 1.02-1.25 of coasts for 0.5-0.96,
@@ -315,7 +331,12 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     ``meta["erosion_relief_m"]`` (None where there is no erosion surface); a valley of that depth preserves sand
     farther updip by its depth over the discordance. ``relief_sd`` (m) is the low-amplitude relief of the zone's top
     and base together, a :func:`resmill.structure.relief` surface of range ``relief_range``: the closure is that of
-    the geometry with it.
+    the geometry with it. Neither relief is finer than two cells of the model, ``cell`` (m, its widest horizontal
+    cell), unless ``floor_m`` says otherwise (a 32nd of the range at the finest, never under two cells): a sand edge
+    that wanders on a scale below the cells opens and shuts necks between them, so that the closure the cells read
+    would depend on the grid (outliers of 90 m in 2 of 24 draws with a floor of 31 m on cells of 100-200 m), and its
+    octaves cost memory that nothing sees (6 GB for the plan's largest model). A relief without ``cell`` or
+    ``floor_m`` is refused.
 
     A combination trap takes its lateral closure from a ``nose``, the keywords of :func:`resmill.structure.closure`
     (``area``, ``height`` and ``aspect`` are required, ``height`` at most :data:`MAX_NOSE`; give no ``tilt``: the
@@ -345,9 +366,10 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     structure = structure if fold is None else structure + fold
     if fold is not None or outline is not None:
         _refuse_edge(fold if nosed else outline, lens, nosed, line, dip_dir, x_len, y_len)
+    floors = _floors(wander, range_m, relief_sd, relief_range, floor_m, cell)
     if relief_sd:
-        structure = structure + st.relief(relief_sd, relief_range, x_len, y_len, hurst, floor_m, seed=ss[2])
-    rough = st.relief(wander, range_m, x_len, y_len, hurst, floor_m, seed=ss[1]) if wander else None
+        structure = structure + st.relief(relief_sd, relief_range, x_len, y_len, hurst, floors[1], seed=ss[2])
+    rough = st.relief(wander, range_m, x_len, y_len, hurst, floors[0], seed=ss[1]) if wander else None
     if lens:
         taper_m = min(taper_m, 0.5 * lengths[0] * min(1.0, aspect)) if mound else taper_m   # a whole mound
     f, layers_f = _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_net)
@@ -368,7 +390,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     level = top + tan_dip * ((along if lens else line) - along) + cut   # the depth of the line (of the middle)
     meta = dict(kind=kind, dip=dip, azimuth=azimuth, taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
                 area=None if nosed else area, aspect=None if nosed else aspect, warp=warp, stagger=stagger,
-                wander=wander, range_m=range_m, hurst=hurst, floor_m=floor_m, relief_sd=relief_sd,
+                wander=wander, range_m=range_m, hurst=hurst, floor_m=floors[0], cell=cell, relief_sd=relief_sd,
                 mound=bool(lens and mound),
                 tongues=[dict(area=a, aspect=r, length=n, offset=float(v)) for (a, r), n, v in
                          zip(parts, lengths, offsets)] if area is not None and not nosed else [],

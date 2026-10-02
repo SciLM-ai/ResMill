@@ -328,7 +328,7 @@ def test_a_facies_change_is_the_same_trap_with_a_barrier_zone_taking_the_sand_s_
     """The barrier zone thickens as the sand thins, so the interval keeps its thickness, the barrier's cells are active
     under every column, and the sand's trap is that of the pinch-out of the same sand."""
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
-    kw = dict(seed=5, dip=1.1, taper_angle=0.5, area=3.4e6, aspect=2.2, warp=0.3, wander=40.0, range_m=800.0)
+    kw = dict(seed=5, dip=1.1, taper_angle=0.5, area=3.4e6, aspect=2.2, warp=0.3, wander=40.0, range_m=800.0, cell=dx)
     sand_only = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], **kw)
     both = strat_trap("facies_change", x_len, y_len, 2000.0, [10.0, 8.0], barrier=True, **kw)
     layers = _layers(x_len, y_len, dx, [10.0, 8.0])
@@ -349,7 +349,7 @@ def test_a_facies_change_is_the_same_trap_with_a_barrier_zone_taking_the_sand_s_
 
 
 def test_the_same_seed_builds_the_same_trap_and_another_builds_another():
-    kw = dict(dip=1.0, taper_angle=0.4, area=2.0e6, aspect=2.0, warp=0.3, wander=50.0, range_m=700.0)
+    kw = dict(dip=1.0, taper_angle=0.4, area=2.0e6, aspect=2.0, warp=0.3, wander=50.0, range_m=700.0, cell=50.0)
     a, b = (strat_trap("pinchout", 6000.0, 5000.0, 1800.0, [8.0], seed=s, **kw) for s in (7, 7))
     c = None
     for seed in range(8, 30):                                               # the first seed whose lobes fit the model
@@ -702,7 +702,7 @@ def test_relief_makes_the_top_and_the_base_of_the_zone_uneven_together_and_none_
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
     flat = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=3, dip=1.0, taper_angle=0.5, area=None)
     rough = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=3, dip=1.0, taper_angle=0.5, area=None,
-                       relief_sd=2.0, relief_range=2000.0)
+                       relief_sd=2.0, relief_range=2000.0, cell=dx)
     layers = _layers(x_len, y_len, dx, [10.0], dz=1.0)
     Xc, Yc, zc0, _ = _build_geometry(layers, **flat["kwargs"])
     _, _, zc, act = _build_geometry(layers, **rough["kwargs"])
@@ -766,7 +766,7 @@ def test_the_erosion_surface_of_a_truncation_has_the_relief_the_wander_maps_to()
     smooth = strat_trap("truncation", x_len, y_len, 2000.0, [10.0], seed=7, **kw)
     rough = strat_trap("truncation", x_len, y_len, 2000.0, [10.0], seed=7, wander=300.0, **kw)
     assert smooth["meta"]["erosion_relief_m"] == 0.0
-    assert strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=7, area=None, wander=300.0)["meta"][
+    assert strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=7, area=None, wander=300.0, cell=dx)["meta"][
         "erosion_relief_m"] is None
     assert rough["meta"]["erosion_relief_m"] == pytest.approx(300.0 * np.tan(np.radians(0.3)))
     x, y = np.meshgrid((np.arange(160) + 0.5) * dx, (np.arange(120) + 0.5) * dx, indexing="ij")
@@ -872,3 +872,81 @@ def test_a_stagger_belongs_to_the_depositional_edges_with_a_sand_of_more_than_on
             strat_trap(kind, *args, stagger=100.0, **kw)
     with pytest.raises(ValueError, match="stagger"):
         strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [8.0], 1, stagger=100.0)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The grid (review F3): no octave of an edge or a top finer than two cells
+
+def test_the_edge_and_the_top_have_no_octave_finer_than_two_cells_unless_the_caller_gives_a_floor():
+    """``cell`` is the model's widest cell: the finest wavelength of the edge's relief and of the top's is two of them
+    (200 m for cells of 100 m, over the 31 m and 62 m a 32nd of the ranges would give), a 32nd of the range where that
+    is longer, and ``floor_m`` where the caller gives one. The surfaces are those of ``relief`` with that floor and
+    the streams ``strat_trap`` draws them from."""
+    x_len, y_len = 8000.0, 6000.0
+    kw = dict(dip=1.0, taper_angle=0.5, area=None, wander=100.0, range_m=1000.0, relief_sd=1.5, relief_range=2000.0)
+    ss = np.random.SeedSequence(3).spawn(5)
+    x, y = np.meshgrid(np.linspace(0.0, x_len, 41), np.linspace(0.0, y_len, 31), indexing="ij")
+    ramp = st.ramp(1.0, 0.0, center=(0.5 * x_len, 0.5 * y_len))
+    for args, floor_edge, floor_top in (({"cell": 100.0}, 200.0, 200.0), ({"cell": 10.0}, 1000.0 / 32.0, 2000.0 / 32.0),
+                                        ({"cell": 100.0, "floor_m": 50.0}, 50.0, 50.0), ({"floor_m": 300.0}, 300.0, 300.0)):
+        built = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=3, **args, **kw)
+        top = st.relief(1.5, 2000.0, x_len, y_len, 0.75, floor_top, seed=ss[2])
+        assert np.allclose(built["kwargs"]["structure"](x, y), ramp(x, y) + top(x, y), atol=1e-9)
+        assert built["meta"]["floor_m"] == floor_edge and built["meta"]["cell"] == args.get("cell")
+        rough = st.relief(100.0, 1000.0, x_len, y_len, 0.75, floor_edge, seed=ss[1])
+        meta = built["meta"]
+        factor = st.taper(meta["line"], meta["taper_m"], 0.0, edge=rough)
+        assert np.allclose(built["kwargs"]["isochore"][0](x, y), factor(x, y), atol=1e-12)
+        assert not np.allclose(factor(x, y), st.taper(meta["line"], meta["taper_m"], 0.0)(x, y))   # the edge is rough
+
+
+def test_a_relief_without_a_cell_or_a_floor_is_refused_and_so_is_a_range_below_two_cells():
+    kw = dict(dip=1.0, taper_angle=0.5, area=None)
+    with pytest.raises(ValueError, match="cell"):
+        strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, wander=100.0, **kw)
+    with pytest.raises(ValueError, match="cell"):
+        strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, relief_sd=1.0, **kw)
+    strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, **kw)              # none asked: no cell needed
+    with pytest.raises(ValueError, match="range_m"):
+        strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, wander=100.0, range_m=300.0, cell=200.0, **kw)
+    with pytest.raises(ValueError, match="relief_range"):
+        strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, relief_sd=1.0, relief_range=300.0, cell=200.0,
+                   **kw)
+
+
+# A draw of the plan's ranges (seed 723533758) whose sand edge, wandering 195 m and with a top relief of 2.4 m, shows
+# a grid dependence when its octaves go down to 31 m: cells of 200 m read no closure at all, the fine map 64 m.
+GRID_DRAW = dict(dip=1.9696, taper_angle=0.4631, area=2274781.24, aspect=1.9607, warp=0.296, wander=194.68,
+                 relief_sd=2.4315)
+
+
+def _grid_draw_closure(dx, **floor):
+    built = strat_trap("pinchout", 7400.0, 6000.0, 2000.0, [8.0], seed=723533758, **GRID_DRAW, **floor)
+    fine = _fine_traps(built, 2000.0, 7400.0, 6000.0)[0]["height"]
+    return trap_report(_layers(7400.0, 6000.0, dx, [8.0]), built)[0]["height"], fine, np.tan(np.radians(1.9696)) * dx
+
+
+@pytest.mark.parametrize("dx", [50.0, 100.0, 200.0])
+def test_with_a_floor_of_two_cells_every_grid_up_to_that_cell_reads_the_closure_the_fine_map_has(dx):
+    """One build, read on cells of 50, 100 and 200 m (the build's own cell): the closure is that of the fine analytic
+    map within 1.5 cells' rise and 8 % of it. With the floor of 31 m that a 32nd of the range gives, the same draw
+    reads 0 m on the 200 m cells against 64 m on the fine map: the sand's necks of under a cell open and shut."""
+    height, fine, rise = _grid_draw_closure(dx, cell=200.0)
+    assert height == pytest.approx(fine, abs=1.5 * rise + 0.08 * fine)
+    if dx == 200.0:
+        height_old, fine_old, _ = _grid_draw_closure(dx, floor_m=1000.0 / 32.0)
+        assert fine_old > 50.0 and height_old < 0.1 * fine_old
+
+
+def test_the_largest_model_of_the_plan_builds_in_under_a_gigabyte():
+    """The plan's largest tongue (40 km2 on 42.7 x 34.2 km) with an edge and a top with relief, on cells of 100 m: the
+    octaves go down to 200 m, so the surfaces hold a few million points (22 s and 7 GB with a floor of 31 m)."""
+    import time
+    import tracemalloc
+    tracemalloc.start()
+    t0 = time.time()
+    strat_trap("pinchout", 42700.0, 34160.0, 2000.0, [8.0], seed=1, dip=1.0, taper_angle=0.3, area=40e6, aspect=1.0,
+               warp=0.3, wander=710.0, relief_sd=2.0, cell=100.0)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak < 0.5e9 and time.time() - t0 < 30.0
