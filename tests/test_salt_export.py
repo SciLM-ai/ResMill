@@ -74,6 +74,21 @@ def test_the_salt_has_no_pore_volume_and_the_rest_of_the_model_keeps_its_own(tmp
     assert pv.sum() - held.sum() == pytest.approx(phi * math.pi * R ** 2 * nz * dz, abs=phi * DX * 2.0 * math.pi * R * nz * dz)
 
 
+@pytest.mark.parametrize("dip", [30.0, 60.0, 85.0])
+def test_a_steep_upturn_shears_cells_but_neighbouring_columns_share_their_corners(dip):
+    """An upturn is a smooth shift of the whole stack at each pillar, so the two columns that meet at a pillar take the same
+    corner depths there: no step between them, however steep the dip, and so no non-neighbour connection when Flow reads the
+    grid (the OPM bench of step 5 counts 0 NNCs at 30 to 85 degrees; only faults make them). The cells shear instead: the top
+    steps by more than a cell's thickness between neighbouring pillars, and by no more than the upturn's relief."""
+    L = layer(nz=12, dz=5.0)
+    body = sl.salt_body((CX, CY), (R, R), z_ref=TOP + 30.0)
+    up = sl.salt_upturn(body, dip, 400.0, power=max(1.0, 400.0 * math.tan(math.radians(dip)) / 250.0))
+    _, _, zc, act = _build_geometry([L], structure=up, salt=body)
+    assert np.array_equal(zc[1:-1:2], zc[2::2]) and np.array_equal(zc[:, 1:-1:2], zc[:, 2::2])     # shared pillars, in x and in y
+    drop = np.abs(np.diff(zc[::2, ::2, 0], axis=0)).max()                       # the steepest step of the top between pillars
+    assert 5.0 < drop <= 250.0 + 1e-6                                           # more than a cell's thickness (they shear), within the relief
+
+
 def test_no_salt_changes_nothing(tmp_path):
     a = to_grdecl(layer(), tmp_path / "a.grdecl", structure=st.dome(30.0, 400.0))
     b = to_grdecl(layer(), tmp_path / "b.grdecl", structure=st.dome(30.0, 400.0), salt=None)
