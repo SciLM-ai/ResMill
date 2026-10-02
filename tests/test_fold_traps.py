@@ -15,7 +15,8 @@ X_LEN, Y_LEN, THICKNESS = NX * DX, NY * DX, NZ * DZ
 
 # What a tree of each style is built from (the values the sampler draws, written out): the closure's keywords, a
 # roughness and the faults.
-CLOSURE = dict(area=5e6, height=60.0, aspect=1.8, azimuth=20.0, limb_ratio=1.2, tilt=0.1, satellites=1, warp=0.2, seed=3)
+CLOSURE = dict(area=5e6, height=60.0, aspect=1.8, azimuth=20.0, limb_ratio=1.2, tilt=0.1, satellites=1, warp=0.2,
+               seed=3)
 STYLE_CLOSURE = {
     "four_way": {},
     "turtle": dict(satellites=0),

@@ -94,6 +94,7 @@ def test_without_a_seal_a_fault_that_splits_the_tops_is_a_wall(tmp_path):
     report = {}
     to_grdecl(layer, tmp_path / "d.grdecl", structure=fold, faults=faults, report=report)
     assert report["faults"] == [] and len(report["fault_names"]) == len(faults)
-    assert len(report["block_inputs"]["face_records"]) == 0 and any(walls.any() for walls in report["block_inputs"]["split"])
-    blocks = blocks_at(report["block_inputs"], DX, DX, Capillary(delta_rho=300.0))
+    inputs = report["block_inputs"]
+    assert len(inputs["face_records"]) == 0 and any(walls.any() for walls in inputs["split"])
+    blocks = blocks_at(inputs, DX, DX, Capillary(delta_rho=300.0))
     assert blocks and all(block["limited_by"] != "leak" for block in blocks)         # no face has a level to leak at

@@ -348,11 +348,11 @@ _EDGE_SLICES = ((np.s_[:-1], np.s_[1:]), (np.s_[:, :-1], np.s_[:, 1:]))   # the 
 
 
 def block_inputs(zc, act, faces, mults):
-    """What :func:`blocks_at` needs of the geometry, none of it dependent on the fluid or the seal's capillary values: the
-    map of column tops (``depth``, NaN where a column holds no rock; ``alive`` says which do), the cell edges a fault
-    splits (``split``: ``[x edges (nx-1, ny), y edges (nx, ny-1)]``, True where a fault puts the tops of the two columns
-    on different sides) and ``mults["face_records"]`` (:func:`face_multipliers`). Small arrays of map size, so a model can
-    keep them and draw its blocks again for another fluid."""
+    """What :func:`blocks_at` needs of the geometry, none of it dependent on the fluid or the seal's capillary values:
+    the map of column tops (``depth``, NaN where a column holds no rock; ``alive`` says which do), the cell edges a
+    fault splits (``split``: ``[x edges (nx-1, ny), y edges (nx, ny-1)]``, True where a fault puts the tops of the two
+    columns on different sides) and ``mults["face_records"]`` (:func:`face_multipliers`). Small arrays of map size, so
+    a model can keep them and draw its blocks again for another fluid."""
     nx, ny = act.shape[:2]
     k_top = np.argmax(act, axis=2)
     alive = act.any(axis=2)
