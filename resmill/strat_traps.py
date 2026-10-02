@@ -343,11 +343,13 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
 
 def trap_report(model, built, column=None):
     """The traps of the sand of ``model`` (a layer, a reservoir or a list of layers) as :func:`strat_trap` shaped it
-    (:func:`zone_trap`, the surface being the top of the sand's cells: a barrier zone is no part of it). With a barrier
-    zone each trap also has ``barrier_top``, the depth of the top of the barrier's shallowest cell (None otherwise): an
-    initialisation by contacts (EQUIL) puts oil in every cell above the contact whose capillary pressure exceeds its
-    entry pressure, joined to the trap or not, so a barrier holds its ``column`` below that top, not below the crest, if
-    it reaches updip of it; cut the model's outline there, or keep the contact above ``barrier_top + column``."""
+    (:func:`zone_trap`, the surface being the top of the sand's cells: a barrier zone is no part of it), the one with
+    the most closure first: a rough edge leaves pieces of sand that hold small traps of their own, some of them
+    shallower than the main one. With a barrier zone each trap also has ``barrier_top``, the depth of the top of the
+    barrier's shallowest cell (None otherwise): an initialisation by contacts (EQUIL) puts oil in every cell above the
+    contact whose capillary pressure exceeds its entry pressure, joined to the trap or not, so a barrier holds its
+    ``column`` below that top, not below the crest, if it reaches updip of it; cut the model's outline there, or keep
+    the contact above ``barrier_top + column``."""
     layers = list(model) if isinstance(model, (list, tuple)) else list(getattr(model, "layers", [model]))
     _, _, zc, act = _build_geometry(layers, **built["kwargs"])
     cells = sum(layer.nz for layer in layers[:built["meta"]["net_layers"]])
