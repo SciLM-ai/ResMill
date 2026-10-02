@@ -362,3 +362,44 @@ def test_truncation_needs_the_erosion_surface_to_dip_the_same_way_as_the_beds_an
     for kw, message in ((dict(dip=0.4, taper_angle=0.5), "dip"), (dict(dip=2.0, barrier=True), "barrier")):
         with pytest.raises(ValueError, match=message):
             strat_trap("truncation", 8000.0, 6000.0, 2000.0, [10.0, 5.0], seed=1, **kw)
+
+
+NOSE = dict(area=6.0e6, height=60.0, aspect=0.7)       # 6 km2, 60 m of relief, longer along dip than across
+
+
+@pytest.mark.parametrize("kind", ["pinchout_nose", "truncation_nose"])
+def test_an_updip_edge_across_a_nose_closes_by_the_height_of_the_nose(kind):
+    """A combination trap: a nose (closure(): a lobate bump of the given area and relief) on a 1 degree ramp, the edge
+    of the sand a straight line across its crest. The trap closes by the nose's relief (the oil spills along the
+    line, out of the nose's footprint), which is more than the structure alone closes by: its own updip saddle is
+    in the absent zone. The crest sits on the line and the trap lies downdip of it."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    built = strat_trap(kind, x_len, y_len, 2000.0, [10.0], seed=4, dip=1.0, taper_angle=0.5, nose=NOSE)
+    layers = _layers(x_len, y_len, dx, [10.0])
+    (trap,) = trap_report(layers, built)
+    cell = np.tan(np.radians(1.0)) * dx
+    assert built["meta"]["closure_expected"] == 60.0
+    assert trap["limited_by"] == "spill" and trap["height"] == pytest.approx(60.0, abs=cell + 0.03 * 60.0)
+    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=2.0 * cell)
+    assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_expected"], abs=2.0 * cell)
+    rows = np.nonzero(trap["mask"].any(axis=0))[0]
+    line = int(built["meta"]["line"] // dx)
+    assert rows.min() in (line, line + 1) and trap["crest"][1] in (line, line + 1)    # downdip of the line, crest on it
+    assert abs(trap["crest"][0] - x_len / dx / 2) <= 2                                # on the nose's axis
+    base = built["kwargs"]["structure"]
+    X, Y = np.meshgrid((np.arange(160) + 0.5) * dx, (np.arange(120) + 0.5) * dx, indexing="ij")
+    alone = st.closure_stats(2000.0 + base(X, Y), dx, dx)                           # ramp and nose, no edge
+    assert alone["height"] < trap["height"] - 10.0
+
+
+@pytest.mark.parametrize("kw,message", [
+    (dict(kind="pinchout_nose"), "nose"),
+    (dict(kind="pinchout_nose", nose=dict(NOSE, height=400.0)), "335"),
+    (dict(kind="truncation_nose", nose=NOSE, dip=0.4, taper_angle=0.5), "dip"),
+    (dict(kind="pinchout_nose", nose=dict(NOSE, area=90.0e6)), "fit"),
+    (dict(kind="pinchout", nose=NOSE), "nose"),
+])
+def test_a_nose_belongs_to_the_combination_kinds_and_is_capped_at_the_largest_closure_found(kw, message):
+    args = dict(x_len=8000.0, y_len=6000.0, top=2000.0, thicknesses=[10.0], seed=1, dip=1.0, taper_angle=0.3)
+    with pytest.raises(ValueError, match=message):
+        strat_trap(**{**args, **kw})
