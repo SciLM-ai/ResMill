@@ -286,6 +286,27 @@ def test_sliver_cell_is_written_inactive(tmp_path):
     assert top.max() == 0
 
 
+def test_min_thickness_is_the_collapse_threshold_and_defaults_to_5_mm(tmp_path):
+    """A cell whose thickest corner is no thicker than ``min_thickness`` is written inactive: 5 mm unless given (a
+    published model's collapse), 6 mm for the stratigraphic traps, where the deck's PINCH threshold is 6 mm. A wedge whose
+    corner thickness rises 1.1 mm per column has its first active column the fifth by default (5.5 mm) and the sixth
+    (6.6 mm) with 6 mm; the keyword reaches ``_build_geometry``, ``to_grdecl`` and ``to_pyvista`` alike."""
+    nx = 12
+    layer = Layer(nx, 1, 1, nx * 10.0, 10.0, 1.0, top_depth=TOP)
+    layer.poro_mat, layer.perm_mat = np.full((nx, 1, 1), 0.2), np.full((nx, 1, 1), 100.0)
+    wedge = st.Structure(lambda x, y: 0.0011 * np.asarray(x) / 10.0)         # 1.1 mm of thickness per 10 m column
+    first = lambda act: int(np.argmax(act.reshape(nx, -1).any(axis=1)))
+    assert first(_build_geometry([layer], isochore=[wedge])[3]) == 4
+    assert first(_build_geometry([layer], isochore=[wedge], min_thickness=6e-3)[3]) == 5
+    assert first(_build_geometry([layer], isochore=[wedge], min_thickness=5e-3)[3]) == 4
+    default = np.asarray(read_grdecl(to_grdecl(layer, tmp_path / "a.grdecl", isochore=[wedge]))["ACTNUM"])
+    pinched = np.asarray(read_grdecl(to_grdecl(layer, tmp_path / "b.grdecl", isochore=[wedge], min_thickness=6e-3))["ACTNUM"])
+    assert first(default) == 4 and first(pinched) == 5
+    pytest.importorskip("pyvista")
+    from resmill.export import to_pyvista
+    assert to_pyvista(layer, isochore=[wedge], min_thickness=6e-3).cell_data["ACTNUM"].sum() == nx - 5
+
+
 def test_plot_section_refuses_a_fully_eroded_model():
     with pytest.raises(ValueError, match="no active cells"):
         plot_section(make_layer(), erode_above=TOP + NZ * DZ + 1.0)

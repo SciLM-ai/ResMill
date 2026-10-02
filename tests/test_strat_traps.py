@@ -187,22 +187,23 @@ def test_barrier_column_reproduces_bergs_worked_examples():
     """Berg's text: a 0.2 mm reservoir sand with a 0.05 mm coarse-silt barrier holds 55 ft of low-gravity oil (density
     contrast 0.1 g/cm3, interfacial tension 35 dyn/cm) and about 5 ft of gas (1.0), a 0.01 mm fine silt 300 ft and
     30 ft; oil migrating up through the 0.2 mm sand needs a stringer of 300 cm, and 760 cm to pass into sand of half the
-    grain size."""
+    grain size (the first is the height for oil to migrate through the same sand, which no barrier is: zero here)."""
     args = dict(sigma=0.035)
     assert barrier_column(100.0, 0.2e-3, 0.05e-3, **args) / FT == pytest.approx(55.0, abs=1.0)
     assert barrier_column(1000.0, 0.2e-3, 0.05e-3, **args) / FT == pytest.approx(5.0, abs=0.7)
     assert barrier_column(100.0, 0.2e-3, 0.01e-3, **args) / FT == pytest.approx(300.0, abs=3.0)
     assert barrier_column(1000.0, 0.2e-3, 0.01e-3, **args) / FT == pytest.approx(30.0, abs=0.5)
-    assert barrier_column(100.0, 0.2e-3, 0.2e-3, **args) == pytest.approx(3.0, rel=0.05)
     assert barrier_column(100.0, 0.2e-3, 0.1e-3, **args) == pytest.approx(7.6, rel=0.01)
+    assert barrier_column(100.0, 0.2e-3, 0.2e-3, **args) == 0.0     # his 300 cm stringer is the height for oil to migrate
+    #                                           through the same sand: a threshold of migration, no seal (no barrier is coarser)
 
 
 def test_barrier_column_scales_as_the_equation_says_and_is_never_negative():
     base = barrier_column(300.0, 1.0e-4, 3.0e-5)
     assert barrier_column(600.0, 1.0e-4, 3.0e-5) == pytest.approx(base / 2.0)           # 1 / (density contrast)
     assert barrier_column(300.0, 1.0e-4, 3.0e-5, sigma=0.060) == pytest.approx(2.0 * base)   # interfacial tension
-    assert barrier_column(300.0, 1.0e-4, 1.0e-4) > 0.0                                  # throat against its pore
-    assert barrier_column(300.0, 3.0e-5, 1.0e-4) == 0.0                                 # a barrier 3 times as coarse
+    assert barrier_column(300.0, 1.0e-4, 1.0e-4) == 0.0                                 # a barrier no finer: none
+    assert barrier_column(300.0, 1.0e-4, 0.99e-4) > 0.0 and barrier_column(300.0, 3.0e-5, 1.0e-4) == 0.0
 
 
 @pytest.mark.parametrize("k,phi,d", [(900, 0.32, 6.0e-5), (533, 0.21, 13.5e-5), (65, 0.18, 6.9e-5),
@@ -721,7 +722,7 @@ def test_relief_makes_the_top_and_the_base_of_the_zone_uneven_together_and_none_
 def _same_fields(a, b):
     """Two builds that hold the same fields: the structure, the surfaces and every isochore agree on a grid."""
     x, y = np.meshgrid(np.linspace(0.0, 8000.0, 41), np.linspace(0.0, 6000.0, 31), indexing="ij")
-    keys = [k for k in a["kwargs"] if k != "isochore"]
+    keys = [k for k in a["kwargs"] if k not in ("isochore", "min_thickness")]
     return a["meta"] == b["meta"] and all(np.array_equal(a["kwargs"][k](x, y), b["kwargs"][k](x, y)) for k in keys) \
         and all(np.array_equal(f(x, y), g(x, y)) for f, g in zip(a["kwargs"].get("isochore", []),
                                                                   b["kwargs"].get("isochore", [])))

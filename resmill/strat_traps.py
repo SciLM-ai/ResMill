@@ -64,11 +64,16 @@ def barrier_column(delta_rho, d_reservoir, d_barrier, sigma=0.030):
     (Berg 1975, eq. 16). The throats r_t are those of the barrier and the pores r_p those of the reservoir, each a fixed
     share of its effective grain size (:data:`THROAT_RADIUS`, :data:`PORE_RADIUS`; :func:`effective_grain_size`).
     ``delta_rho`` is the water minus hydrocarbon density (kg/m3), ``d_reservoir`` and ``d_barrier`` the grain sizes
-    (m) and ``sigma`` the interfacial tension (N/m; 30-35 mN/m for oil). Zero where the barrier's throats are no
-    narrower than the reservoir's pores (a barrier 2.7 times as coarse). It is the column above the contact in the
-    reservoir sand; the free-water level lies below that contact by the sand's own entry-pressure head."""
-    term = 1.0 / (THROAT_RADIUS * np.asarray(d_barrier, dtype=float)) - 1.0 / (PORE_RADIUS * np.asarray(d_reservoir))
-    return np.maximum(2.0 * sigma * term / (GRAVITY * np.asarray(delta_rho, dtype=float)), 0.0)
+    (m) and ``sigma`` the interfacial tension (N/m; 30-35 mN/m for oil). Zero for a barrier no finer than the
+    reservoir: Berg's formula would still give 3 m for the same sand and 0.6 m for one twice as coarse, the height
+    for oil to migrate through such a stringer, a threshold of migration and no seal. It is the column above the
+    contact in the reservoir sand; the free-water level lies below that contact by the sand's own entry-pressure
+    head. Berg's calculated columns (14-64 ft, Table 1) are lower bounds of the 25-120+ ft he observed at three of his
+    four fields."""
+    d_barrier, d_reservoir = np.asarray(d_barrier, dtype=float), np.asarray(d_reservoir, dtype=float)
+    term = 1.0 / (THROAT_RADIUS * d_barrier) - 1.0 / (PORE_RADIUS * d_reservoir)
+    return np.where(d_barrier < d_reservoir, np.maximum(2.0 * sigma * term / (GRAVITY * np.asarray(delta_rho, dtype=float)),
+                                                        0.0), 0.0)
 
 
 def zone_top(zc, act, k=None):
@@ -582,7 +587,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     if mound:
         structure = structure + sink                                 # the base stays flat: the top is the mound's
     rim_m = RIM_SHARE * column / np.tan(np.radians(dip)) if barrier else None
-    kwargs = dict(structure=structure)
+    kwargs = dict(structure=structure, min_thickness=MIN_THICKNESS)
     if kind.startswith("truncation"):                                  # the sand cut from above: the top is the surface
         kwargs["erode_above"] = st.Structure(lambda x, y: top + structure(x, y) + sink(x, y))
     elif kind == "onlap":                                              # the layers cut from below: the base is

@@ -18,8 +18,11 @@ import numpy as np
 from .structure import Structure, surface as _surface_field
 
 # A cell whose corner-pair thickness never exceeds this is fully collapsed
-# (eroded or pinched out) and is written with ACTNUM = 0. Kept at half the
-# ZCORN write precision (fmt_z="%.2f") so no active cell has zero thickness on disk.
+# (eroded or pinched out) and is written with ACTNUM = 0 (``min_thickness`` of
+# ``to_grdecl`` says otherwise). It is half the ZCORN write precision (fmt_z="%.2f"),
+# but the test is on the thickest corner: a cell thicker than it at one corner can
+# still round to zero thickness at all four on disk, and OPM then drops it from the
+# active cells (a ``min_thickness`` of 1 cm, the precision, leaves none).
 _MIN_THICKNESS = 5e-3
 # Corners are nudged toward cell centers by this fraction of a cell so a
 # discontinuous structure (a fault) assigns each cell to its own side of
@@ -60,7 +63,7 @@ def _corner_axis(n, d):
 
 def _build_geometry(layers, structure=None, top=None, base=None,
                     erode_above=None, erode_below=None, isochore=None, onlap=False,
-                    faults=None, _faces=None):
+                    faults=None, _faces=None, min_thickness=None):
     """Assemble deformed interface depths on the doubled corner grid.
 
     Returns ``(Xc, Yc, Zc, actnum)``: corner coordinates ``(2nx, 2ny)``,
@@ -72,7 +75,9 @@ def _build_geometry(layers, structure=None, top=None, base=None,
     so younger layers end against it, instead of the default incision.
     ``faults`` (:class:`resmill.faults.Fault`) displace the stack in 3-D
     after the structure and before erosion; ``_faces``, when a list, gets
-    one ``(fault, side)`` pair per fault for the FAULTS export.
+    one ``(fault, side)`` pair per fault for the FAULTS export. A cell whose
+    thickest corner is no thicker than ``min_thickness`` (m; default 5 mm) is
+    inactive.
     """
     L0 = layers[0]
     nx, ny = L0.nx, L0.ny
@@ -181,7 +186,7 @@ def _build_geometry(layers, structure=None, top=None, base=None,
 
     thick = Zc[:, :, 1:] - Zc[:, :, :-1]
     cell_thick = thick.reshape(nx, 2, ny, 2, -1).max(axis=(1, 3))
-    actnum = (cell_thick > _MIN_THICKNESS).astype(np.int32)
+    actnum = (cell_thick > (_MIN_THICKNESS if min_thickness is None else min_thickness)).astype(np.int32)
     return Xc, Yc, Zc, actnum
 
 
@@ -273,7 +278,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
               erode_above=None, erode_below=None, facies=False, isochore=None, onlap=False,
               faults=None,
               poro_floor=None, perm_floor=None,
-              fmt_z="%.2f", fmt_prop="%.6g", seal=None):
+              fmt_z="%.2f", fmt_prop="%.6g", seal=None, min_thickness=None):
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
 
     The file carries SPECGRID, COORD, ZCORN, ACTNUM, PORO, PERMX, PERMY
@@ -331,6 +336,12 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         anything else is refused before a file is written. ``seal.scatter``,
         ``offset``, ``p_open`` and ``p_enhance`` spread the faults'
         multipliers, a share of them open or raising flow, as in company decks.
+    min_thickness : float, optional
+        A cell whose thickest corner is no thicker than this (m) is written
+        inactive (default 5 mm, which a published model's bytes depend on).
+        The stratigraphic traps ask for 6 mm, the PINCH threshold of the decks
+        ResSimMill writes; ZCORN holds 1 cm, so a cell between 5 and 10 mm can
+        still round to zero thickness on disk, which OPM drops (1 cm avoids it).
     """
     layers = list(getattr(model, "layers", [model]))
     L0 = layers[0]
@@ -339,7 +350,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
 
     faces = []
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, faces)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, faces, min_thickness)
     names = [fault.name or f"F{n + 1:02d}" for n, (fault, _) in enumerate(faces)]
     if len(set(names)) < len(names) or any(len(nm) > 8 for nm in names):
         raise ValueError(f"fault names must be unique within 8 characters (OPM keeps 8): {names}")
@@ -409,7 +420,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
 
 
 def to_pyvista(model, structure=None, top=None, base=None,
-               erode_above=None, erode_below=None, isochore=None, onlap=False, faults=None):
+               erode_above=None, erode_below=None, isochore=None, onlap=False, faults=None, min_thickness=None):
     """Build a ``pyvista.ExplicitStructuredGrid`` of the deformed model.
 
     Cell data carries PORO, PERMX (and PERMY where the layers' kx/ky makes it
@@ -426,7 +437,7 @@ def to_pyvista(model, structure=None, top=None, base=None,
     layers = list(getattr(model, "layers", [model]))
     nx, ny = layers[0].nx, layers[0].ny
     Xc, Yc, Zc, actnum = _build_geometry(
-        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults)
+        layers, structure, top, base, erode_above, erode_below, isochore, onlap, faults, None, min_thickness)
 
     # pyvista wants the corners as a global F-order ravel of the doubled
     # corner arrays (the same layout as ZCORN). The grid's k axis points
