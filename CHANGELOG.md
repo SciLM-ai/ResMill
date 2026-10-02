@@ -207,8 +207,9 @@
   lowest column from `m` = 2 up, so `m` = 2, 10 and 50 give the same stack and the same compensation
   index kappa (Straub et al. 2009): 0.83 for about 350 stamps of 1.4 km (3 m peak), 0.86 for 90 stamps,
   0.93-0.95 for 15-19 stamps wider than the model, and the strength could not be varied. With the scale
-  kappa falls smoothly as the scale grows (about 350 stamps, 2 seeds: 0.81-0.85 at 0.2 or less, 0.75 at
-  0.5, 0.70 at 1, 0.66 at 2; random stacking is 0.55). Default `None` keeps the old weight: outputs are
+  kappa falls smoothly as the scale grows (about 350 stamps of 1.4 km and 3 m on 5.5 x 4 km, 3 seeds, an
+  independent re-run: 0.82, 0.81, 0.79 and 0.76 at 0.03, 0.1, 0.2 and 0.4, 0.69 at 1, 0.65 at 3, 0.83 for ResMill's
+  weight at m = 100; random stacking is 0.55; the first count of 0.81-0.85 at 0.2 or less was a little high). Default `None` keeps the old weight: outputs are
   bit-identical to before.
 - `facies_props` (`LobeLayer`): rock by facies for lobes, keyed by facies code as in `ChannelLayer`.
   Without it the sand is the top `ntg` share of the lobe structure, whose porosity and permeability are
