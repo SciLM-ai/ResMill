@@ -373,17 +373,23 @@ def test_the_hanging_wall_zones_are_thicker_by_the_expansion_index(kind):
     assert m.labels["expansion"] == 2.0 and m.labels["expansion_per_fault"] == pytest.approx(2.0 ** (1.0 / m.labels["n_masters"]))
 
 
-def test_a_listric_masters_throw_in_the_reservoir_is_the_one_drawn_from_the_displacement_length_law():
-    """The throw in the reservoir (cutoff to cutoff, measured on the grid with no regional dip) is the clastic law's
-    displacement times the sine of the fault's dip at the reservoir (T10, T19: 0.11 L^0.84, 252 m at 10 km): the record says
-    so, and the grid agrees within 1 % and the 4 m that the roll rises over half a 20 m cell beside the cutoff."""
+def test_a_listric_masters_displacement_at_its_tip_ellipses_centre_is_the_one_the_clastic_law_gives():
+    """The law's displacement is the fault's maximum (Lathrop et al. 2022: Dmax = 0.11 L^0.84, 252 m at 10 km; T10, T19), which a fault's tip
+    ellipse has at its centre as `fold_faults` draws it: the throw of the horizon at z_center over the sine of the plane's dip there (read off
+    the explicit plane) is the drawn displacement. The record's throw in the reservoir is what the grid has (cutoff to cutoff with no regional
+    dip, within 1 % and the 4 m that the roll rises over half a 20 m cell beside the cutoff); the plane is steeper there than at z_center, so
+    it is the larger."""
     x_len, y_len, dx, top = 16000.0, 1000.0, 20.0, 2499.0
     for seed in range(4):
         m = rollover(x_len, y_len, dx, top, 2.0, seed, kind="frio", azimuth=90.0, regional_dip=0.0, density=0.0)
         L = m.labels["masters"][0]
-        assert L["throw_m"] == pytest.approx(L["displacement_m"] * math.sin(math.radians(L["dip_deg"])))
+        f, = [f for f in m.faults if f.kind == "master"]
+        plane, inverse = log_plane(f.dip, f.ramp_base, f.flatten)
+        h = float(inverse(f.z_center))
+        dip_c = math.atan(float(plane(h + 0.5) - plane(h - 0.5)))             # the plane's dip at the tip ellipse's centre
+        assert f.throw / math.sin(dip_c) == pytest.approx(L["displacement_m"], rel=1e-4) and L["centre_throw_m"] == f.throw
         _, z = sawtooth(m, x_len, y_len, dx, "master", top, 2.0)
-        assert z.max() - top == pytest.approx(L["throw_m"], rel=0.01, abs=4.0)      # the first cell top beside the cutoff has risen a few m
+        assert z.max() - top == pytest.approx(L["throw_m"], rel=0.01, abs=4.0) and L["throw_m"] > f.throw      # the first cell top beside the cutoff has risen
 
 
 def test_the_displacements_follow_the_clastic_law_with_the_norne_scatter():
@@ -444,6 +450,9 @@ def test_the_master_faults_are_placed_by_the_tip_ellipse_below_the_reservoir(dra
             below = (f.z_center - (TOP + 0.5 * THICK + math.tan(alpha) * along)) / half
             assert 0.25 - 1e-9 <= below <= 0.5 + 1e-9
             assert rec["centre_throw_m"] == f.throw and rec["z_center_m"] == f.z_center
+            if f.flatten is None:                         # a planar fault: Dmax at the ellipse's centre, and the reservoir's throw is the profile there
+                assert f.throw / math.sin(math.radians(f.dip)) == pytest.approx(rec["displacement_m"], rel=1e-9)
+                assert rec["throw_m"] == pytest.approx(f.throw * (1.0 - below) ** 1.5 * math.sqrt(1.0 + 3.0 * below), rel=1e-9)
             if f.flatten is not None:                                   # the Frio ramp ends 0-2 km above the reservoir where the fault is
                 z_k = TOP + 0.5 * THICK + math.tan(alpha) * along
                 assert z_k - 2000.0 - 1e-6 <= f.ramp_base <= z_k + 1e-6 and rec["ramp_base_m"] == f.ramp_base

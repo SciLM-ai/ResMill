@@ -25,7 +25,8 @@ faults (0-2) cross the blocks; the faults inside the trap are drawn by :func:`re
 master fault (a ramp dipping 50-75 degrees, then tan(dip) falling by 1/e every 1.2-5 km of depth,
 :attr:`resmill.faults.Fault.flatten`: the shapes of six published faults, whose fits give 0.6-3.1 km), the ramp ending 0-2 km
 above the reservoir (the published bends lie 1.0-2.7 km down, so the cutoff is on the curved part and the roll starts at it),
-throw from the clastic displacement-length law, a regional dip toward the basin; ``kind="wilcox"`` (40 % [J]): two or three
+maximum displacement (at the tip ellipse's centre, as ``fold_faults`` draws a fault's) from the clastic displacement-length law, a
+regional dip toward the basin; ``kind="wilcox"`` (40 % [J]): two or three
 nearly straight, closely spaced planar faults with little rollover and a higher expansion (Ewing et al. 1986). The strata laid
 down while the faults moved thicken into their hanging walls by an expansion index of 1.1-2.5
 (:func:`resmill.structure.growth`). The faults inside the trap, with the keystone graben half the time and 40-70 % antithetic,
@@ -36,7 +37,7 @@ the fault (the throw and the regional dip set it, the flattening length hardly),
 (the P10 of the Gulf's rollover traps) is drawn again (:func:`rollover`).
 """
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy import sparse
@@ -79,6 +80,14 @@ class BlockModel:
 
 def _log_uniform(rng, lo, hi):
     return float(math.exp(rng.uniform(math.log(lo), math.log(hi))))
+
+
+def _centre_dip(fault):
+    """The dip (degrees) of ``fault``'s plane at its tip ellipse's centre: ``dip`` for a planar fault, and for a listric one tan(dip)
+    has fallen by 1/e per ``flatten`` m of depth below the ramp's base."""
+    base = fault.z_center if fault.ramp_base is None else fault.ramp_base
+    below = 0.0 if fault.flatten is None else max(fault.z_center - base, 0.0) / fault.flatten
+    return math.degrees(math.atan(math.tan(math.radians(fault.dip)) * math.exp(-below)))
 
 
 def _axes(azimuth):
@@ -279,9 +288,12 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
     its tan(dip) falls by 1/e below the bend (m, log-uniform 1,200-5,000: six published faults fit 600-3,100, median 2,450;
     Bruce 1973: 60 to 15 degrees over about 4 km, 2,200); ``ramp_base`` the depth where that ramp ends (m: 0-2,000 above the
     reservoir where the fault is [J]); ``length`` of a master fault (m, log-uniform 3-25 km, T17); ``throw`` of the master
-    fault in the reservoir (m: clastic displacement-length law, 0.11 L^0.84 sin(dip) with a log10 sd of 0.27 about it, T10,
-    T19; the Frio master's :attr:`resmill.faults.Fault.throw` is then the throw at its tip ellipse's centre that gives it, from its
-    plane); ``regional_dip`` toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown
+    fault in the reservoir (m). Unpinned, the clastic displacement-length law gives the fault's maximum displacement, at its tip
+    ellipse's centre, 0.11 L^0.84 with a log10 sd of 0.27 about it (T10, T19), and the throw there is that times the sine of the
+    plane's dip there (:attr:`resmill.faults.Fault.throw`, as ``fold_faults`` draws it); the throw in the reservoir follows from
+    the fault, 0.56-0.86 of it for a Wilcox fault (the tip line's profile) and, for a Frio master, from its plane (one heave for
+    the whole hanging wall), usually more, as the plane is steeper higher up (``labels["masters"]``). A pinned throw is the one
+    in the reservoir and the throw at the centre follows from it. ``regional_dip`` toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown
     thickness, log-uniform 1.1-2.5, 5 % of cases 2.5-5, T18; Wilcox 1.3-2.5), shared among its faults as the count-th root;
     ``density`` of the faults inside the trap with 5 m of throw or more (per km2: log-normal, median 1, 0.5-2, T28).
 
@@ -325,24 +337,32 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
             L = long * (1.0 if frio else float(rng.uniform(0.8, 1.2)))
             ly = 0.5 * L / TIP_ASPECT
             z_k = z_res + tan_a * float(places[k])                            # the reservoir where the fault is
-            displacement = 0.11 * L ** 0.84 * 10.0 ** (0.27 * (u["scatter"] if k == 0 else rng.normal()))   # T10, T19
-            t_res = float(displacement * sin_d if throw is None else throw)
+            displacement = 0.11 * L ** 0.84 * 10.0 ** (0.27 * (u["scatter"] if k == 0 else rng.normal()))   # T10, T19: Dmax
             reach = 0.25 * (1.0 + u["reach"])                                 # the tip ellipse's centre 0.25-0.5 half-heights
             zc = z_k + reach * ly * sin_d                                     # below the reservoir, as the population's faults
             r = (zc - z_k) / (sin_d * ly)                                     # the reservoir on the tip ellipse, from its centre
             base = (z_k - RAMP_BASE[0] - (RAMP_BASE[1] - RAMP_BASE[0]) * float(rng.uniform()) if ramp_base is None
                     else float(ramp_base)) if frio else None                  # the ramp ends above the reservoir, the bend there
-            faults.append(Fault(
+            fault = Fault(
                 center=tuple(float(v) for v in mid + places[k] * n), strike=azimuth, length=float(L),
-                throw=float(t_res / ww_profile(r)), dip=float(steep), hanging_wall=1, z_center=float(zc), flatten=bend, ramp_base=base,
+                throw=float(displacement), dip=float(steep), hanging_wall=1, z_center=float(zc), flatten=bend, ramp_base=base,
                 radius=float((_log_uniform(rng, 2.0, 10.0) if frio else _log_uniform(rng, 10.0, 30.0)) * L),
                 hw_share=1.0 if frio else float(rng.uniform(0.6, 0.9)),
                 drag=(0.0, 0.0) if frio else (float(rng.uniform(0.1, 0.3)), float(rng.uniform(0.1, 0.2))),
                 bends=float(rng.uniform(0.02, 0.04) if frio else rng.uniform(0.004, 0.012)),
-                seed=int(rng.integers(2 ** 31)), kind="master"))
-            if frio:                                  # one heave moves the whole hanging wall: its throw at z_center is the one that
-                plane, trace = _plane(faults[-1], zc)                         # gives the reservoir t_res (the Fault checked its values)
-                faults[-1].throw = float(plane(trace(z_k + t_res) - trace(z_k)) - zc)
+                seed=int(rng.integers(2 ** 31)), kind="master")               # (the throw is set below, once the plane is there)
+            plane, trace = _plane(fault, zc)
+            c = displacement * math.sin(math.radians(_centre_dip(fault)))     # Dmax is the displacement at the tip ellipse's centre
+            if frio:                                  # one heave moves the whole hanging wall (faults.py): that of the throw c at z_center
+                if throw is not None:                                         # a pinned throw is the reservoir's: c follows from the plane
+                    c = plane(trace(z_k + throw) - trace(z_k)) - zc
+                t_res = plane(trace(z_k) + trace(zc + c)) - z_k
+            else:
+                if throw is not None:
+                    c = throw / ww_profile(r)
+                t_res = c * ww_profile(r)
+            faults.append(replace(fault, throw=float(c)))                     # (checked again)
+            t_res = float(t_res if throw is None else throw)
             masters.append(dict(length_m=float(L), displacement_m=float(displacement), throw_m=t_res,
                                 centre_throw_m=faults[-1].throw, dip_deg=float(steep), flatten_m=bend, ramp_base_m=base,
                                 z_center_m=float(zc)))
