@@ -5,6 +5,7 @@ import math
 
 import numpy as np
 import pytest
+from scipy import ndimage
 
 from resmill import salt as sl
 from resmill import structure as st
@@ -246,6 +247,113 @@ def test_the_outline_is_a_closed_curve_on_which_the_distance_vanishes():
     assert np.abs(body.distance(out[::97, 0], out[::97, 1], 2150.0)).max() < 0.5
     assert np.hypot(*np.diff(np.vstack([out, out[:1]]), axis=0).T).max() < 40.0         # no gap in the curve
     assert body.inside(*out.mean(axis=0), 2150.0)
+
+
+def exact_distance(body, step, cap):
+    """The cells (x, y) within ``cap`` of the body's contact on a raster of ``step`` m, and the signed distance of each to it
+    by an exact Euclidean distance transform of the mask ``inside`` gives (negative inside; half a pixel from the pixel
+    centres to the edge between them, so good to half a pixel)."""
+    half = 1.3 * max(body.axes) + 1500.0
+    xs = np.arange(-half, half, step) + 0.5 * step
+    X, Y = np.meshgrid(xs + body.center[0], xs + body.center[1], indexing="ij")
+    inside = body.inside(X, Y)
+    d = np.where(inside, -ndimage.distance_transform_edt(inside, sampling=step) + 0.5 * step,
+                 ndimage.distance_transform_edt(~inside, sampling=step) - 0.5 * step)
+    near = np.abs(d) < cap
+    return X[near], Y[near], np.clip(d[near], -cap, cap)
+
+
+LOBATE = {"wall": dict(axes=(6000.0, 1200.0), azimuth=25.0, lobes=0.18, rough=0.04, seeds=(1, 2)),
+          "stock": dict(axes=(1710.0, 1315.0), azimuth=40.0, lobes=0.3, rough=0.04, seeds=(2, 5))}      # R 1500 m, axial ratio 1.3
+
+
+@pytest.mark.parametrize("kind,seed", [(k, s) for k, v in LOBATE.items() for s in v["seeds"]])
+def test_the_distance_of_a_lobate_wall_or_stock_is_the_exact_one_near_its_contact(kind, seed):
+    """A wall with bays of 1-2 km (lobes 0.18 of its half-width, roughness 0.04) and a stock with lobes 0.3 are not star-shaped
+    about their centres, so rays from the centre skip the bays and the polyline chords across them (up to 1.4 km): every cell
+    within the 300 m folding zone must still be within a pixel of the distance an exact transform of the mask gives (the old
+    ray-cast polyline missed it by 229 m on the wall of seed 1, 296 m on the stock of seed 5)."""
+    kw = dict(LOBATE[kind])
+    kw.pop("seeds")
+    body = sl.salt_body((CX, CY), hurst=1.0, seed=seed, **kw)
+    step = 10.0
+    X, Y, exact = exact_distance(body, step, 300.0)
+    assert exact.size > 50000                                                             # a band of 300 m on both sides
+    assert np.abs(body.distance(X, Y, cap=300.0) - exact).max() < step
+    out = body.outline()
+    assert np.hypot(*np.diff(np.vstack([out, out[:1]]), axis=0).T).max() < 1.5 * max(sl._MIN_STEP, min(kw["axes"]) / sl._GRID)
+    assert np.abs(body.distance(out[:, 0], out[:, 1])).max() < 0.1 * step                    # every vertex lies on the contact
+
+
+@pytest.mark.parametrize("kind", ["wall", "stock"])
+def test_the_upturn_meets_a_lobate_contact_at_the_drawn_dip_all_along_it(kind):
+    """Along the whole contact, whatever its bays, the strata rise toward the salt at the drawn dip: the slope of the upturn along
+    the contact's own normal, a few metres outside it, is tan(dip) (1 - d / W) at p = 2."""
+    kw = dict(LOBATE[kind])
+    body = sl.salt_body((CX, CY), hurst=1.0, seed=kw.pop("seeds")[0], **kw)
+    dip, width = 35.0, 400.0
+    term = sl.salt_upturn(body, dip, width)
+    out = body.outline()[::max(len(body.outline()) // 60, 1)]
+    n = body.normal(out[:, 0], out[:, 1])
+    d1, d2 = 1.0, 5.0
+    slope = (term(*(out + d2 * n).T) - term(*(out + d1 * n).T)) / (d2 - d1)               # dz / dd, positive up
+    assert np.degrees(np.arctan(slope)) == pytest.approx(dip, abs=1.5)
+
+
+def test_the_normal_is_the_gradient_of_the_contact_whatever_the_spacing_of_its_vertices():
+    """For an ellipse of semi-axes 900 and 300 m the outward normal at (900 cos t, 300 sin t) is the unit vector of
+    (cos t / 900, sin t / 300); rotated by the azimuth, in the package's convention (the long axis along (cos az, -sin az))."""
+    az = math.radians(30.0)
+    body = sl.salt_body((CX, CY), (900.0, 300.0), azimuth=30.0)
+    t = np.array([0.0, 0.7, 2.0, 4.1])
+    u, v = 900.0 * np.cos(t), 300.0 * np.sin(t)                                              # along and across the long axis
+    x, y = CX + u * math.cos(az) + v * math.sin(az), CY - u * math.sin(az) + v * math.cos(az)
+    nu, nv = np.cos(t) / 900.0, np.sin(t) / 300.0
+    nu, nv = nu / np.hypot(nu, nv), nv / np.hypot(nu, nv)
+    expected = np.column_stack([nu * math.cos(az) + nv * math.sin(az), -nu * math.sin(az) + nv * math.cos(az)])
+    assert body.normal(x, y) == pytest.approx(expected, abs=1e-4)
+    assert body.normal(x[1], y[1]).shape == (2,)
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_the_contact_traces_every_curve_of_the_body_and_the_salt_lies_on_its_left(seed):
+    """The signed area of all the loops of the contact (counterclockwise round salt, clockwise round a hole) is the area of the
+    mask on a raster: nothing of a folded body (an island, a hole) is missed or doubled, and the box that is contoured holds
+    the whole body, for walls and stocks with any lobes (to 0.3), roughness (to 0.05) and Hurst exponent."""
+    rng = np.random.default_rng(seed)
+    b = float(rng.uniform(500.0, 1500.0))
+    axes = (b * float(rng.uniform(1.0, 5.0)), b)
+    body = sl.salt_body((CX, CY), axes, azimuth=float(rng.uniform(0.0, 180.0)), lobes=float(rng.uniform(0.05, 0.3)),
+                        rough=float(rng.uniform(0.02, 0.05)), hurst=float(rng.uniform(0.0, 1.5)), seed=seed,
+                        shape=float(rng.uniform(2.0, 3.0)))
+    loops = body._contact(body.z_ref)[0]
+    area = sum(0.5 * np.sum(l[:, 0] * np.roll(l[:, 1], -1) - np.roll(l[:, 0], -1) * l[:, 1]) for l in loops)
+    step = 20.0
+    half = 1.3 * max(axes) + 1500.0
+    xs = np.arange(-half, half, step) + 0.5 * step
+    X, Y = np.meshgrid(xs + CX, xs + CY, indexing="ij")
+    assert area == pytest.approx(body.inside(X, Y).sum() * step ** 2, rel=0.02)
+    assert body.inside(X[0], Y[0]).sum() == 0 and body.inside(X[-1], Y[-1]).sum() == 0     # the raster's own edge is outside
+
+
+def test_the_roughness_is_reduced_where_its_slope_would_fold_the_outline_and_the_reduction_is_reported(monkeypatch):
+    """hurst 0 gives the finest octave (range 150 m) the sd of the coarsest, rough x radius = 0.05 x 1.5 km = 75 m: the slope of
+    a Gaussian-covariance field has an sd of sqrt(6) sd / range = 1.2 per component, and over thousands of independent cells
+    the steepest slope reaches 4-5, which would fold the outline (3-8 islands or holes on bodies of 6 km). One factor scales both
+    displacements down to a steepest slope of 0.9: 0.9 / 5 = 0.18 of the nominal roughness here, and the body stays whole."""
+    def pieces(body):
+        step = 25.0
+        xs = np.arange(-6500.0, 6500.0, step) + 0.5 * step
+        inside = body.inside(*np.meshgrid(xs + CX, xs + CY, indexing="ij"))
+        return ndimage.label(inside)[1] - 1 + ndimage.label(~inside)[1] - 1
+
+    make = lambda seed: sl.salt_body((CX, CY), (3000.0, 1800.0), azimuth=30.0, rough=0.05, hurst=0.0, seed=seed)
+    bodies = [make(seed) for seed in range(4)]
+    assert all(0.1 <= b.rough_scale <= 0.3 for b in bodies) and sl.salt_body((CX, CY), (R, R)).rough_scale == 1.0
+    assert [pieces(b) for b in bodies] == [0, 0, 0, 0]
+    monkeypatch.setattr(sl, "_MAX_SLOPE", 9.0)                                                # the guard off
+    unguarded = [make(seed) for seed in range(4)]
+    assert all(b.rough_scale == 1.0 for b in unguarded) and sum(pieces(b) for b in unguarded) >= 4
 
 
 def test_a_body_that_has_pinched_out_at_depth_is_absent_there():

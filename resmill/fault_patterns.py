@@ -362,8 +362,7 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
         seg = np.hypot(*(np.roll(poly, -1, axis=0) - poly).T)
         near = _inside(fr, allowed, poly[:, 0], poly[:, 1])                      # the contact within reach of the trap
         if near.sum() > 1:
-            tang = np.roll(poly, -1, axis=0) - np.roll(poly, 1, axis=0)
-            normals = np.column_stack([tang[:, 1], -tang[:, 0]]) / np.hypot(*tang.T)[:, None]   # out of the salt
+            normals = salt.normal(poly[:, 0], poly[:, 1])                                       # out of the salt
             az = math.radians(salt.azimuth)
             u = ((poly[:, 0] - salt.center[0]) * math.cos(az) - (poly[:, 1] - salt.center[1]) * math.sin(az)) / salt.axes[0]
             elongate = salt.axes[0] >= 1.5 * salt.axes[1]

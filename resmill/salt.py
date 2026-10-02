@@ -14,7 +14,8 @@ Salt is a mask and two terms of the structure, nothing more (rows N1-N39 of ``st
   holds the reservoir interval only, so the part of a trap beneath an overhang is as wide as the underside reaches across the
   interval, ``h0 / (s + H / L)`` for beds of slope ``s``: a steep underside leaves one cell, a gentle one many). Pillars are
   vertical, so the wall is a staircase on cell faces; the error of its position is under half a cell, and the upturn beside it must
-  be at least two cells wide (:attr:`SaltBody.max_cell`).
+  be at least two cells wide (:attr:`SaltBody.max_cell`). The contact the upturn follows is the contour of that implicit shape
+  (:meth:`SaltBody.distance`), so the bays of a lobate wall count and nothing assumes the body is star-shaped.
 * :func:`salt_upturn` lifts the strata toward the wall by ``A (1 - d/W)^p`` over a folding zone of width ``W`` (d the
   horizontal distance from the contact), with ``A = W tan(dip) / p`` so that the strata meet the contact at ``dip``
   (the largest upturn dip, 5-50 degrees in East Texas, N9; to 85 degrees and overturned in deep water, N15, N16). The
@@ -40,6 +41,7 @@ transmissibility of those beside the contact falls: its 10th percentile is 0.41 
 import math
 from collections import namedtuple
 
+import contourpy
 import numpy as np
 from scipy.spatial import cKDTree
 
@@ -56,7 +58,8 @@ MAX_ROUGH = 0.05          # the largest outline roughness, as a fraction of the 
 MIN_RANGE = 150.0         # m: the finest octave of the outline's roughness, three cells of 50 m [J]
 _MAX_SLOPE = 0.9          # the steepest slope the roughness' displacement may have, so that its warp cannot fold
 _ABOVE = -1.0e5           # m: a depth above every cell, where the truncating surface cuts nothing
-_RAYS = 16000             # directions the outline is cast along
+_GRID = 80                # cells across the narrowest semi-axis of the grid the contact is contoured on
+_MIN_STEP = 6.0           # m: the finest such grid
 
 
 def _to_segment(p, a, b):
@@ -91,17 +94,20 @@ class SaltBody:
         self.radius = min(self.axes)                                   # lobes are a fraction of it
         rng = np.random.default_rng(seed)
         self._waves = _waves(rng) if lobes else None
-        self._rough = float(rough)
-        self._warp = self._roughen(rough, float(hurst), rng) if rough else None
+        self._warp, self.rough_scale, shift = self._roughen(rough, float(hurst), rng) if rough else (None, 1.0, 0.0)
+        self._pad = shift + 6.0 * math.sqrt(2.0 / 6.0) * lobes * self.radius   # the most the warps move the outline (m)
         self._widths = []                                              # the folding zones of the terms built on this body
-        self._trees = {}
+        self._contacts = {}
 
     def _roughen(self, rough, hurst, rng):
         """The displacement fields (m, along and across the body's axes) that roughen its outline at several scales: a sum
         of octaves of :func:`resmill.structure.roughness`, ranges from the larger of the radius and half the long axis, halving
         down to :data:`MIN_RANGE`, each of sd ``rough x radius x (range / radius)^hurst``, drawn over a box round the body and
-        resampled once on a grid of 30 m. Reduced where their slope would exceed :data:`_MAX_SLOPE`, so that the warp they
-        make cannot fold. Returns ``((fu, fv), half)``: two Structures over ``[0, 2 half]^2``."""
+        resampled once on a grid of 30 m. Both are reduced by one factor ``scale`` (<= 1) where the steepest slope of either would
+        exceed :data:`_MAX_SLOPE`, so the realised ``rough`` is ``scale`` times the nominal one (``rough_scale``, 1 where no slope
+        is that steep; 0.6-0.9 at hurst 1 and rough 0.05, less below hurst 1); this keeps the warp from folding to a first approximation
+        only (the lobes' warp can fold too, and a folded body has islands or holes, which the contact and the mask both follow).
+        Returns ``(((fu, fv), half), scale, bound)``: two Structures over ``[0, 2 half]^2``, and the largest displacement (m)."""
         a0 = self.radius
         top = max(a0, 0.5 * max(self.axes))                           # a wall meanders over its length
         ranges = [a for a in (top / 2 ** i for i in range(24)) if a >= MIN_RANGE] or [a0]
@@ -112,7 +118,7 @@ class SaltBody:
         fields = [sum(roughness(rough * a0 * (a / a0) ** hurst, a, size, size, seed=int(rng.integers(2 ** 31)))(*G)
                       for a in ranges) for _ in range(2)]
         scale = min(1.0, _MAX_SLOPE / max(np.hypot(*np.gradient(f, grid[1])).max() for f in fields))
-        return tuple(surface(scale * f, size, size) for f in fields), half
+        return (tuple(surface(scale * f, size, size) for f in fields), half), scale, scale * max(np.abs(f).max() for f in fields)
 
     @property
     def max_cell(self):
@@ -151,45 +157,66 @@ class SaltBody:
         ``z_ref``."""
         return self._gauge(x, y, self.z_ref if z is None else z) < 1.0
 
+    def _contact(self, z):
+        """The contact at depth ``z``: ``(loops, tree, vertices, next, previous, step)``, its closed polylines (counterclockwise
+        round the salt, so that the salt lies on the left of each), a KD-tree of all their vertices with the index of the
+        two neighbours of each, and the longest segment. It is the contour of the gauge at 1 (marching squares) on a grid
+        of ``min(a, b) / 80`` (at least 6 m) over the box that no displacement of the outline can leave, in the body's own axes:
+        nothing is assumed about its shape, so a wall, a bay, an island or a hole is in it as the mask has it."""
+        if z not in self._contacts:
+            dz = z - self.z_ref
+            a, b = self.axes[0] + self._widen(dz), self.axes[1] + self._widen(dz)
+            if not (a > 0.0 and b > 0.0):
+                raise ValueError(f"the body has no outline at {z:g} m (it has pinched out)")
+            h = max(_MIN_STEP, min(a, b) / _GRID)
+            us, vs = (h * np.arange(-n, n + 1) for n in (int(math.ceil((r + self._pad) / h)) + 2 for r in (a, b)))
+            c, s = math.cos(math.radians(self.azimuth)), math.sin(math.radians(self.azimuth))
+            cx, cy = self.center[0] + self.lean[0] * dz, self.center[1] + self.lean[1] * dz
+            U, V = np.meshgrid(us, vs, indexing="ij")
+            g = self._gauge(cx + c * U + s * V, cy - s * U + c * V, z)
+            lines = contourpy.contour_generator(us, vs, g.T, line_type=contourpy.LineType.Separate).lines(1.0)
+            loops = [np.column_stack([cx + c * l[:, 0] + s * l[:, 1], cy - s * l[:, 0] + c * l[:, 1]])[-2::-1]
+                     for l in lines if len(l) > 3]                           # reversed (salt on the left), closing vertex dropped
+            loops = [l[(l != np.roll(l, -1, axis=0)).any(axis=1)] for l in loops]   # a grid point on the contact comes three times
+            sizes = np.array([len(l) for l in loops])
+            first = np.repeat(np.cumsum(sizes) - sizes, sizes)
+            at = np.arange(sizes.sum()) - first
+            n = np.repeat(sizes, sizes)
+            V = np.vstack(loops)
+            nxt, prv = first + (at + 1) % n, first + (at - 1) % n
+            step = float(np.hypot(*(V[nxt] - V).T).max())
+            self._contacts = {**dict(list(self._contacts.items())[-3:]), z: (loops, cKDTree(V), V, nxt, prv, step)}
+        return self._contacts[z]
+
     def outline(self, z=None):
-        """The contact at depth ``z`` (default ``z_ref``) as a closed polyline (N, 2): the body's boundary found along
-        ``_RAYS`` directions from its centre by bisection."""
+        """The contact at depth ``z`` (default ``z_ref``) as a closed polyline (N, 2), counterclockwise round the salt: the
+        longest closed curve of the body's boundary there (a lobate body can have islands and holes as well, which
+        :meth:`distance` honours and this does not return)."""
+        return max(self._contact(self.z_ref if z is None else float(z))[0], key=len)
+
+    def normal(self, x, y, z=None):
+        """Unit normals (..., 2) pointing out of the salt at points (x, y) on its contact at depth ``z`` (default ``z_ref``): the
+        gradient of the gauge, which is exact where the polyline's tangents wobble with the spacing of its vertices."""
         z = self.z_ref if z is None else float(z)
-        dz = z - self.z_ref
-        a, b = self.axes[0] + self._widen(dz), self.axes[1] + self._widen(dz)
-        if not (a > 0.0 and b > 0.0):
-            raise ValueError(f"the body has no outline at {z:g} m (it has pinched out)")
-        cx, cy = self.center[0] + self.lean[0] * dz, self.center[1] + self.lean[1] * dz
-        if not self._gauge(cx, cy, z) < 1.0:
-            raise ValueError("the lobes carry the body's centre out of it; use a smaller lobes or another seed")
-        t = np.linspace(0.0, 2.0 * np.pi, _RAYS, endpoint=False)
-        ux, uy = np.cos(t), np.sin(t)
-        lo, hi = np.zeros(_RAYS), np.full(_RAYS, 2.0 * max(a, b) + 4.0 * (self.lobes + 2.0 * self._rough) * self.radius)
-        for _ in range(48):
-            mid = 0.5 * (lo + hi)
-            inside = self._gauge(cx + mid * ux, cy + mid * uy, z) < 1.0
-            lo, hi = np.where(inside, mid, lo), np.where(inside, hi, mid)
-        rho = 0.5 * (lo + hi)
-        return np.column_stack([cx + rho * ux, cy + rho * uy])
+        x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+        g = np.stack([self._gauge(x + 0.5, y, z) - self._gauge(x - 0.5, y, z),
+                      self._gauge(x, y + 0.5, z) - self._gauge(x, y - 0.5, z)], axis=-1)
+        return g / np.hypot(g[..., 0], g[..., 1])[..., None]
 
     def distance(self, x, y, z=None, cap=None):
         """Signed horizontal distance (m) from points (x, y) to the contact at depth ``z`` (default ``z_ref``, a single
-        depth): negative inside the salt, positive outside, zero on the contact. It is the distance to the outline's
-        polyline (nearest vertex, then the two segments there), so its gradient has length 1. With ``cap`` a distance
+        depth): negative inside the salt, positive outside, zero on the contact. It is the distance to the contact's polylines
+        (all of them: nearest vertex, then the two segments there), so its gradient has length 1. With ``cap`` a distance
         beyond it is returned as ``+-cap``, which is much faster (a point far from the contact has many equally near
         vertices to rule out): the upturn only needs the distance within its folding zone."""
         z = self.z_ref if z is None else float(z)
-        if z not in self._trees:
-            poly = self.outline(z)
-            step = float(np.hypot(*np.diff(np.vstack([poly, poly[:1]]), axis=0).T).max())
-            self._trees = {**dict(list(self._trees.items())[-3:]), z: (cKDTree(poly), poly, step)}
-        tree, poly, step = self._trees[z]
+        _, tree, V, nxt, prv, step = self._contact(z)
         x, y = np.broadcast_arrays(np.asarray(x, dtype=float), np.asarray(y, dtype=float))
         p = np.column_stack([x.ravel(), y.ravel()])
         d, i = tree.query(p, distance_upper_bound=math.inf if cap is None else cap + step)
         far = ~np.isfinite(d)
         i = np.where(far, 0, i)
-        d = np.minimum(_to_segment(p, poly[i], poly[(i + 1) % len(poly)]), _to_segment(p, poly[i], poly[i - 1]))
+        d = np.minimum(_to_segment(p, V[i], V[nxt[i]]), _to_segment(p, V[i], V[prv[i]]))
         if cap is not None:
             d = np.where(far, cap, np.minimum(d, cap))
         return np.where(self._gauge(x, y, z).ravel() < 1.0, -d, d).reshape(x.shape)
@@ -210,7 +237,8 @@ def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, 
     long axis of a wall, if larger) halving down to :data:`MIN_RANGE` (150 m), each of sd ``rough x radius x (range /
     radius)^hurst``, displacing the outline along its normal and moving with its lean (the Santos stock and the Sigsbee
     feeders show 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave: ``hurst`` about 1); ``seed``
-    is required with it. ``overhang`` = (lateral extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck)
+    is required with it. A slope limit scales all the octaves down together where one would fold the outline: the roughness
+    realised is ``rough_scale`` (an attribute, 1 where nothing is that steep) times ``rough``. ``overhang`` = (lateral extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck)
     from H above it upward, linearly between: an underside dipping ``atan(H / L)`` from horizontal, which a reservoir lifted
     into it meets (East Texas stocks overhang by 0.15-2.6 km, P50 0.37 km, over 0.5-2.4 km of height, an underside of 35-68
     degrees; the shoulders of Precaspian walls are 0.3-1.5 km wide at 15-30 degrees). Returns a :class:`SaltBody`.
