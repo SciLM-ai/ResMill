@@ -197,6 +197,8 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
         raise ValueError(f"style must be one of {STYLES}, got {style!r}")
     if (style == "salt_flank") != (salt is not None) or (salt is None and (upturn is not None or radial_rate is not None)):
         raise ValueError("the salt_flank style needs a salt body (salt=), and only it takes one (and its upturn=, radial_rate=)")
+    if radial_rate is not None and not radial_rate >= 0.0:
+        raise ValueError(f"radial_rate must be >= 0 (faults per km of contact), got {radial_rate}")
     rng = np.random.default_rng(seed)
     fr = _frame(fold, x_len, y_len, dx)
     if fr is None:

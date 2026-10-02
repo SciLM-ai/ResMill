@@ -71,6 +71,11 @@ def test_the_style_needs_a_salt_body_and_only_it_takes_one():
         fold_faults("salt_flank", f, X_LEN, Y_LEN, DX, 1.0, TOP, THICK, seed=1)
     with pytest.raises(ValueError, match="salt"):
         fold_faults("four_way", f, X_LEN, Y_LEN, DX, 1.0, TOP, THICK, seed=1, salt=flank(f))
+    with pytest.raises(ValueError, match="radial_rate"):
+        fold_faults("four_way", f, X_LEN, Y_LEN, DX, 1.0, TOP, THICK, seed=1, radial_rate=1.0)
+    with pytest.raises(ValueError, match="radial_rate"):
+        faults_of(f, flank(f), 1, radial_rate=-0.5)
+    assert not [g for g in faults_of(f, flank(f), 1, radial_rate=0.0) if g.kind == "radial"]
 
 
 def test_radial_faults_have_the_santos_lengths_dips_aspect_and_throws():
