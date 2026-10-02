@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- `salt_flank_trap` indexed the fold's crest by its column as `int(crest // cell)`, which is one past the last column
+  (or more) when a strongly tilted wide closure puts the crest beyond the map: `closure_stats` raised an `IndexError`
+  (ResSimMill's re-review: 2 job errors in 1,200 pilot-mix trees; a salt flank on 128 m cells of 41 columns, crest
+  column 42). The crest is read in the edge column, where the trap drains out of the map and closes over nothing, as
+  `fold_trap` reads it; any crest on the map is read as before (the 14 default composers' hashes are identical).
 - `max_levels` (`DeltaLayer`, with `tree_ntg_stop=True`) in a zone no thicker than its trunk is deep grew a
   network at the first level only. The progradation follows each level's height above the first level's top,
   divided by the room above it (the zone's thickness minus the trunk's depth), which is nothing or negative in such a

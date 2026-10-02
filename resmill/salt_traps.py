@@ -127,7 +127,9 @@ def salt_flank_trap(x_len, y_len, dx, top, thickness, closure, body, *, normal, 
     sequence, power, relief, cut = _upturn(width, dip, thinning, relief_cap, taper, angle, loss, thickness)
     center, fold, crest = _fold(x_len, y_len, closure, roughness)
     sx, sy, X, Y = _centres(x_len, y_len, dx)
-    stats = st.closure_stats(top + fold(X, Y), sx, sy, crest=(int(crest[0] // sx), int(crest[1] // sy)))
+    nx, ny = X.shape        # a strongly tilted closure puts the fold's crest beyond the map: its edge column
+    stats = st.closure_stats(top + fold(X, Y), sx, sy, crest=(min(max(int(crest[0] // sx), 0), nx - 1),
+                                                              min(max(int(crest[1] // sy), 0), ny - 1)))
     a = math.radians(normal)
     u = np.array([math.cos(a), math.sin(a)])
     contact = crest - wall_at * _reach(stats["mask"], crest, -u, sx, sy) * u         # beyond the crest: it is cut off

@@ -488,3 +488,22 @@ def test_subsalt_refuses_an_unknown_kind_and_a_missing_share():
         subsalt(kind="truncated", cut=None)
     with pytest.raises(ValueError, match="margin"):
         subsalt(kind="cover", cut=None, margin=None)
+
+
+def test_a_crest_beyond_the_maps_edge_is_the_edge_column():
+    """A strongly tilted wide closure (the re-review's seed 13 tree 295 of ResSimMill's pilot) puts the fold's crest more
+    than a column beyond the map's edge, y = 5,313 m on a map of 5,248 m (41 columns of 128 m): the column index of
+    the crest was 42 on an axis of 41 and closure_stats raised an IndexError. The crest is read in the edge column, as
+    fold_trap's :func:`resmill.fold_traps.crest_cell` reads it."""
+    closure = dict(area=17372435.72881611, height=36.603053851996286, aspect=2.094000958530755, azimuth=163.8967610037769,
+                   limb_ratio=1.016417522125925, tilt=0.3402590320505162, satellites=0, warp=0.3477286710274421, seed=2023973523)
+    body = dict(axes=(12000.0, 1959.5469212028581), lobes=0.21492466208105682, rough=0.03975157507166223, hurst=1.0,
+                seed=969784178, flare=0.1277143340676324)
+    built = salt_flank_trap(8192.0, 5248.0, 128.0, 3595.1835985146, 16.0494444947671, closure=closure, body=body,
+                            normal=108.75372586133084, wall_at=0.29631813380298266, width=1007.7911402892726, neck=0.6,
+                            waist=3.6347067474188255, n_layers=2, upturn_in_outline=True, taper=25.07633505282498,
+                            loss=0.41747699264724986, roughness=dict(sd=7.62491734908135, range_m=5889.316760131045, seed=1935900569),
+                            faults=dict(density=0.9243377657120679, over_salt=False, seed=1967989701, radial_rate=0.5179222058918023),
+                            rim=788.6510693052464)
+    # the trap is read at the edge column, (41 - 1/2) x 128 = 5,184 m, where it drains out of the map: no closure
+    assert built["meta"]["crest"][1] == pytest.approx(5184.0) and built["meta"]["closure_height_m"] == 0.0
