@@ -18,9 +18,9 @@ set (R-1 to R-14 of ``fold_fault_relations.md``):
   point with minor faults in its hanging wall; inherited faults in some cases; relays where the grid resolves them;
 * the salt-flank style adds the faults round a salt contact (``salt``, :mod:`resmill.salt`): radial faults of the Santos
   stock (N19-N23 of ``step5_salt.md``), centred on the contact so that half of each is hidden in the salt, striking
-  along its normal, 3-6 groups round the body and more at the ends of an elongate one, and, where the flank dips 60
-  degrees or less, a few ring faults concentric with it; the fold-related and regional sets then follow the trap
-  the salt leaves;
+  along its normal, 3-6 groups round the body and more at the ends of an elongate one, their count a rate per km of
+  the contact within reach of the trap, and, where the flank dips 60 degrees or less, a few ring faults concentric
+  with it; the fold-related and regional sets then follow the trap the salt leaves;
 * throw 0.03 L^0.92 sin(dip) 10^N(0, 0.27) on Norne's lengths, dips by kind, curvature, wander.
 
 Each fault's tip ellipse is placed from the reservoir's depth at the fault (the datum ``top`` plus the fold there). The
@@ -172,7 +172,7 @@ def _kind(angle, axis):
 
 
 def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, regional=None, over_salt=False,
-                max_faults=300, salt=None, upturn=None):
+                max_faults=300, salt=None, upturn=None, radial_rate=None):
     """The faults of one folded trap (a list of :class:`resmill.faults.Fault`, in genetic order).
 
     ``style`` is one of :data:`STYLES`; ``fold`` the trap's structure without roughness (depth shift, m, positive
@@ -189,12 +189,14 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
     and ring faults at the contact (at its reference depth) are part of the count, as the fold's own sets are.
     ``upturn`` (with ``salt``) is the :func:`resmill.salt.salt_upturn` term the grid adds to the fold: the faults are
     applied after it, so their tip lines centre on the reservoir as it lies lifted beside the salt (the trap itself
-    stays the fold's closure).
+    stays the fold's closure). The radial faults' count follows the contact, not the trap's area: ``radial_rate`` faults
+    per km of the contact that lies within reach of the trap (drawn per model, log-uniform 0.5-2.5 [J] about the 1.8 per
+    km that the Santos stock shows at one level, when not given); the density's budget then holds the rest.
     """
     if style not in STYLES:
         raise ValueError(f"style must be one of {STYLES}, got {style!r}")
-    if (style == "salt_flank") != (salt is not None) or (upturn is not None and salt is None):
-        raise ValueError("the salt_flank style needs a salt body (salt=), and only it takes one (and its upturn=)")
+    if (style == "salt_flank") != (salt is not None) or (salt is None and (upturn is not None or radial_rate is not None)):
+        raise ValueError("the salt_flank style needs a salt body (salt=), and only it takes one (and its upturn=, radial_rate=)")
     rng = np.random.default_rng(seed)
     fr = _frame(fold, x_len, y_len, dx)
     if fr is None:
@@ -369,17 +371,17 @@ def fold_faults(style, fold, x_len, y_len, dx, density, top, thickness, seed, re
                                      (np.arange(n_group) + rng.uniform(0.15, 0.85, n_group)) / n_group)   # one another [J]
             groups = np.minimum(groups, len(poly) - 1)
             radial_length = lambda: float(np.clip(10.0 ** rng.normal(math.log10(1100.0), 0.205), 400.0, 3700.0))  # N19
-            own = int(round(density * area)) - int(round(density * p * area))                    # the trap's own count
-            for _ in range(int(round(rng.uniform(0.4, 0.8) * own))):                              # their share of it [J]
-                for _try in range(20):                                               # about 300 m about a group's centre [J]
-                    j = (int(rng.choice(groups)) + int(round(rng.normal(0.0, 300.0 / seg.mean())))) % len(poly)
-                    if near[j]:
+            rate = 10.0 ** rng.uniform(math.log10(0.5), math.log10(2.5)) if radial_rate is None else float(radial_rate)   # [J]
+            for _ in range(int(round(rate * seg[near].sum() / 1000.0))):                          # per km of contact (Santos H2: 1.8)
+                for _try in range(20):                           # a fault out of reach of the reservoir is no fault of the count
+                    j = (int(rng.choice(groups)) + int(round(rng.normal(0.0, 300.0 / seg.mean())))) % len(poly)   # [J] ~300 m
+                    if not near[j]:                                                       # about a group's centre
+                        continue
+                    angle = math.atan2(normals[j, 1], normals[j, 0]) + math.radians(rng.normal(0.0, 10.0))   # along the normal [J]
+                    if drawn(poly[j, 0], poly[j, 1], angle, "radial", radial_length, dip=rng.uniform(50.0, 60.0), cap=80.0,
+                             aspect=1.9, clip=False, relay=False) is not None:           # N19: 50-60 degrees, < 80 m
+                        counted += 1
                         break
-                else:
-                    continue
-                angle = math.atan2(normals[j, 1], normals[j, 0]) + math.radians(rng.normal(0.0, 10.0))   # along the normal [J]
-                counted += drawn(poly[j, 0], poly[j, 1], angle, "radial", radial_length, dip=rng.uniform(50.0, 60.0),
-                                 cap=80.0, aspect=1.9, clip=False, relay=False) is not None   # N19: 50-60 degrees, < 80 m
             for _ in range(int(rng.integers(0, 3))):                                             # ring faults: few [J]
                 j = int(rng.choice(np.flatnonzero(near)))
                 try:                                     # the flank's dip from how far the contact moves out per metre down

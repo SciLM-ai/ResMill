@@ -90,6 +90,45 @@ def test_radial_faults_have_the_santos_lengths_dips_aspect_and_throws():
                >= MIN_THROW - 1e-9 for g in radial)
 
 
+def contact_km(body):
+    """Length (km) of the contact at its reference depth, from the outline's polyline (independent of fold_faults)."""
+    poly = body.outline()
+    return float(np.hypot(*np.diff(np.vstack([poly, poly[:1]]), axis=0).T).sum()) / 1000.0
+
+
+def big_fold():
+    """A closure of 60 km2 that holds the whole contact of a stock on its crest, so every part of the contact is near the
+    trap and the contact's length is the perimeter."""
+    return st.closure(area=60e6, height=150.0, aspect=1.2, azimuth=20.0, center=CENTER, warp=0.1, seed=2)
+
+
+@pytest.mark.parametrize("radius", [1000.0, 1800.0])
+def test_the_radial_count_is_the_rate_per_km_times_the_length_of_the_contact(radius):
+    """Round the Santos stock the throw maxima lie at about 1.8 per km of contact at one level (17 round 9.4 km, H2 of
+    Coleman et al. 2018, Fig. 3); a count tied to the contact's length gives twice the faults to a contact twice as
+    long, whatever the trap's area and the density (a density of 0 still draws the set)."""
+    f = big_fold()
+    body = stock(f, radius=radius)
+    length = contact_km(body)
+    assert length == pytest.approx(2.0 * math.pi * radius / 1000.0, rel=0.02)
+    for rate in (0.5, 1.0, 2.0):
+        counts = [sum(g.kind == "radial" for g in faults_of(f, body, s, density=0.0, radial_rate=rate)) for s in range(10)]
+        assert np.mean(counts) == pytest.approx(rate * length, abs=0.5 + 0.05 * rate * length)
+        assert np.ptp(counts) <= 2                                           # the count is the rule, not a random number
+
+
+def test_the_radial_rate_is_drawn_per_model_between_the_bounds_when_not_given():
+    """0.5-2.5 per km of contact, log-uniform [J] around the 1.8 measured at Santos: the rate realised is the count over
+    the contact's length, within the bounds (one fault of rounding) and spread across them."""
+    f = big_fold()
+    body = stock(f, radius=1800.0)
+    length = contact_km(body)
+    rates = np.array([sum(g.kind == "radial" for g in faults_of(f, body, s, density=0.0)) / length for s in range(60)])
+    assert rates.min() >= 0.5 - 1.0 / length and rates.max() <= 2.5 + 1.0 / length
+    assert rates.min() < 0.8 and rates.max() > 1.8
+    assert 0.9 <= np.median(rates) <= 1.5                                   # log-uniform: geometric centre 1.1
+
+
 def test_radial_faults_are_centred_on_the_contact_half_in_the_salt_and_strike_along_its_normal():
     f = fold()
     body = stock(f, radius=1500.0)
@@ -183,22 +222,24 @@ def test_radial_faults_sit_on_the_reservoir_that_the_upturn_lifts():
 def test_the_density_counts_the_visible_trap_and_the_salt_faults_are_part_of_it():
     """S6: faults with 5 m in the reservoir per km2 of the trap, which the salt has cut. The regional faults take their
     share R / (1 + R) of that count over the whole model (R = 1: half); the rest is the trap's own, and the radial and
-    ring faults are part of it, as the fold's own sets are (the radial a 0.4-0.8 share)."""
+    ring faults are part of it, as the fold's own sets are: the fold-related faults fill what the contact's sets leave
+    of the budget (and none when the contact's sets already exceed it: their count follows the contact, not the area)."""
     f = fold()
     body = flank(f, distance=900.0)
     fr = _frame(f, X_LEN, Y_LEN, DX)
     visible = fr["mask"] & ~body.inside(fr["X"], fr["Y"], TOP + fr["depth"] + 0.5 * THICK)
     whole, area = (m.sum() * DX * DX / 1e6 for m in (fr["mask"], visible))
     assert 0.3 * whole < area < 0.9 * whole                                 # the salt took a good part of the closure
-    for density in (0.5, 2.0, 4.0):
-        own, radial = [], []
+    for density in (0.5, 2.0, 8.0):
+        own, contact = [], []
         for s in range(12):
-            fs = faults_of(f, body, s, density, regional=(1.0, 40.0))
+            fs = faults_of(f, body, s, density, regional=(1.0, 40.0), radial_rate=1.0)
             own.append(sum(g.kind in ("radial", "ring", "longitudinal", "oblique", "transverse", "inherited") for g in fs))
-            radial.append(sum(g.kind == "radial" for g in fs))
+            contact.append(sum(g.kind in ("radial", "ring") for g in fs))
         budget = round(density * area) - round(0.5 * density * area)       # the trap's count less the regional share
-        assert abs(np.mean(own) - budget) <= 1.0 + 0.05 * budget
-        assert 0.4 * budget - 1.0 <= np.mean(radial) <= 0.8 * budget + 1.0   # more than the ring faults and the rest add
+        assert abs(np.mean(own) - max(budget, np.mean(contact))) <= 1.0 + 0.05 * budget
+        assert (np.mean(contact) > budget + 1.0) == (density == 0.5)          # the contact's sets pass the budget at 0.5 only
+        assert (budget > np.mean(contact) + 1.0) == (density != 0.5)          # and stay under it at 2 and 8 per km2
 
 
 def test_no_fault_is_drawn_for_salt_far_from_the_trap_and_the_style_still_draws_the_rest():
