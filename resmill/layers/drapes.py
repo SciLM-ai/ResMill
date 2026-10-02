@@ -193,7 +193,8 @@ def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng, 
     the white noise behind the holes, one field per storey drawn from ``rng``. A storey's fill footprint is covered on
     exactly the share ``coverage`` (to one column) when ``margin_bias`` is 0: the columns whose rank in the field is
     below it. With a ``concentration`` each storey's share is a Beta draw from ``rng`` (:func:`_storey_coverage`), after
-    that storey's field, instead; None draws nothing more.
+    that storey's field, instead; the draws shift the later storeys' fields, which are then not those of the same call
+    without it. None draws nothing more.
     """
     nx, ny, _ = fill.shape
     draped = np.zeros((max(int(storey.max()), 0) + 1, nx, ny), dtype=bool)
