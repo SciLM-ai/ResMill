@@ -1,3 +1,6 @@
+import contextlib
+import signal
+
 import numpy as np
 from scipy import ndimage
 import pytest
@@ -120,23 +123,51 @@ def test_closure_stats_measures_a_paraboloid_dome():
     assert stats["mask"][150, 150] and not stats["mask"][0, 0]
 
 
+@contextlib.contextmanager
+def within(seconds):
+    """Fail, not hang, when the block runs over ``seconds`` (SIGALRM, where the platform has it)."""
+    if not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def expired(*_):
+        raise TimeoutError(f"no answer in {seconds} s")
+
+    old = signal.signal(signal.SIGALRM, expired)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
 def test_spill_levels_treat_cells_without_rock_as_walls():
     """A cell of infinite depth is one a fault collapsed (no rock): no path crosses it and its own level stays infinite.
-    Two of them side by side once kept pushing each other onto the flood's queue for ever. A band of them across a map
-    splits it into two maps (each spills at its own edge), and a pit ringed by them has no way out: its level is infinite."""
+    Two of them side by side once kept pushing each other onto the flood's queue for ever (the test gives it 20 s, so that
+    such a regression fails instead of hanging). A band of them across a map splits it into two maps (each spills at its own
+    edge), and a pit ringed by them has no way out: its level is infinite."""
     band = np.full((5, 8), 7.0)
     band[:, 3:5] = np.inf                                                # a collapsed band, two cells wide, across the map
     band[2, 6] = 1.0                                                     # a pit east of it
     band[2, 1] = 2.0                                                     # and one west
-    spill = st._spill_levels(band)
+    with within(20):
+        spill = st._spill_levels(band)
     assert np.isinf(spill[:, 3:5]).all()
     assert (spill[2, 6], spill[2, 1]) == (7.0, 7.0)                      # each spills over its own side's 7 m rim
     ringed = np.full((7, 7), 10.0)
     ringed[2:5, 2:5] = np.inf
     ringed[3, 3] = 2.0                                                   # a pit inside a ring of collapsed cells
-    spill = st._spill_levels(ringed)
+    with within(20):
+        spill = st._spill_levels(ringed)
     assert np.isinf(spill[2:5, 2:5]).all()
     assert (spill[np.isfinite(ringed)][ringed[np.isfinite(ringed)] == 10.0] == 10.0).all()
+    edge = np.full((4, 4), 5.0)
+    edge[0, :] = np.inf                                                  # rockless cells along the edge seed no flood from it
+    edge[2, 2] = 1.0
+    with within(20):
+        spill = st._spill_levels(edge)
+    assert np.isinf(spill[0]).all() and spill[2, 2] == 5.0
 
 
 @pytest.mark.parametrize("kw", [dict(), dict(aspect=3.0, azimuth=30.0), dict(limb_ratio=2.5, tilt=0.4),
@@ -241,6 +272,41 @@ def test_growth_dies_along_strike_with_the_throw_profile():
     assert g(*trace(2500.0)) == pytest.approx(1.0 + 0.559017, abs=1e-5)           # r = 2500 / 5000 = 0.5
     assert g(*trace(5000.0)) == pytest.approx(1.0) and g(*trace(7000.0)) == pytest.approx(1.0)
     assert g(far - 2500.0, 1000.0) == pytest.approx(1.0)                          # footwall
+
+
+def test_growth_of_a_planar_fault_follows_its_tip_ellipse_at_the_zones_depth():
+    """A 10 km fault of aspect 2.15 dipping 60 degrees has a tip ellipse 2,014 m high on either side of its centre (half its length / 2.15
+    x sin(dip)): a zone laid down half of that below the centre, at 3,007 m, meets the fault where its throw is Walsh and Watterson's
+    0.559 of the centre's (r = 0.5). Its step is the heave of that throw, 50 x 0.559 / tan(60) = 16.1 m wide, not the centre's 28.9 m;
+    4,330 m along the strike, where the ellipse's r reaches 1, the fault has no throw and the zone no growth; half way, with the
+    depth in it, the throw is (1 - r)^1.5 (1 + 3 r)^0.5 at r = sqrt(0.5^2 + 0.5^2), 0.501 of the centre's, so the excess of an index of 2 is 0.501."""
+    ww = lambda r: (1.0 - r) ** 1.5 * np.sqrt(1.0 + 3.0 * r)
+    f = growth_fault(length=10000.0, throw=50.0, dip=60.0, z_center=2000.0)
+    depth = 2000.0 + 0.5 * (5000.0 / 2.15) * np.sin(np.radians(60.0))
+    g = st.growth(f, expansion=2.0, width=None, depth=depth)
+    x0 = 1000.0 + (depth - 2000.0) / np.tan(np.radians(60.0))              # the footwall cutoff of the zone, on the centre line
+    width = 50.0 * ww(0.5) / np.tan(np.radians(60.0))
+    assert width == pytest.approx(16.14, abs=0.01)
+    assert g(np.array([x0 - 1.0, x0 + 0.5 * width, x0 + width, x0 + 500.0]), np.full(4, 1000.0)) == pytest.approx([1.0, 1.5, 2.0, 2.0], abs=1e-9)
+    y = lambda s: np.array([1000.0 - s])                                   # the trace runs along -y at strike 90: s m from the centre
+    assert g(np.array([x0 + 500.0]), y(2500.0)) == pytest.approx(1.0 + ww(np.sqrt(0.5)) / ww(0.5), abs=1e-9)
+    assert ww(np.sqrt(0.5)) / ww(0.5) == pytest.approx(0.501, abs=1e-3)
+    assert g(np.array([x0 + 500.0]), y(4400.0)) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_growth_of_a_listric_fault_has_the_one_heave_of_its_hanging_wall_at_every_depth():
+    """Its hanging wall moves by one heave, that of the horizon at the tip ellipse's centre (z_center = the bend), and nothing tapers with
+    depth: a zone above, at or below it steps up over (L / tan(dip)) (exp(T / L) - 1) = 60.2 m (40 degrees, L = 2.5 km, T = 50 m) from its
+    own footwall cutoff, the plane's distance from the trace there, and dies along the strike by the same 0.559 at half the half-length."""
+    f = growth_fault(flatten=2500.0, dip=40.0, z_center=2000.0)
+    tan_d, L = np.tan(np.radians(40.0)), 2500.0
+    heave = L / tan_d * np.expm1(50.0 / L)
+    assert heave == pytest.approx(60.19, abs=0.01)
+    for depth in (1500.0, 2000.0, 4000.0):
+        x0 = 1000.0 + ((depth - 2000.0) / tan_d if depth < 2000.0 else L / tan_d * np.expm1((depth - 2000.0) / L))
+        g = st.growth(f, 2.0, None, depth)
+        assert g(x0 + heave * np.array([-0.1, 0.5, 1.0, 2.0]), np.full(4, 1000.0)) == pytest.approx([1.0, 1.5, 2.0, 2.0], abs=1e-6)
+        assert g(np.array([x0 + 2.0 * heave]), np.array([1000.0 - 2500.0])) == pytest.approx(1.559017, abs=1e-5)
 
 
 @pytest.mark.parametrize("flatten", [None, 2500.0])

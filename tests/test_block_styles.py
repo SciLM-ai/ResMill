@@ -129,6 +129,25 @@ def test_a_long_normal_fault_across_a_ramp_makes_no_trap_of_its_cutoffs_or_its_c
     assert _measure(8000.0, 6000.0, 100.0, TOP, st.ramp(2.0, azimuth=0.0, center=(4000.0, 3000.0)), [f]) is None
 
 
+def test_a_trap_is_not_joined_across_a_sealing_fault_inside_it():
+    """Two culminations 1.6 km apart share one closing contour (the saddle between them is above their flat level), so with no fault the
+    trap is one, 11.6 km2 over both. A fault through the saddle (40 km long, a metre of throw, which cuts no cell's thickness: every corner
+    keeps its 4 m) is a wall: the two sides are two traps, and the one measured is the larger, exactly the free trap's western part (the
+    cells west of the fault at x = 4,000 m), none of it east of the wall."""
+    from resmill import structure as st
+    from resmill.block_styles import _measure
+    fold = st.closure(area=8e6, height=60.0, aspect=1.0, center=(3200.0, 3000.0)) + \
+        st.closure(area=5e6, height=60.0, aspect=1.0, center=(4800.0, 3000.0))
+    wall = Fault(center=(4000.0, 3000.0), strike=90.0, length=40000.0, throw=1.0, dip=60.0, hanging_wall=1, hw_share=1.0, drag=(0.0, 0.0),
+                 z_center=TOP + 2.0, name="F1")
+    free, walled = (_measure(8000.0, 6000.0, 100.0, TOP, fold, faults) for faults in ([], [wall]))
+    west = free["mask"][:40]                                                 # cells whose centres lie west of x = 4,000 m
+    assert free["mask"][:40].any() and free["mask"][40:].any() and free["area"] > 11e6
+    assert not walled["mask"][40:].any()
+    assert np.array_equal(walled["mask"][:40], west) and walled["area"] == pytest.approx(west.sum() * 1e4)
+    assert walled["crest_xy"][0] < 4000.0
+
+
 def test_the_measure_finds_the_closure_a_structure_was_built_with():
     """``closure`` builds a fold whose trap has the area and relief asked for (its own flood measures them): the planning
     map finds them again to a few percent (the rim's cells count whole: 100 m cells overshoot the area by 9 %, 50 m cells by 4 %),
@@ -160,6 +179,16 @@ def test_a_horst_graben_alternates_its_hanging_walls_with_steep_faults_and_littl
         assert [f.hanging_wall for f in faults] == [-1 if k % 2 == 0 else 1 for k in range(len(faults))]
         assert all(55.0 <= f.dip <= 70.0 and 50.0 <= f.throw <= 500.0 for f in faults)
         assert 0.5 <= m.labels["tilt_deg"] <= 5.0 and m.labels["beta"] == 1.0
+
+
+def test_a_dominos_faults_are_long_enough_for_a_displacement_over_length_of_a_tenth():
+    """T10 (Lathrop et al. 2022: 94 % of faults below D / L = 0.1): blocks 5 km wide tilted 20 degrees between faults dipping 30 degrees
+    throw 1.5 km (the cap), a displacement of 3 km, so each fault is at least 30 km long, not the 12 km of 1.2 diagonals of this 8 x 6 km map."""
+    m = tilted_blocks(*SMALL, 3, kind="domino", azimuth=90.0, tilt=20.0, dip=30.0, width=5000.0, scatter=0.0, density=0.0)
+    L = m.labels
+    assert max(L["throws_m"]) == pytest.approx(1500.0, rel=1e-6)
+    assert max(L["throws_m"]) / math.sin(math.radians(30.0)) / L["length_m"] <= 0.1 + 1e-9
+    assert L["length_m"] > 1.2 * math.hypot(8000.0, 6000.0) and all(f.length == L["length_m"] for f in blocks_of(m))
 
 
 def test_transfer_faults_cross_the_blocks_with_a_tenth_to_a_third_of_their_throw():
@@ -209,6 +238,7 @@ def test_the_draws_lie_in_the_research_ranges_and_every_model_holds_a_trap(drawn
     assert all(1500.0 <= L["width_m"] <= 5000.0 and 1 <= L["n_main"] <= 6 for L in labels)
     density = np.array([L["density_per_km2"] for L in labels])                  # log-normal about 1.7 per km2 (T28: 1-3)
     assert density.min() > 0.1 and density.max() < 30.0 and 1.0 <= np.median(density) <= 3.0
+    assert 0.15 < np.log10(density).std(ddof=1) < 0.42                         # a log10 sd of 0.3 [J]: the range's ends are one sd out
     assert np.mean((density >= 1.0) & (density <= 3.0)) >= 0.4
     traps = [L["trap"] for L in labels]
     assert np.mean([t is not None and t["area_km2"] > 0.0 and t["height_m"] > 0.0 for t in traps]) >= 0.9
@@ -465,6 +495,33 @@ def test_a_rollover_seed_gives_the_same_model_and_pinning_changes_only_what_is_p
 def mid_rollovers():
     """Twenty-four rollover models with their population on a 12 x 9 km map of 300 m cells (about a second each)."""
     return [rollover(12000.0, 9000.0, 300.0, TOP, THICK, seed) for seed in range(24)]
+
+
+def test_the_density_of_the_faults_inside_a_rollover_is_log_normal_about_one_per_km2(mid_rollovers):
+    """T28: 0.5-2 faults per km2 with 5 m of throw, a median of 1 and a log10 sd of 0.3 [J] (the range's ends are one sd out): over these 24
+    draws the log10 sd is 0.15-0.42 and the median is within 0.3 dex of 1."""
+    d = np.log10([m.labels["density_per_km2"] for m in mid_rollovers])
+    assert 0.15 < d.std(ddof=1) < 0.42 and abs(np.median(d)) < 0.3
+
+
+def test_each_zones_growth_starts_at_its_own_footwall_cutoff_and_steps_up_over_the_one_heave():
+    """The growth isochore of zone z is laid down at the zone's middle depth, top + (z + 1/2) thickness / zones: its factor is 1 at the
+    footwall cutoff of that depth (the explicit ramp-and-flattening plane there), half way up half a heave on and the full index a heave on, the
+    one heave of a listric master's hanging wall. Three zones of 40 m, a master with a ramp of 60 degrees to 1,500 m and L = 2.5 km."""
+    from resmill.faults import _frame
+    thick = 120.0
+    m = rollover(16000.0, 3000.0, 250.0, TOP, thick, 1, kind="frio", azimuth=90.0, dip=60.0, flatten=2500.0, ramp_base=1500.0, throw=250.0,
+                 regional_dip=0.0, density=0.0, length=12000.0, expansion=2.0, zones=3)
+    f, = [f for f in m.faults if f.kind == "master"]
+    _, inverse = log_plane(f.dip, f.ramp_base, f.flatten)
+    shift = float(inverse(f.z_center))                                       # the bend's trace to the trace at z_center, where `center` is
+    heave = float(inverse(f.z_center + f.throw)) - shift
+    _, h_centre = _frame(f, np.array([f.center[0]]), np.array([f.center[1]]))   # the bent trace's position at the centre, along the dip
+    for z in range(3):
+        cut = float(inverse(TOP + (z + 0.5) * thick / 3.0)) - shift          # the footwall cutoff of the zone's middle depth from the centre
+        h = cut + heave * np.array([-0.05, 0.5, 1.0])
+        x = f.center[0] + h - h_centre[0]
+        assert m.isochore[z](x, np.full(3, f.center[1])) == pytest.approx([1.0, 1.5, 2.0], abs=1e-3)
 
 
 def test_the_closure_of_the_finished_rollovers_is_about_the_rollover_law(mid_rollovers):
