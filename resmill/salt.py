@@ -7,7 +7,8 @@ Salt is a mask and two terms of the structure, nothing more (rows N1-N39 of ``st
   runs on through the salt unseen. The outline is a superellipse of semi-axes ``axes`` at the depth ``z_ref``; it leans
   by ``lean`` m per metre of depth (a wall dipping at ``phi`` leans ``cot(phi)``), grows by ``flare`` m per metre of
   depth (negative: salt wider above, an overhang; positive: a pedestal) and is made irregular by ``lobes`` (smooth random
-  waves displacing its coordinates, as :func:`resmill.structure.closure`'s ``warp``). The outline is tested at each
+  waves displacing its coordinates, as :func:`resmill.structure.closure`'s ``warp``) and, at the smaller scales, by
+  ``rough`` (octaves of :func:`resmill.structure.roughness` of falling sd, ranges one radius down to 150 m). The outline is tested at each
   cell's own depth, so a cell beneath an overhang stays active: that is the trap beneath the overhang that 5 of the 9
   producing East Texas stocks have (N27). Pillars are vertical, so the wall is a staircase on cell faces; the error of
   its position is under half a cell, and the upturn beside it must be at least two cells wide (:attr:`SaltBody.max_cell`).
@@ -35,7 +36,7 @@ import math
 import numpy as np
 from scipy.spatial import cKDTree
 
-from .structure import Structure, _as_field, _axes, _mid
+from .structure import Structure, _as_field, _axes, _mid, roughness, surface
 
 # Salt thickness over discovered subsalt reservoirs (m): SMI 200, GB 171, WC 505, Mica, GB 165, Hickory, Tahiti (N30,
 # Moore & Brooks 2009 and the MMS pages): median 1.0 km, the canopy "more than 15,000 ft (4,572 m) thick in some places".
@@ -44,6 +45,9 @@ MAX_THICKNESS = 4600.0    # m: the canopy's thickest
 MIN_THICKNESS = 100.0     # m: below the thinnest sample (302 m) a log-normal tail has a weld, not a sheet [J]
 MAX_DIP = 85.0            # degrees: the largest upturn dip (the owner's choice over 75, 2026-10-01)
 MAX_LOBES = 0.3           # the largest outline irregularity, as a fraction of the radius (closure's warp reaches 0.35)
+MAX_ROUGH = 0.05          # the largest outline roughness, as a fraction of the radius: beyond it the warp folds
+MIN_RANGE = 150.0         # m: the finest octave of the outline's roughness, three cells of 50 m [J]
+_MAX_SLOPE = 0.9          # the steepest slope the roughness' displacement may have, so that its warp cannot fold
 _RAYS = 16000             # directions the outline is cast along
 
 
@@ -58,12 +62,15 @@ class SaltBody:
     """A salt body: an outline that depends on depth (see the module docstring and :func:`salt_body`)."""
 
     def __init__(self, center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, lobes=0.0, shape=2.0,
-                 seed=None):
+                 seed=None, rough=0.0, hurst=1.0):
         problems = [msg for bad, msg in (
             (not min(axes) > 0.0, "axes must be positive"),
             (not shape >= 2.0, "shape (the superellipse exponent) must be at least 2"),
             (not 0.0 <= lobes <= MAX_LOBES, f"lobes must lie in [0, {MAX_LOBES}]"),
             (lobes > 0.0 and seed is None, "lobes needs a seed (a shared default made every body alike)"),
+            (not 0.0 <= rough <= MAX_ROUGH, f"rough must lie in [0, {MAX_ROUGH}]"),
+            (rough > 0.0 and seed is None, "rough needs a seed (a shared default made every body alike)"),
+            (not hurst >= 0.0, "hurst must be >= 0"),
         ) if bad]
         if problems:
             raise ValueError("SaltBody: " + "; ".join(problems))
@@ -74,8 +81,27 @@ class SaltBody:
         rng = np.random.default_rng(seed)
         self._waves = [(rng.uniform(1.5, 3.5, 6) / self.radius, rng.uniform(0.0, 2.0 * np.pi, 6),
                         rng.uniform(0.0, 2.0 * np.pi, 6)) for _ in range(2)] if lobes else None
+        self._rough = float(rough)
+        self._warp = self._roughen(rough, float(hurst), rng) if rough else None
         self._widths = []                                              # the folding zones of the terms built on this body
         self._trees = {}
+
+    def _roughen(self, rough, hurst, rng):
+        """The displacement fields (m, along and across the body's axes) that roughen its outline at several scales: a sum
+        of octaves of :func:`resmill.structure.roughness`, ranges ``radius``, ``radius / 2`` ... down to :data:`MIN_RANGE`,
+        each of sd ``rough x radius x (range / radius)^hurst``, drawn over a box round the body and resampled once on a
+        grid of 30 m. Reduced where their slope would exceed :data:`_MAX_SLOPE`, so that the warp they make cannot fold.
+        Returns ``((fu, fv), half)``: two Structures over ``[0, 2 half]^2``."""
+        a0 = self.radius
+        ranges = [a for a in (a0 / 2 ** i for i in range(24)) if a >= MIN_RANGE] or [a0]
+        half = 1.5 * max(self.axes) + 6.0 * rough * a0
+        size, step = 2.0 * half, MIN_RANGE / 5.0
+        grid = np.linspace(0.0, size, int(math.ceil(size / step)) + 1)
+        G = np.meshgrid(grid, grid, indexing="ij")
+        fields = [sum(roughness(rough * a0 * (a / a0) ** hurst, a, size, size, seed=int(rng.integers(2 ** 31)))(*G)
+                      for a in ranges) for _ in range(2)]
+        scale = min(1.0, _MAX_SLOPE / max(np.hypot(*np.gradient(f, grid[1])).max() for f in fields))
+        return tuple(surface(scale * f, size, size) for f in fields), half
 
     @property
     def max_cell(self):
@@ -89,6 +115,10 @@ class SaltBody:
         dy = np.asarray(y, dtype=float) - (self.center[1] + self.lean[1] * dz)
         az = math.radians(self.azimuth)
         u, v = dx * math.cos(az) - dy * math.sin(az), dx * math.sin(az) + dy * math.cos(az)
+        if self._warp:                                                 # the same irregularity at every depth
+            (fu, fv), half = self._warp
+            q = np.clip(u + half, 0.0, 2.0 * half), np.clip(v + half, 0.0, 2.0 * half)
+            u, v = u + fu.fn(*q), v + fv.fn(*q)
         if self._waves:
             amp = self.lobes * self.radius * math.sqrt(2.0 / 6.0)
             du, dv = (amp * sum(np.cos(k * (math.cos(a) * u + math.sin(a) * v) + ph) for k, a, ph in zip(*wave))
@@ -117,7 +147,7 @@ class SaltBody:
             raise ValueError("the lobes carry the body's centre out of it; use a smaller lobes or another seed")
         t = np.linspace(0.0, 2.0 * np.pi, _RAYS, endpoint=False)
         ux, uy = np.cos(t), np.sin(t)
-        lo, hi = np.zeros(_RAYS), np.full(_RAYS, 2.0 * max(a, b) + 4.0 * self.lobes * self.radius)
+        lo, hi = np.zeros(_RAYS), np.full(_RAYS, 2.0 * max(a, b) + 4.0 * (self.lobes + 2.0 * self._rough) * self.radius)
         for _ in range(48):
             mid = 0.5 * (lo + hi)
             inside = self._gauge(cx + mid * ux, cy + mid * uy, z) < 1.0
@@ -148,7 +178,8 @@ class SaltBody:
         return np.where(self._gauge(x, y, z).ravel() < 1.0, -d, d).reshape(x.shape)
 
 
-def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, lobes=0.0, shape=2.0, seed=None):
+def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, lobes=0.0, shape=2.0, seed=None,
+              rough=0.0, hurst=1.0):
     """A salt body: stock (equal ``axes``) or wall (axes ratio 3-10; N5).
 
     ``center`` (x, y) and ``axes`` (the semi-axes along and across ``azimuth``, m) give the outline at depth ``z_ref``
@@ -157,9 +188,14 @@ def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, 
     dipping at ``dip`` degrees (0: vertical); ``flare`` = d(radius)/dz changes both semi-axes per metre of depth (< 0
     an overhang, > 0 a pedestal; N3, N8); ``lobes`` (0 to 0.3) is the outline's rms irregularity as a fraction of the
     smaller semi-axis, drawn from ``seed`` (required with lobes); ``shape`` is the superellipse exponent (2 an ellipse,
-    larger flatter-sided: walls). Returns a :class:`SaltBody`.
+    larger flatter-sided: walls). ``rough`` (0 to :data:`MAX_ROUGH`, a fraction of the smaller semi-axis) adds the
+    irregularity of real outlines at the smaller scales: octaves of ranges one radius, a half, a quarter ... down to
+    :data:`MIN_RANGE` (150 m), each of sd ``rough x radius x (range / radius)^hurst`` (the Santos stock and the Sigsbee
+    feeders show 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave: ``hurst`` about 1.2),
+    displacing the outline along its normal and moving with its lean; ``seed`` is required with it. Returns a
+    :class:`SaltBody`.
     """
-    return SaltBody(center, axes, azimuth, z_ref, lean, flare, lobes, shape, seed)
+    return SaltBody(center, axes, azimuth, z_ref, lean, flare, lobes, shape, seed, rough, hurst)
 
 
 def salt_cells(salt, Xc, Yc, Zc):

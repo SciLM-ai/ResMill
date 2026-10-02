@@ -109,6 +109,92 @@ def test_lobes_make_the_outline_irregular_by_that_fraction_of_the_radius():
     assert np.mean(rms) == pytest.approx(0.1 * R, rel=0.35)         # about lobes x radius, the same in every direction
 
 
+RAD = 3000.0                                                        # the radius of the bodies of the roughness tests
+
+
+def residual(body, z=None):
+    """The outline's radial residual (m) from a circle of radius RAD about the body's centre, and its polar angle."""
+    out = body.outline(z)
+    return np.hypot(out[:, 0] - CX, out[:, 1] - CY) - RAD, np.arctan2(out[:, 1] - CY, out[:, 0] - CX)
+
+
+def octaves(radius, hurst, rough):
+    """Hand-computed octaves of the outline's roughness: ranges radius, radius / 2, ... down to MIN_RANGE, and the sd of
+    each, rough x radius x (a / radius)^hurst."""
+    ranges = [radius / 2 ** i for i in range(10) if radius / 2 ** i >= sl.MIN_RANGE]
+    return ranges, [rough * radius * (a / radius) ** hurst for a in ranges]
+
+
+@pytest.mark.parametrize("hurst", [1.0, 1.5])
+def test_rough_makes_the_outline_irregular_by_the_drawn_sd_octave_by_octave(hurst):
+    """``rough`` is the sd of the outline's displacement (fraction of the radius) at a range of one radius, halving in range
+    and falling as range^hurst down to MIN_RANGE (150 m): the Santos stock (H2, Coleman et al. 2018) and the Sigsbee feeders
+    (Duffy et al. 2019) show about 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave. Hand-computed:
+    a 3 km radius, rough 0.04: octaves of range 3000, 1500, 750, 375, 187.5 m with sd 120 m x (range / 3000)^hurst."""
+    ranges, sds = octaves(RAD, hurst, 0.04)
+    assert ranges == [3000.0, 1500.0, 750.0, 375.0, 187.5]
+    assert sds[0] == pytest.approx(120.0) and sds[1] == pytest.approx(120.0 * 0.5 ** hurst)
+    expected = math.sqrt(sum(x * x for x in sds))
+    rms = []
+    for seed in range(24):
+        rho, _ = residual(sl.salt_body((CX, CY), (RAD, RAD), rough=0.04, hurst=hurst, seed=seed))
+        rms.append(math.sqrt(np.mean(rho ** 2)))
+    assert np.mean(rms) == pytest.approx(expected, rel=0.2)          # one curve through the field: few independent samples
+    assert 0.4 * expected < min(rms) and max(rms) < 1.8 * expected
+
+
+def test_rough_adds_short_wavelengths_in_the_proportion_the_hurst_exponent_sets():
+    """With hurst 0 every octave has the same sd, so waves shorter than 1.2 km hold a larger share of the outline's variance
+    than with hurst 1.5, where the coarse octaves dominate (hand-computed from the octave sds: the 375 and 187.5 m octaves
+    carry 2 of 5 equal sds at hurst 0 and 0.002 of the variance at 1.5)."""
+    short = {}
+    for hurst in (0.0, 1.5):
+        share = []
+        for seed in range(12):
+            rho, theta = residual(sl.salt_body((CX, CY), (RAD, RAD), rough=0.03, hurst=hurst, seed=seed))
+            order = np.argsort(theta)
+            t = np.linspace(-math.pi, math.pi, 4096, endpoint=False)
+            rho_t = np.interp(t, theta[order], rho[order], period=2.0 * math.pi)
+            F = np.fft.rfft(rho_t - rho_t.mean())
+            wavelength = 2.0 * math.pi * RAD / np.maximum(np.arange(len(F)), 1)             # m along the circle's circumference
+            power = np.abs(F) ** 2
+            share.append(power[wavelength < 1200.0].sum() / power[1:].sum())
+        short[hurst] = np.mean(share)
+    assert short[0.0] > 2.0 * short[1.5]
+
+
+def test_rough_zero_is_the_plain_shape_and_the_roughness_is_reproducible_and_validated():
+    X, Y = grid()
+    plain = stock().inside(X, Y, 0.0)
+    assert (sl.salt_body((CX, CY), (R, R), rough=0.0).inside(X, Y, 0.0) == plain).all()
+    a = sl.salt_body((CX, CY), (R, R), rough=0.03, seed=4).inside(X, Y, 0.0)
+    assert (a == sl.salt_body((CX, CY), (R, R), rough=0.03, seed=4).inside(X, Y, 0.0)).all()
+    assert (a != sl.salt_body((CX, CY), (R, R), rough=0.03, seed=5).inside(X, Y, 0.0)).any() and (a != plain).any()
+    for bad in (dict(rough=0.03), dict(rough=-0.01, seed=1), dict(rough=0.2, seed=1), dict(rough=0.03, hurst=-1.0, seed=1)):
+        with pytest.raises(ValueError):
+            sl.salt_body((CX, CY), (R, R), **bad)
+
+
+@pytest.mark.parametrize("kw", [dict(rough=0.05, hurst=1.2), dict(rough=0.05, hurst=1.0, lobes=0.15), dict(rough=0.04, hurst=1.0, shape=3.0)])
+def test_a_rough_outline_stays_one_curve_without_islands_or_holes(kw):
+    """The warp that roughens the outline does not fold: the salt cells' area on a raster matches the polygon the outline
+    traces (shoelace), and the cells form one connected body without holes."""
+    from scipy import ndimage
+    for seed in range(8):
+        body = sl.salt_body((CX, CY), (2.0 * R, 1.2 * R), azimuth=30.0, seed=seed, **kw)
+        step = 15.0
+        xs = np.arange(CX - 3.0 * R, CX + 3.0 * R, step) + 0.5 * step
+        X, Y = np.meshgrid(xs, xs, indexing="ij")
+        inside = body.inside(X, Y, 0.0)
+        _, n = ndimage.label(inside)
+        _, holes = ndimage.label(~inside)
+        out = body.outline()
+        x, y = out[:, 0], out[:, 1]
+        poly_area = 0.5 * abs(np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+        assert n == 1 and holes == 1
+        assert inside.sum() * step ** 2 == pytest.approx(poly_area, rel=0.02)
+
+
 def test_a_capped_distance_is_the_distance_within_the_cap_and_the_cap_beyond_it():
     body = stock()
     p = np.array([CX + 100.0, CX + 350.0, CX + 700.0, CX + 1100.0])           # 200 m inside, 50, 400 and 800 m outside
