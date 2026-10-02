@@ -51,13 +51,15 @@ def log_plane(dip, z_c, flatten):
     return plane, inverse
 
 
-def research_rollover(dip, z_b, flatten, z_r, throw, z_anchor=None):
+def research_rollover(dip, z_b, flatten, z_r, throw, z_anchor=None, z_ref=None):
     """The rollover of a flat horizon at z_r over such a plane (ramp to z_b, the bend), by vertical shear with constant heave
     (Gibbs 1983; White et al. 1986): the footwall cutoff is at x_c on the plane, the hanging-wall cutoff where the plane is
     z_r + throw, the heave H between them, and the horizon's depth z_r + F(x_c + p) - F(x_c + p - H) at the distance p east of
-    the footwall cutoff. Returns H, x_c (from the bend's trace, or from the trace at ``z_anchor`` when given) and that depth."""
+    the footwall cutoff. One heave moves the whole hanging wall: ``throw`` is that of the horizon at ``z_ref`` (default z_r), whose
+    cutoffs give it. Returns H, x_c (from the bend's trace, or from the trace at ``z_anchor`` when given) and that depth."""
     plane, inverse = log_plane(dip, z_b, flatten)
+    z_ref = z_r if z_ref is None else z_ref
     x_c = float(inverse(z_r))
-    heave = float(inverse(z_r + throw)) - x_c
+    heave = float(inverse(z_ref + throw)) - float(inverse(z_ref))
     x_a = 0.0 if z_anchor is None else float(inverse(z_anchor))
     return heave, x_c - x_a, (lambda p: z_r + plane(x_c + p) - plane(x_c + p - heave))

@@ -29,10 +29,11 @@ throw from the clastic displacement-length law, a regional dip toward the basin;
 nearly straight, closely spaced planar faults with little rollover and a higher expansion (Ewing et al. 1986). The strata laid
 down while the faults moved thicken into their hanging walls by an expansion index of 1.1-2.5
 (:func:`resmill.structure.growth`). The faults inside the trap, with the keystone graben half the time and 40-70 % antithetic,
-come from ``fold_faults``. The vertical shear that rolls the hanging wall over a listric fault drags it down by the throw at
-the fault and lets it rise as the plane flattens, toward the regional dip: the crest, where the roll's dip falls to the
-regional dip, lies a few km from the fault (the throw and the regional dip set it, the flattening length hardly), and a draw
-whose masters leave no trap of 1 km2 (the P10 of the Gulf's rollover traps) is drawn again (:func:`rollover`).
+come from ``fold_faults``. The vertical shear that rolls the hanging wall over a listric fault (one heave for the whole block, so
+that no zone changes thickness and the growth strata are the isochore's alone) drags it down by the throw at the fault and lets it
+rise as the plane flattens, toward the regional dip: the crest, where the roll's dip falls to the regional dip, lies a few km from
+the fault (the throw and the regional dip set it, the flattening length hardly), and a draw whose masters leave no trap of 1 km2
+(the P10 of the Gulf's rollover traps) is drawn again (:func:`rollover`).
 """
 import math
 from dataclasses import dataclass, field
@@ -44,7 +45,7 @@ from scipy.sparse import csgraph
 from . import structure as st
 from .export import _build_geometry
 from .fault_patterns import fold_faults
-from .faults import Fault, ww_profile
+from .faults import Fault, _plane, ww_profile
 from .layers.base import Layer
 from .structure import Structure, _spill_levels
 
@@ -279,7 +280,8 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
     Bruce 1973: 60 to 15 degrees over about 4 km, 2,200); ``ramp_base`` the depth where that ramp ends (m: 0-2,000 above the
     reservoir where the fault is [J]); ``length`` of a master fault (m, log-uniform 3-25 km, T17); ``throw`` of the master
     fault in the reservoir (m: clastic displacement-length law, 0.11 L^0.84 sin(dip) with a log10 sd of 0.27 about it, T10,
-    T19); ``regional_dip`` toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown
+    T19; the Frio master's :attr:`resmill.faults.Fault.throw` is then the throw at its tip ellipse's centre that gives it, from its
+    plane); ``regional_dip`` toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown
     thickness, log-uniform 1.1-2.5, 5 % of cases 2.5-5, T18; Wilcox 1.3-2.5), shared among its faults as the count-th root;
     ``density`` of the faults inside the trap with 5 m of throw or more (per km2: log-normal, median 1, 0.5-2, T28).
 
@@ -338,6 +340,9 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
                 drag=(0.0, 0.0) if frio else (float(rng.uniform(0.1, 0.3)), float(rng.uniform(0.1, 0.2))),
                 bends=float(rng.uniform(0.02, 0.04) if frio else rng.uniform(0.004, 0.012)),
                 seed=int(rng.integers(2 ** 31)), kind="master"))
+            if frio:                                  # one heave moves the whole hanging wall: its throw at z_center is the one that
+                plane, trace = _plane(faults[-1], zc)                         # gives the reservoir t_res (the Fault checked its values)
+                faults[-1].throw = float(plane(trace(z_k + t_res) - trace(z_k)) - zc)
             masters.append(dict(length_m=float(L), displacement_m=float(displacement), throw_m=t_res,
                                 centre_throw_m=faults[-1].throw, dip_deg=float(steep), flatten_m=bend, ramp_base_m=base,
                                 z_center_m=float(zc)))

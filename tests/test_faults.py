@@ -4,6 +4,7 @@ import math
 import numpy as np
 import pytest
 
+from resmill import structure as st
 from resmill.export import _build_geometry, to_grdecl
 from resmill.faults import Fault
 from resmill.layers.base import Layer
@@ -347,9 +348,11 @@ def rollover_section(dip, flatten, z_r, throw, dx=25.0, nx=320, z_center=None, r
 def test_a_listric_fault_with_a_long_flattening_is_the_planar_fault():
     """As the depth scale of the dip's decay grows the plane straightens: a listric fault whose tan(dip) takes 10^10 m of depth
     to fall by 1/e gives the planar fault's layers to 1 mm and the same sides, the planar fault with the whole throw on the
-    hanging wall and no drag (what vertical shear over a plane is)."""
+    hanging wall and no drag (what vertical shear over a plane is). The planar fault's throw still tapers with depth along its
+    tip ellipse and a listric hanging wall moves as a block at every depth, so both have a tall ellipse (aspect 0.01: the throw
+    changes by under 1e-4 over the 50 m stack)."""
     layer = thin_stack()
-    kw = dict(center=(1510.0, 1500.0), strike=75.0, length=1500.0, throw=40.0, dip=60.0, z_center=TOP + 20.0)
+    kw = dict(center=(1510.0, 1500.0), strike=75.0, length=1500.0, throw=40.0, dip=60.0, z_center=TOP + 20.0, aspect=0.01)
     planar, listric = [], []
     _, _, za, _ = _build_geometry([layer], faults=[Fault(hw_share=1.0, drag=(0.0, 0.0), **kw)], _faces=planar)
     _, _, zb, _ = _build_geometry([layer], faults=[Fault(flatten=1.0e10, **kw)], _faces=listric)
@@ -429,7 +432,7 @@ def test_a_horizon_cut_on_the_ramp_is_dragged_down_rigidly_until_the_bend_and_ro
     surface follows the explicit construction (z + F(h) - F(h - H)) at every corner clear of the fault, to 0.05 m."""
     heave, x_c, depth = research_rollover(55.0, 3500.0, 1500.0, 2500.0, 300.0)
     assert heave == pytest.approx(300.0 / math.tan(math.radians(55.0)), abs=1e-6) and x_c == pytest.approx(-1000.0 / math.tan(math.radians(55.0)))
-    x, z = rollover_section(55.0, 1500.0, 2500.0, 300.0, z_center=3500.0, aspect=1e-6)      # a tall tip ellipse: the throw is the same at the bend
+    x, z = rollover_section(55.0, 1500.0, 2500.0, 300.0, ramp_base=3500.0)                  # the bend 1 km below the horizon and the tip ellipse's centre
     east = x > 1000.0 + heave + 50.0
     assert np.abs(z[east] - depth(x[east] - 1000.0)).max() < 0.05
     level = (x > 1000.0 + heave + 50.0) & (x < 1000.0 - x_c - 50.0)
@@ -468,6 +471,28 @@ def test_the_listric_hanging_wall_drags_by_the_throw_at_the_fault_and_falls_mono
     assert np.all(z[x < 950.0] == 2500.0) and np.all(np.diff(zc, axis=2) >= -1e-9)
 
 
+@pytest.mark.parametrize("regional", [0.0, 2.0])
+def test_a_listric_hanging_wall_moves_every_horizon_of_a_column_by_one_heave_and_keeps_every_zone_as_thick(regional):
+    """Vertical shear with constant heave (Gibbs 1983; White et al. 1986) slides a column of the hanging wall down the plane as a
+    unit, so no zone changes thickness. A 300 m stack of 20 m cells cut by a 250 m throw (that of the horizon at the tip ellipse's
+    centre, 1 km below its top; the plane curved all through the stack): every interface of a column more than 1.5 km beyond the
+    cutoffs drops by the same amount, level or under a 2 degree regional dip, and the footwall does not move. Taking each
+    horizon's heave at its own depth stretched the hanging wall by up to 5 % here (review of step 4, F1)."""
+    nx, ny, nz, dx = 200, 6, 15, 50.0
+    layer = Layer(nx, ny, nz, nx * dx, ny * dx, 300.0, top_depth=TOP, kzkx=0.1)
+    ramp = st.ramp(regional, azimuth=90.0, center=(1500.0, 3 * dx)) if regional else None
+    f = Fault(center=(1500.0, 3 * dx), strike=90.0, length=4.0e5, throw=250.0, dip=60.0, flatten=2500.0, ramp_base=1500.0,
+              z_center=TOP + 1000.0)
+    x, _, zc, _ = _build_geometry([layer], structure=ramp, faults=[f])
+    _, _, z0, _ = _build_geometry([layer], structure=ramp)
+    x, drop = x[:, 6], zc[:, 6, :] - z0[:, 6, :]
+    far = x > 3000.0
+    assert far.sum() > 100 and drop[far].min() > 0.0
+    assert np.ptp(drop[far], axis=1).max() < 1e-6                                       # one displacement for the whole column
+    assert np.all(np.diff(drop[far][:, 0]) <= 1e-9)                                     # falling away from the fault
+    assert np.abs(drop[x < 500.0]).max() == 0.0                                         # the top's footwall cutoff is at 633 m
+
+
 def test_the_ramp_may_end_above_the_tip_ellipses_centre_and_the_plane_still_passes_the_trace_there():
     """``ramp_base``: the depth where the straight ramp ends and tan(dip) begins to fall. Published faults bend at 1.0-2.7 km,
     above the reservoirs they cut; the tip ellipse's centre, where ``center`` is the trace, stays where it was. With the bend
@@ -497,7 +522,7 @@ def test_a_horizon_cut_below_the_bend_rolls_from_its_cutoff_with_no_plateau():
     t_local = math.tan(math.radians(62.0)) * math.exp(-1000.0 / 2500.0)
     assert x_c == pytest.approx(0.0, abs=1e-6)
     assert heave == pytest.approx(2500.0 / t_local * math.expm1(300.0 / 2500.0), abs=1e-6)
-    x, z = rollover_section(62.0, 2500.0, 2500.0, 300.0, ramp_base=1500.0, aspect=1e-6)
+    x, z = rollover_section(62.0, 2500.0, 2500.0, 300.0, ramp_base=1500.0)
     east = x > 1000.0 + heave + 50.0
     assert np.abs(z[east] - depth(x[east] - 1000.0)).max() < 0.05
     drag = z[east] - 2500.0

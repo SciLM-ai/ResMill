@@ -12,7 +12,7 @@ import pytest
 
 from resmill.block_styles import BlockModel, rollover, tilted_blocks
 from resmill.export import _build_geometry, to_grdecl
-from resmill.faults import Fault, ww_profile
+from resmill.faults import Fault
 from resmill.layers.base import Layer
 
 from .fault_helpers import lateral_contacts, log_plane, research_rollover
@@ -250,7 +250,7 @@ def test_a_frio_masters_rollover_is_the_explicit_ramp_and_flattening_constructio
     f, = [f for f in m.faults if f.kind == "master"]
     x, z = sawtooth(m, x_len, y_len, dx, "master", top, 2.0)
     assert f.ramp_base == 1800.0 and m.labels["ramp_base_m"] == 1800.0 and f.z_center > 2500.0
-    heave, x_c, depth = research_rollover(f.dip, f.ramp_base, f.flatten, top, 300.0, z_anchor=f.z_center)
+    heave, x_c, depth = research_rollover(f.dip, f.ramp_base, f.flatten, top, f.throw, z_anchor=f.z_center, z_ref=f.z_center)
     cutoff = f.center[0] + float(_plane(f, f.z_center)[1](top))            # the footwall cutoff of the top, hanging wall east
     assert cutoff == pytest.approx(f.center[0] + x_c, abs=1e-6)
     assert np.all(z[x < cutoff - 2 * dx] == top)
@@ -259,36 +259,66 @@ def test_a_frio_masters_rollover_is_the_explicit_ramp_and_flattening_constructio
     assert z.max() - top == pytest.approx(300.0, abs=1.5)
 
 
-def test_a_rollovers_crest_and_relief_on_the_grid_are_the_explicit_constructions():
-    """Pinned (ramp 60 degrees to 1,500 m, L = 2.5 km, 300 m of throw, a regional dip of 1 degree toward the basin) and the master
-    straightened, the roll's crest, where its dip falls to the regional dip, is where the explicit construction puts it
-    (z0 + F(h) - F(h - H) on the ramped top, the heave of each column from the plane written out with np.log and bisection)
-    to a cell, and it stands as high above the hanging-wall cutoff within 0.05 m: a few km out and a closure of its own,
-    set by the throw, the flattening length and the regional dip, not by an arc's end."""
+@pytest.mark.parametrize("regional", [1.0, 2.0, 3.0])
+def test_a_rollovers_crest_and_relief_on_the_grid_are_the_explicit_constructions(regional):
+    """Pinned (ramp 60 degrees to 1,500 m, L = 2.5 km, 300 m of throw, a regional dip of 1, 2 and 3 degrees toward the basin) and the
+    master straightened, the roll's crest, where its dip falls to the regional dip, is where the explicit construction puts it
+    to a cell, and it stands as high above the hanging-wall cutoff within 0.05 m. The construction is z0 + F(h) - F(h - H) on the
+    ramped top with ONE heave H for the whole hanging wall (that of the horizon at the tip ellipse's centre) and F the plane
+    written out with np.log and bisection: a few km out and a closure of its own, set by the throw, the flattening length and the
+    regional dip, not by an arc's end. (A heave taken at each column's own depth left the grid off it by 3, 6 and 10 m at 1, 2 and
+    3 degrees and the closure at 3 degrees a third short: review of step 4, F1.)"""
     x_len, y_len, dx, top = 16000.0, 1000.0, 10.0, 2499.0
     m = rollover(x_len, y_len, dx, top, 2.0, 1, kind="frio", azimuth=90.0, dip=60.0, flatten=2500.0, ramp_base=1500.0, throw=300.0,
-                 regional_dip=1.0, density=0.0, length=12000.0, expansion=1.0)
+                 regional_dip=regional, density=0.0, length=12000.0, expansion=1.0)
     f, = [f for f in m.faults if f.kind == "master"]
     x, z = sawtooth(m, x_len, y_len, dx, "master", top, 2.0)
     plane, inverse = log_plane(f.dip, f.ramp_base, f.flatten)
     shift = float(inverse(f.z_center))                                       # the bend's trace to the trace at z_center, where `center` is
-    z0 = top + math.tan(math.radians(1.0)) * (x - 0.5 * x_len)               # the ramped top at each corner, before the fault
-    r = np.abs(z0 - f.z_center) / (math.sin(math.radians(f.dip)) * 0.5 * f.length / f.aspect)
-    throw = f.throw * ww_profile(r)
+    heave = float(inverse(f.z_center + f.throw)) - shift                     # one heave for every column and horizon
+    tan_a = math.tan(math.radians(regional))
+    z0 = top + tan_a * (x - 0.5 * x_len)                                     # the ramped top at each corner, before the fault
     h = x - f.center[0] + shift                                              # from the bend's trace
-    heave = inverse(z0 + throw) - inverse(z0)
     built = z0 + plane(h) - plane(h - heave)
-    tan_a, h_cut = math.tan(math.radians(1.0)), 0.0
+    h_cut = 0.0
     for _ in range(50):                                                      # the footwall cutoff of the top: the plane meets the ramped top
         h_cut = float(inverse(top + tan_a * (f.center[0] + h_cut - shift - 0.5 * x_len)))
     cut = f.center[0] + h_cut - shift
-    hanging = x > cut + float(np.max(heave)) + 3 * dx
+    hanging = x > cut + heave + 3 * dx
     assert np.abs(z[hanging] - built[hanging]).max() < 0.05
     crest_grid, crest_built = np.argmin(np.where(hanging, z, np.inf)), np.argmin(np.where(hanging, built, np.inf))
     assert abs(x[crest_grid] - x[crest_built]) <= 2 * dx
     first = np.argmax(hanging)
     assert z[first] - z[crest_grid] == pytest.approx(built[first] - built[crest_built], abs=0.05)
     assert 1000.0 < x[crest_built] - cut < 8000.0 and z[first] - z[crest_grid] > 20.0     # a closure of its own, a few km out
+
+
+@pytest.mark.parametrize("expansion", [1.0, 2.0])
+def test_the_hanging_wall_zones_next_to_the_master_are_as_thick_as_the_index_says(expansion):
+    """T18, Thorsen's index (downthrown over upthrown thickness): one heave moves every column of the hanging wall as a unit, so the
+    zones' thickness there is the footwall's times the index asked for and nothing else. Three zones of a 90 m reservoir, a 250 m
+    throw and ramp 60 degrees, L = 2.5 km, a regional dip of 1 degree: on the grid, 100 m, 1 km and 2.5 km beyond the hanging-wall
+    cutoff the middle zone is 1.000 (no growth asked for) or 2.000 times as thick as in the footwall, to 0.1 %. (Taking each horizon's
+    heave at its own depth made 2.0 into 2.5-2.6 and 1.0 into 1.2-1.3 right next to the fault: review of step 4, F1.)"""
+    from resmill.faults import _plane
+    x_len, y_len, dx, thick = 24000.0, 1500.0, 25.0, 90.0
+    m = rollover(x_len, y_len, dx, TOP, thick, 1, kind="frio", azimuth=90.0, dip=60.0, flatten=2500.0, ramp_base=1500.0, throw=250.0,
+                 regional_dip=1.0, density=0.0, length=20000.0, expansion=expansion, zones=3)
+    nx, ny = int(x_len / dx), int(y_len / dx)
+    layers = [Layer(nx, ny, 1, x_len, y_len, thick / 3.0, top_depth=TOP + k * thick / 3.0, kzkx=0.1) for k in range(3)]
+    f, = [f for f in m.faults if f.kind == "master"]
+    f = dataclasses.replace(f, bends=0.0, seed=None, radius=math.inf)
+    _, _, zc, _ = _build_geometry(layers, structure=m.structure, faults=[f], isochore=m.isochore)
+    j = ny // 2
+    z = 0.25 * (zc[0::2, 2 * j] + zc[1::2, 2 * j] + zc[0::2, 2 * j + 1] + zc[1::2, 2 * j + 1])          # (nx, 4 interfaces)
+    zone = np.diff(z, axis=1)
+    x = (np.arange(nx) + 0.5) * dx
+    trace = _plane(f, f.z_center)[1]
+    heave = float(trace(f.z_center + f.throw) - trace(f.z_center))
+    cutoff = f.center[0] + float(trace(TOP + thick + 20.0)) + heave           # the base's hanging-wall cutoff, a little deeper in the ramped top
+    for beyond in (100.0, 1000.0, 2500.0):
+        i = int(np.argmin(np.abs(x - (cutoff + beyond))))
+        assert zone[i, 1] / zone[:20, 1].mean() == pytest.approx(expansion, rel=1e-3)
 
 
 @pytest.mark.parametrize("kind", ["frio", "wilcox"])
@@ -373,7 +403,9 @@ def test_the_rollover_draws_lie_in_the_research_ranges(drawn_rollovers):
 
 def test_the_master_faults_are_placed_by_the_tip_ellipse_below_the_reservoir(drawn_rollovers):
     """S11 for growth faults: a master's tip ellipse is centred 0.25-0.5 half-heights below the reservoir (the half-height
-    taken at the ramp's dip), so its throw grows downward; a Frio master's ramp ends 0-2 km above the reservoir."""
+    taken at the ramp's dip), so that a Wilcox fault's throw grows downward (a Frio master's hanging wall moves as one block, and
+    its ellipse only anchors the plane and sets the throw its heave comes from); a Frio master's ramp ends 0-2 km above the
+    reservoir."""
     for m in drawn_rollovers:
         az, alpha = math.radians(m.labels["azimuth_deg"]), math.radians(m.labels["regional_dip_deg"])
         for f, rec in zip([f for f in m.faults if f.kind == "master"], m.labels["masters"]):

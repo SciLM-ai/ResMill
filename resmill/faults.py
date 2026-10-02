@@ -17,11 +17,14 @@ tip ellipse's centre), as the faults of the Gulf's seismic sections are down to 
 every ``flatten`` m of depth, so the plane flattens into a long gentle tail. ``flatten`` is 2.4 km at the median of six published
 faults (Xiao & Suppe 1992; Ewing et al. 1986, whose bends lie 1.0-2.7 km down) and 2.2 km if Bruce's (1973) fall from 60 to 15
 degrees takes about 4 km. The footwall is rigid while the hanging wall moves by vertical shear with constant heave (Gibbs 1983;
-White et al. 1986): the horizon of depth z with throw d at the fault has the heave H = trace(z + d) - trace(z) and drops by
-plane(h) - plane(h - H) under the column h from the trace. It is d at the fault, stays d down to the bend (a rigid hanging wall
-over a ramp) and falls away over it, where the plane flattens, so the hanging wall rolls over toward the fault above the bend,
-from the cutoff itself when the cutoff lies below it; a planar plane (``flatten`` infinite) gives the constant throw of a rigid
-hanging wall. ``hw_share`` and ``drag`` play no part.
+White et al. 1986): one heave H for the whole block, so that a column of it slides down the plane as a unit and no zone changes
+thickness. ``throw`` is the throw, at the fault's centre line, of the horizon at the tip ellipse's centre (``z_center``), dying out
+along the strike like the tip line's profile, and gives the heave H = trace(z_center + throw) - trace(z_center); the column h from
+the trace then drops by plane(h) - plane(h - H), whatever its depth. The throw of a horizon is H tan(dip) where it cuts the plane:
+``throw`` at ``z_center``, more above it where the plane is steeper, less as the plane flattens, so that the hanging wall rolls
+over toward the fault above the bend, from the cutoff itself when the cutoff lies below it. The tip ellipse's depth plays no part
+(the block moves at every depth), and a plane that is planar as ``flatten`` grows gives the constant throw of a rigid hanging
+wall, that of a planar fault with a tall tip ellipse. ``hw_share`` and ``drag`` play no part.
 
 :func:`apply_fault` displaces the interface stack in 3-D and reports which side of the fault each cell
 ended on; :func:`face_records` turns that into the stair-stepped cell faces the GRDECL export writes as
@@ -189,10 +192,11 @@ def apply_fault(fault, Xc, Yc, Zc):
     ly = lx / fault.aspect
 
     def displacement(s, h, z):
+        if fault.flatten is not None:                   # vertical shear, a rigid footwall: one heave per column, from the throw at z_center
+            heave = trace(zc + fault.throw * ww_profile(np.abs(s) / lx)) - trace(zc)
+            return np.broadcast_to((plane(h) - plane(h - heave))[..., None], z.shape), 0.0
         r = np.sqrt((s[..., None] / lx) ** 2 + ((z - zc) / sin_d / ly) ** 2)
         d = fault.throw * ww_profile(r)
-        if fault.flatten is not None:                   # vertical shear: the horizon's heave from its throw, a rigid footwall
-            return plane(h[..., None]) - plane(h[..., None] - (trace(z + d) - trace(z))), 0.0
         hp = np.abs(h[..., None] if fault.reverse else h[..., None] - trace(z))           # from the plane at depth z
         taper = [np.clip(1.0 - hp / (reach * fault.length), 0.0, None) ** 2 if reach > 0.0 else 1.0
                  for reach in fault.drag]

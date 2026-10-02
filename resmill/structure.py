@@ -375,8 +375,10 @@ def growth(fault, expansion, width, depth):
     at ``depth`` (the plane's footwall cutoff there) to ``expansion`` ``width`` m toward the hanging wall (``None``: the
     horizon's heave at the fault's centre line, so that the hanging wall begins at the full factor), and its excess
     is tapered along the strike by the throw profile (the fault's tip ellipse at ``depth``, relative to its centre line):
-    no growth where the fault has no throw at that depth. Pass it to ``to_grdecl(isochore=[...])``; it needs
-    ``fault.z_center``, the depth scale of the tip ellipse.
+    no growth where the fault has no throw at that depth. A listric fault (:attr:`resmill.faults.Fault.flatten`) moves its whole
+    hanging wall by one heave, that of the horizon at ``z_center``, so its step spans that heave at every depth and its taper
+    does not depend on the depth. Pass it to ``to_grdecl(isochore=[...])``; it needs ``fault.z_center``, the depth scale of the
+    tip ellipse.
     """
     from .faults import _frame, _plane, ww_profile
 
@@ -388,10 +390,12 @@ def growth(fault, expansion, width, depth):
     trace = _plane(fault, zc)[1]
     h0 = float(trace(depth))
     lx = 0.5 * fault.length
-    rz = (depth - zc) / np.sin(np.radians(fault.dip)) / (lx / fault.aspect)
+    listric = fault.flatten is not None                 # its hanging wall has one heave and no taper with depth (faults.py)
+    rz = 0.0 if listric else (depth - zc) / np.sin(np.radians(fault.dip)) / (lx / fault.aspect)
     centre = float(ww_profile(abs(rz)))
     if width is None:
-        width = max(float(trace(depth + fault.throw * centre)) - h0, 1.0)
+        ref = zc if listric else depth
+        width = max(float(trace(ref + fault.throw * centre) - trace(ref)), 1.0)
 
     def fn(x, y):
         s, h = _frame(fault, np.asarray(x, dtype=float), np.asarray(y, dtype=float))
