@@ -1,11 +1,15 @@
-"""Tilted fault blocks (structure step 4).
+"""Tilted fault blocks and rollovers on listric growth faults (structure step 4).
 
-A trap style returning a :class:`BlockModel` (the structure, the faults, the growth isochores and every drawn
+Two trap styles, each returning a :class:`BlockModel` (the structure, the faults, the growth isochores and every drawn
 value) that ``to_grdecl`` takes as it is. Every argument left ``None`` is drawn from its range with
 ``numpy.random.default_rng(seed)``; a value pins it (explicit mode), and pinning one argument leaves the others as drawn.
 Ranges are those of ``design_notes/structure_research/step4_blocks_rollovers.md`` (rows T1-T28); values tagged [J] are
 judgement values, labelled so. A trap is measured, never fitted: its area and relief are read off the faulted top, every
-fault taken as sealing (``labels["trap"]``; ``labels["structure_trap"]`` is the one before the faults inside it).
+fault taken as sealing (``labels["trap"]``; ``labels["structure_trap"]`` is the one before the faults inside it). The model goes
+to the exporter as it is, one layer per zone for a rollover's ``zones``::
+
+    m = rollover(16000.0, 12000.0, 100.0, 2500.0, 120.0, seed=7, zones=3)       # the top at 2,500 m, 120 m thick
+    to_grdecl(reservoir, "m.grdecl", structure=m.structure, faults=m.faults, isochore=m.isochore)
 
 :func:`tilted_blocks`: a domino system, N parallel planar faults dipping 25-35 degrees whose hanging walls lie on the up-dip
 side of beds tilted 3-20 degrees (10 % of cases up to 30). Each block is a rigid plate: the structure is a tilt, and each fault
@@ -16,6 +20,16 @@ widths, sin(alpha + theta) / sin(theta) of their lengths along the beds (Fossen 
 along the strike like the faults' tip ellipse, so the blocks plunge toward the fault tips and each footwall crest closes
 laterally. ``kind="horst_graben"``: alternating hanging walls, dips 55-70 degrees, a tilt under 5 degrees (T11). Transfer
 faults (0-2) cross the blocks; the faults inside the trap are drawn by :func:`resmill.fault_patterns.fold_faults`.
+
+:func:`rollover`: a growth fault whose hanging wall rolls over toward it. ``kind="frio"`` (60 % [J]): one sinuous listric
+master fault (circular, surface dip 50-60 degrees, flattening at 4.5-8 km, :attr:`resmill.faults.Fault.detach`), throw from
+the clastic displacement-length law, a regional dip toward the basin; ``kind="wilcox"`` (40 % [J]): two or three nearly
+straight, closely spaced planar faults with little rollover and a higher expansion (Ewing et al. 1986). The strata laid down
+while the faults moved thicken into their hanging walls by an expansion index of 1.1-2.5 (:func:`resmill.structure.growth`).
+The faults inside the trap, with the keystone graben half the time and 40-70 % antithetic, come from ``fold_faults``. The
+vertical shear that rolls the hanging wall over a listric fault drags it down by the throw at the fault and nothing far from
+it, so the roll turns the regional dip, and closes, only where the throw is large against that dip: a draw whose masters leave
+no trap of 1 km2 (the P10 of the Gulf's rollover traps) is drawn again (:func:`rollover`).
 """
 import math
 from dataclasses import dataclass, field
@@ -33,6 +47,10 @@ from .structure import Structure, _spill_levels
 
 PLAN_CELLS = 300                    # the planning grid (a trap is measured and framed on it) has at most this many cells a side
 PLAN_THICKNESS = 4.0                # m: the layer a trap is measured on
+TRIES = 32                          # a rollover whose masters leave no trap to frame its faults on is redrawn this often
+MIN_AREA = 1.0e6                    # m2: the trap that frames them is at least the P10 of the Gulf's rollover traps (BOEM, T25: 1.4 km2)
+MIN_CELLS = 9                       # and spans at least 3 x 3 planning cells, the least a fold can frame faults on
+TIP_ASPECT = 2.15                   # tip-line length / height of a fault (Nicol et al. 1996; Fault.aspect's default)
 D_OVER_L = 0.1                      # upper bound of displacement / length (Lathrop et al. 2022)
 
 
@@ -238,3 +256,122 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
                   throws_m=[float(c) for c in cutoff], heave_m=[float(c) / tan_d for c in cutoff],
                   length_m=float(length), antithetic_share=antithetic, regional_ratio=ratio)
     return _finish(faults, structure, None, x_len, y_len, grid, top, labels, frame)
+
+
+def _arc(detach, dip_surface):
+    """Radius of the circle that dips ``dip_surface`` degrees at the surface and turns flat at ``detach``, and its dip at a depth."""
+    radius = detach / (1.0 - math.cos(math.radians(dip_surface)))
+    return radius, lambda z: math.degrees(math.acos(max(0.0, 1.0 - (detach - z) / radius)))
+
+
+def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, azimuth=None, detach=None, dip=None,
+             throw=None, regional_dip=None, expansion=None, density=None, length=None, zones=1):
+    """A growth-fault rollover model (see the module docstring).
+
+    ``x_len``, ``y_len``, ``dx``, ``top``, ``thickness`` as for :func:`tilted_blocks`, ``zones`` the number of layers of
+    the stack (every zone is syn-kinematic and gets the growth isochore); ``fold`` an optional extra structure (a
+    culmination for lateral closure). Drawn unless pinned: ``kind`` ("frio" 60 %, "wilcox" 40 % [J]); ``azimuth`` of the
+    basinward direction (any [J]); ``dip`` of the master fault at the surface (degrees, 50-60, T14; for the Wilcox the dip
+    of its planar faults); ``detach`` depth of the Frio master fault's flat (m, 4,500-8,000, T15; at least 1 km below the
+    reservoir); ``length`` of a master fault (m, log-uniform 3-25 km, T17); ``throw`` of the master fault in the reservoir
+    (m: clastic displacement-length law, 0.11 L^0.84 sin(dip) with a log10 sd of 0.27 about it, T10, T19); ``regional_dip``
+    toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown thickness,
+    log-uniform 1.1-2.5, 5 % of cases 2.5-5, T18; Wilcox 1.3-2.5), shared among its faults as the count-th root;
+    ``density`` of the faults inside the trap with 5 m of throw or more (per km2: log-normal, median 1, 0.5-2, T28).
+
+    The faults inside a trap are drawn on a closure that frames it, and a drag that never turns the regional dip leaves
+    the master faults none: drawn values that leave the masters and the regional dip no trap of at least 1 km2 (and nine
+    planning cells) are drawn again (``kind`` and ``azimuth`` stay), up to :data:`TRIES` times (``labels["tries"]``). About
+    one Frio draw in five needs no second draw. Pinned values are never changed.
+    """
+    rng = np.random.default_rng(seed)
+    draw = lambda: dict(kind=rng.uniform(), az=rng.uniform(0.0, 360.0), length=rng.uniform(), dip=rng.uniform(),
+                        detach=rng.uniform(), scatter=rng.normal(), alpha=rng.uniform(), tail=rng.uniform(), ei=rng.uniform(),
+                        density=rng.normal(), where=rng.uniform(), reach=rng.uniform())
+    u = draw()
+    kind = kind or ("frio" if u["kind"] < 0.6 else "wilcox")
+    if kind not in ("frio", "wilcox"):
+        raise ValueError(f"kind must be 'frio' or 'wilcox', got {kind!r}")
+    frio = kind == "frio"
+    azimuth = u["az"] if azimuth is None else float(azimuth)
+    n, _ = _axes(azimuth)
+    extent_n = abs(x_len * n[0]) + abs(y_len * n[1])
+    mid = np.array([0.5 * x_len, 0.5 * y_len])
+    z_res = top + 0.5 * thickness
+    grid = max(dx, max(x_len, y_len) / PLAN_CELLS)
+    lo = 1.1 if frio else 1.3
+    shallowest = max(4500.0, z_res + 1000.0)                              # a flat at 4.5-8 km, 1 km below the reservoir at least
+    if frio and detach is not None and detach <= z_res + 1000.0:
+        raise ValueError(f"the detachment ({detach:g} m) must lie at least 1 km below the reservoir ({z_res:g} m)")
+
+    def masters_of(u):
+        """The master faults of one set of draws, with the regional dip and the numbers they were built from."""
+        alpha = 0.5 + 2.5 * u["alpha"] if regional_dip is None else float(regional_dip)
+        tan_a = math.tan(math.radians(alpha))
+        long = 3000.0 * (25000.0 / 3000.0) ** u["length"] if length is None else float(length)
+        surface = 50.0 + 10.0 * u["dip"] if dip is None else float(dip)
+        flat = (shallowest + (max(8000.0, shallowest + 1000.0) - shallowest) * u["detach"] if detach is None
+                else float(detach)) if frio else None
+        if frio:
+            _, dip_at = _arc(flat, surface)
+        else:
+            dip_at = lambda z: surface
+        count = 1 if frio else int(rng.integers(2, 4))
+        spacing = float(rng.uniform(1500.0, 3000.0))
+        first = (0.12 + 0.13 * u["where"] - 0.5) * extent_n                   # landward of the middle: room for the roll
+        places = first + np.concatenate([[0.0], np.cumsum(spacing * rng.uniform(0.9, 1.1, count - 1))])
+        faults, masters = [], []
+        for k in range(count):
+            L = long * (1.0 if frio else float(rng.uniform(0.8, 1.2)))
+            ly = 0.5 * L / TIP_ASPECT
+            z_k = z_res + tan_a * float(places[k])                            # the reservoir where the fault is
+            displacement = 0.11 * L ** 0.84 * 10.0 ** (0.27 * (u["scatter"] if k == 0 else rng.normal()))   # T10, T19
+            t_res = float(displacement * math.sin(math.radians(dip_at(z_k))) if throw is None else throw)
+            reach = 0.25 * (1.0 + u["reach"])                                 # the tip ellipse's centre 0.25-0.5 half-heights
+            zc = z_k                                                          # below the reservoir, as the population's faults
+            for _ in range(4):                                                # (the dip at the centre sets the half-height)
+                zc = z_k + reach * ly * math.sin(math.radians(dip_at(zc)))
+                zc = min(zc, z_k + 0.5 * (flat - z_k)) if frio else zc        # and well above a listric fault's flat
+            dip_c = dip_at(zc)
+            r = (zc - z_k) / (math.sin(math.radians(dip_c)) * ly)             # the reservoir on the tip ellipse, from its centre
+            faults.append(Fault(
+                center=tuple(float(v) for v in mid + places[k] * n), strike=azimuth, length=float(L),
+                throw=float(t_res / ww_profile(r)), dip=float(dip_c), hanging_wall=1, z_center=float(zc), detach=flat,
+                radius=float((_log_uniform(rng, 2.0, 10.0) if frio else _log_uniform(rng, 10.0, 30.0)) * L),
+                hw_share=1.0 if frio else float(rng.uniform(0.6, 0.9)),
+                drag=(0.0, 0.0) if frio else (float(rng.uniform(0.1, 0.3)), float(rng.uniform(0.1, 0.2))),
+                bends=float(rng.uniform(0.02, 0.04) if frio else rng.uniform(0.004, 0.012)),
+                seed=int(rng.integers(2 ** 31)), kind="master"))
+            masters.append(dict(length_m=float(L), displacement_m=float(displacement), throw_m=t_res,
+                                centre_throw_m=faults[-1].throw, dip_at_reservoir_deg=float(dip_at(z_k)),
+                                dip_at_center_deg=float(dip_c), z_center_m=float(zc)))
+        ramp = st.ramp(alpha, azimuth=azimuth, center=(float(mid[0]), float(mid[1])))
+        return dict(faults=faults, masters=masters, places=places, tan_a=tan_a, alpha=alpha, surface=surface, flat=flat,
+                    structure=ramp if fold is None else ramp + fold)
+
+    for tries in range(1, TRIES + 1):
+        built = masters_of(u)
+        frame = _measure(x_len, y_len, grid, top, built["structure"], built["faults"])
+        if frame is not None and frame["area"] >= max(MIN_AREA, MIN_CELLS * frame["cell"][0] * frame["cell"][1]):
+            break
+        u = {**draw(), "kind": u["kind"], "az": u["az"]}                  # no trap: the same flavour and direction, drawn again
+    faults, structure, count = built["faults"], built["structure"], len(built["faults"])
+    ratio = float(rng.uniform(0.5, 2.0))                                  # R of fault_patterns' Gulf anticline
+    basinward = float(rng.uniform(0.3, 0.6))                              # 40-70 % antithetic (T23, T24)
+    dens = float(10.0 ** (0.3 * u["density"])) if density is None else float(density)
+    faults += _population("rollover", frame, x_len, y_len, grid, top, thickness, dens, int(rng.integers(2 ** 31)),
+                          (ratio, _azimuth_of(n)), basinward)
+    ei = float((2.5 + 2.5 * u["ei"]) if u["tail"] < 0.05 else lo * (2.5 / lo) ** u["ei"]) if expansion is None \
+        else float(expansion)
+    each = ei ** (1.0 / count)                                            # the zone's index, shared by its faults
+    isochore = []
+    for z in range(int(zones)):
+        depth = top + (z + 0.5) * thickness / zones
+        fields = [st.growth(f, each, None, depth + built["tan_a"] * float(built["places"][i]))
+                  for i, f in enumerate(faults[:count])]
+        isochore.append(Structure(lambda x, y, fs=fields: np.prod([g(x, y) for g in fs], axis=0)))
+    labels = dict(style="rollover", kind=kind, seed=int(seed), tries=tries, azimuth_deg=azimuth, dip_deg=built["surface"],
+                  detach_m=built["flat"], regional_dip_deg=float(built["alpha"]), expansion=ei, expansion_per_fault=each,
+                  zones=int(zones), n_masters=count, density_per_km2=dens, regional_ratio=ratio, basinward_share=basinward,
+                  masters=built["masters"])
+    return _finish(faults, structure, isochore, x_len, y_len, grid, top, labels, frame)
