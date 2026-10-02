@@ -245,6 +245,19 @@ def test_a_cap_cut_through_is_amalgamation():
     assert amalgamated == 1.0
 
 
+def test_a_thin_deposit_between_two_stamps_does_not_shield_the_cap_under_it():
+    """The scour of a younger stamp reaches down through whatever lies under it. Column 0 has a 0.01 m sliver of a third
+    stamp between stamp 1 (cap [3, 4]) and a 3 m stamp that scours 1.5 m (erosion 0.5): the reach, 4.01 - 1.5 = 2.51, passes
+    the cap, so it is gone exactly as in column 1, where nothing lies between (reach 4 - 1.5 = 2.5). The edge of a stamp is
+    such a sliver, so a cap that survived it would end in a straight line along every stamp's footprint."""
+    from resmill.layers.lobe import _stamp_mud
+
+    mud, amalgamated = _stamp_mud(_stack([4.0, 4.0], [4.01, 4.0], [7.01, 7.0]), nz=8, dz=1.0, mud_cap=1.0, erosion=0.5, floor=0.0)
+    assert mud[3, 0, 0] == 0.0 and mud[3, 0, 1] == 0.0                 # the caps of stamp 1 are gone in both columns
+    assert mud[6, 0, 0] == pytest.approx(0.99) and mud[7, 0, 0] == pytest.approx(0.01) and mud[6, 0, 1] == pytest.approx(1.0)   # the top cap, 0.01 m higher in column 0
+    assert amalgamated == 1.0                  # two caps of at least a tenth of a cell met a later stamp, and both were cut
+
+
 def test_the_cap_of_a_thin_stamp_keeps_the_fringes_sand_fraction():
     """With a fringe sand fraction of 0.3 a stamp is never more than 0.7 mud: 4 m thick it is capped at M = 1 m, 1 m thin
     (a margin) 0.7 m of it is mud and 0.3 m sand, whatever M is: here M = 5 m, so the 4 m stamp is 2.8 m mud."""

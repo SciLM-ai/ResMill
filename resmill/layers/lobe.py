@@ -49,46 +49,41 @@ def _faded_sand_fraction(structure, ntg, floor, crest=1.0):
 
 
 def _stamp_mud(allsurface, nz, dz, mud_cap, erosion, floor):
-    """Metres of mud in every cell of a stack of stamps, ``(nz, ny, nx)``, and the share of contacts amalgamated.
+    """Metres of mud in every cell of a stack of stamps, ``(nz, ny, nx)``, and the share of caps cut through.
 
     ``allsurface`` holds the surface after every stamp (cells of ``dz``, the first the empty floor), so a stamp's
     deposit at a column is the rise of the surface there. Each deposit of thickness ``t`` is capped with mud on its
     top, ``min((1 - floor) t, mud_cap)`` thick: ``floor`` is the sand fraction of a thin deposit (the lobe fringe), so
-    the sand fraction of a lobe falls from ``1 - mud_cap / t`` in its thick part to ``floor`` at its margin. The next
-    stamp to cover the column cuts ``erosion x`` its own thickness off the top of that cap (the mud it cuts through
-    is sand of the younger stamp, sand on sand: amalgamation); caps nothing covers again stay. The share returned is
-    the columns where the cap was cut through of those where a younger stamp met one. Mud above the top of the layer
-    is not counted.
+    the sand fraction of a lobe falls from ``1 - mud_cap / t`` in its thick part to ``floor`` at its margin. A younger
+    stamp scours ``erosion x`` its own thickness below its base, and the mud in that reach is gone, replaced by its sand
+    (sand on sand: amalgamation), whichever older deposit it belongs to, a thin one between included; so a cap
+    keeps its part below the deepest reach of any later stamp, and none of it where that reach passes its base. The
+    share returned is the caps of at least a tenth of a cell met by a later stamp that were cut through. Mud above the top of the
+    layer is not counted. Stamps are taken last to first, the deepest reach so far kept per column.
     """
     shape = allsurface[0].shape
     mud = np.zeros((nz,) + shape)
-    cap_len, cap_top = np.zeros(shape), np.zeros(shape)
+    reach = np.full(shape, np.inf)
     met = cut = 0
-
-    def lay(rows, cols, bottom, length):
-        """Add the mud of intervals [bottom, bottom + length] (m) of the columns (rows, cols) to the cells they cross."""
-        first = np.floor(bottom / dz).astype(int)
-        for step in range(int(np.ceil(length.max() / dz)) + 1 if length.size else 0):
-            k = first + step
-            overlap = np.clip(np.minimum(bottom + length, (k + 1) * dz) - np.maximum(bottom, k * dz), 0.0, None)
-            ok = (k >= 0) & (k < nz) & (overlap > 0.0)
-            mud[k[ok], rows[ok], cols[ok]] += overlap[ok]
-
-    for before, after in zip(allsurface[:-1], allsurface[1:]):
+    for before, after in zip(allsurface[-2::-1], allsurface[:0:-1]):
         thickness = (after - before) * dz
         rows, cols = np.nonzero(thickness > 0.0)
         if rows.size == 0:
             continue
-        t, held = thickness[rows, cols], cap_len[rows, cols]
-        capped = held > 0.0
-        left = np.maximum(held - erosion * t, 0.0)
-        met += int(capped.sum())
-        cut += int((capped & (left == 0.0)).sum())
-        lay(rows[capped], cols[capped], (cap_top[rows, cols] - held)[capped], left[capped])
-        cap_len[rows, cols] = np.minimum((1.0 - floor) * t, mud_cap)
-        cap_top[rows, cols] = after[rows, cols] * dz
-    rows, cols = np.nonzero(cap_len > 0.0)
-    lay(rows, cols, cap_top[rows, cols] - cap_len[rows, cols], cap_len[rows, cols])
+        t, top, deepest = thickness[rows, cols], after[rows, cols] * dz, reach[rows, cols]
+        cap = np.minimum((1.0 - floor) * t, mud_cap)
+        length = np.maximum(np.minimum(top, deepest) - (top - cap), 0.0)
+        counted = (cap > 0.1 * dz) & np.isfinite(deepest)
+        met += int(counted.sum())
+        cut += int((counted & (length == 0.0)).sum())
+        bottom = top - cap
+        first = np.floor(bottom / dz).astype(int)
+        for step in range(int(np.ceil(length.max() / dz)) + 1):
+            k = first + step
+            overlap = np.clip(np.minimum(bottom + length, (k + 1) * dz) - np.maximum(bottom, k * dz), 0.0, None)
+            ok = (k >= 0) & (k < nz) & (overlap > 0.0)
+            mud[k[ok], rows[ok], cols[ok]] += overlap[ok]
+        reach[rows, cols] = np.minimum(deepest, before[rows, cols] * dz - erosion * t)
     return mud, (cut / met if met else 0.0)
 
 
@@ -187,11 +182,11 @@ class LobeLayer(Layer):
             0 if absent) and ``M`` the cap thickness; the sand fraction of a lobe then falls from
             ``1 - M / t`` where it is thick to ``f`` at its margin (axis 85-100 %, off-axis
             50-85 %, fringe 20-50 % in the Tanqua, Spychala et al. 2017) with the mud as a
-            continuous sheet over it. The next stamp over a column cuts
-            ``interlobe_erosion x`` its own thickness off that cap (its scour: sand on sand,
-            amalgamation, where it is thick, the axis, and none where it is thin, the margin),
-            so the mud wraps each lobe at a low net-to-gross and is gone from the axes at a
-            high one. ``M`` is found so that the mean sand fraction of the layer is ``ntg``
+            continuous sheet over it. A younger stamp scours ``interlobe_erosion x`` its own
+            thickness below its base and the mud in that reach is gone, replaced by its sand
+            (sand on sand, amalgamation, where it is thick, the axis, and none where it is thin,
+            the margin), whichever older cap it reaches, so the mud wraps each lobe at a low
+            net-to-gross and is gone from the axes at a high one. ``M`` is found so that the mean sand fraction of the layer is ``ntg``
             (net-to-gross by thickness, as outcrop and core give it, whatever the grid); a cell's porosity is
             the arithmetic mix of the sand and the mud, its permeability the 2-D effective
             medium of the two (``_effective_perm``: tight below half sand, so the cells under

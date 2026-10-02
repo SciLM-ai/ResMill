@@ -236,9 +236,10 @@
   and 3 decades above the mud), so a section holds no non-net rock at all. With `interlobe_erosion` each stamp is
   capped with mud `min((1 - f) t, M)` thick (`t` its thickness at the column, `f` the sand fraction of its margin,
   `facies_props[2]["ntg_floor"]`), so a lobe's sand fraction falls from `1 - M / t` where it is thick to `f` at its
-  margin (Tanqua: axis 85-100 %, off-axis 50-85 %, fringe 20-50 %), and the next stamp over a column cuts
-  `interlobe_erosion` times its own thickness off that cap (sand on sand where it is thick, no cut at its
-  margin). `M` is found by bisection so that the layer's mean sand fraction is `ntg` (thickness-based, whatever the
+  margin (Tanqua: axis 85-100 %, off-axis 50-85 %, fringe 20-50 %), and a younger stamp scours
+  `interlobe_erosion` times its own thickness below its base, the mud in that reach, of whichever older
+  cap, becoming its sand (sand on sand where it is thick, no cut at its margin; the deepest reach of any later
+  stamp counts, so a sliver of a deposit between two stamps shields nothing). `M` is found by bisection so that the layer's mean sand fraction is `ntg` (thickness-based, whatever the
   grid; a warning if the stack cannot go as low); porosity mixes arithmetically, permeability as the 2-D effective
   medium (tight below half sand, so a net-to-gross of 0.65 leaves a fifth to two fifths of the cells under 1 mD),
   kv/kh log-linearly from the mud's through the fringe's at half sand to the sand's. `self.interlobe` holds the
