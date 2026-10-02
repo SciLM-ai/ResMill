@@ -820,3 +820,42 @@ def test_the_report_gives_the_trap_with_the_most_closure_first():
     assert first["crest_depth"] > second["crest_depth"]
     _, _, zc, act = _build_geometry([layer], **built["kwargs"])
     assert [trap["crest_depth"] for trap in zone_trap(zc, act, dx, dx)] == [second["crest_depth"], first["crest_depth"]]
+
+
+@pytest.mark.parametrize("kind,azimuth", [("pinchout", 0.0), ("pinchout", 90.0), ("facies_change", 0.0)])
+def test_staggered_layers_end_each_farther_downdip_by_the_stagger_and_the_interval_keeps_its_thickness(kind, azimuth):
+    """Sand layers that end at different places make the pinch-out interfinger in section: with three layers of 4 m and
+    a stagger of 300 m the second layer first appears 300 m farther downdip than the first, and the third 600 m (to a
+    cell and a half), along the line and on every tongue; with a barrier zone under them (a facies change) the
+    interval is still 12 + 6 m thick under every column, the barrier taking what the three layers lose. No stagger
+    leaves the layers ending together."""
+    x_len, y_len, dx = 8000.0, 6000.0, 25.0
+    barrier = kind == "facies_change"
+    thick = [4.0, 4.0, 4.0] + ([6.0] if barrier else [])
+    layers = _layers(x_len, y_len, dx, thick, dz=1.0)
+    first = {}
+    for stagger in (0.0, 300.0):
+        built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=2, barrier=barrier, dip=1.5, taper_angle=0.5,
+                           area=1.5e6, aspect=1.0, warp=0.0, azimuth=azimuth, stagger=stagger)
+        _, _, zc, act = _build_geometry(layers, **built["kwargs"])
+        # along dip the first active row of each layer in the middle column of the tongue (azimuth 0), or the middle row
+        if azimuth == 0.0:
+            column = act[int(round(0.5 * x_len / dx)) + int(round(built["meta"]["tongues"][0]["offset"] / dx))]
+            first[stagger] = [int(np.argmax(column[:, 4 * k:4 * k + 4].any(axis=1))) * dx for k in range(3)]
+        else:                                                           # dip along +x: rows are x
+            row = act[:, int(round(0.5 * y_len / dx)) - int(round(built["meta"]["tongues"][0]["offset"] / dx))]
+            first[stagger] = [int(np.argmax(row[:, 4 * k:4 * k + 4].any(axis=1))) * dx for k in range(3)]
+        if barrier:
+            assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6) and act[:, :, 12:].all()
+    assert np.ptp(first[0.0]) <= 1.5 * dx
+    assert np.diff(first[300.0]) == pytest.approx([300.0, 300.0], abs=1.5 * dx)
+
+
+def test_a_stagger_belongs_to_the_depositional_edges_with_a_sand_of_more_than_one_layer():
+    args = (8000.0, 6000.0, 2000.0, [4.0, 4.0], 1)
+    for kind, kw in (("truncation", dict(dip=1.0, taper_angle=0.5)), ("onlap", {}), ("lens", {}),
+                     ("pinchout_nose", dict(area=None, nose=NOSE))):
+        with pytest.raises(ValueError, match="stagger"):
+            strat_trap(kind, *args, stagger=100.0, **kw)
+    with pytest.raises(ValueError, match="stagger"):
+        strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [8.0], 1, stagger=100.0)

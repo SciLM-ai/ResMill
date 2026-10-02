@@ -138,8 +138,8 @@ def _packed(widths, rng):
 
 
 def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.0, azimuth=0.0, taper_angle=0.3,
-               area=3.4e6, aspect=2.2, warp=0.3, tongues=(), wander=0.0, range_m=1000.0, hurst=0.75, floor_m=None,
-               relief_sd=0.0, relief_range=2000.0, mound=True, nose=None):
+               area=3.4e6, aspect=2.2, warp=0.3, tongues=(), stagger=0.0, wander=0.0, range_m=1000.0, hurst=0.75,
+               floor_m=None, relief_sd=0.0, relief_range=2000.0, mound=True, nose=None):
     """Build one stratigraphic trap on a plane monocline: the arguments for :func:`resmill.export.to_grdecl`
     (``**result["kwargs"]``) and what was drawn and expected (``result["meta"]``). ``kind`` is one of :data:`KINDS`:
 
@@ -177,7 +177,10 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     ``area=None`` gives a straight line, no closure. ``tongues`` are further tongues, a sequence of (area, aspect)
     that the caller draws (digitate ones have an aspect under 1), set side by side along the line in an order and with
     gaps drawn from ``seed``; a set that does not fit within 80 % of the model raises a ValueError. A lens has the
-    area and aspect as a whole ellipse in the middle of the model.
+    area and aspect as a whole ellipse in the middle of the model. A pinch-out or facies change of several sand layers
+    (``thicknesses``) interfingers in section if ``stagger`` (m) is given: each layer ends that much farther downdip
+    than the one above, along the line and round every tongue, so the sand's top is the first layer's and the layers
+    below it step back (the stacked, offset ridges of USGS DDS-33 fig. 8).
 
     The sand limit is irregular from ``floor_m`` up to ``range_m`` (1/32 of it unless given): ``wander`` (m) is the rms
     displacement of the limit, of the line and of every tongue's outline, a :func:`resmill.structure.relief` surface
@@ -225,6 +228,9 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     n_net = len(thicknesses) - bool(barrier)
     if n_net < 1:
         raise ValueError("thicknesses needs a sand layer as well as the barrier")
+    if stagger and (kind not in ("pinchout", "facies_change") or n_net < 2):
+        raise ValueError(f"a stagger (the sand layers ending each farther downdip) needs a pinch-out or a facies "
+                         f"change of more than one sand layer, not a {kind} of {n_net}")
     t_sand = sum(thicknesses[:n_net])
     taper_m = t_sand / np.tan(np.radians(taper_angle))
     az = np.radians(azimuth)
@@ -298,7 +304,14 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     rough = st.relief(wander, range_m, x_len, y_len, hurst, floor_m, seed=ss[1]) if wander else None
     if lens:
         taper_m = min(taper_m, 0.5 * lengths[0] * min(1.0, aspect)) if mound else taper_m   # a whole mound
-    f = st.taper(line, taper_m, azimuth, outline=outline, x_len=x_len, y_len=y_len, edge=rough)
+    def factor(shift):                                     # the thickness factor of a layer ending ``shift`` m downdip
+        moved = outline if not shift else st.Structure(
+            lambda x, y: outline(x - shift * dip_dir[0], y - shift * dip_dir[1]))
+        return st.taper(None if line is None else line + shift, taper_m, azimuth, outline=moved, x_len=x_len,
+                        y_len=y_len, edge=rough)
+
+    f = factor(0.0)
+    layers_f = [f] + [factor(k * stagger) for k in range(1, n_net)] if stagger else [f] * n_net
     sink = st.Structure(lambda x, y: t_sand * (1.0 - f(x, y)))        # what the top lies below the base's plane
     if lens and mound:
         structure = structure + sink                                 # the base stays flat: the top is the mound's
@@ -308,15 +321,16 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     elif kind == "onlap":                                              # the layers cut from below: the base is
         kwargs["erode_below"] = st.Structure(lambda x, y: top + structure(x, y) + t_sand * f(x, y))
     else:
-        ratio = t_sand / thicknesses[-1]                               # the barrier takes what the sand loses
-        complement = None if lens and mound else st.Structure(lambda x, y: 1.0 + ratio * (1.0 - f(x, y)))
-        kwargs["isochore"] = [f] * n_net + ([complement] if barrier else [])
+        complement = None if lens and mound else st.Structure(      # the barrier takes what the sand loses
+            lambda x, y: 1.0 + sum(t * (1.0 - g(x, y)) for t, g in zip(thicknesses, layers_f)) / thicknesses[-1])
+        kwargs["isochore"] = layers_f + ([complement] if barrier else [])
     tan_dip, along = np.tan(np.radians(dip)), float(centre @ dip_dir)
     cut = t_sand if kind.startswith("truncation") else 0.0              # a truncation's top is its sand's base
     level = top + tan_dip * ((along if lens else line) - along) + cut   # the depth of the line (of the middle)
     meta = dict(kind=kind, dip=dip, azimuth=azimuth, taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
-                area=None if nosed else area, aspect=None if nosed else aspect, warp=warp, wander=wander,
-                range_m=range_m, hurst=hurst, floor_m=floor_m, relief_sd=relief_sd, mound=bool(lens and mound),
+                area=None if nosed else area, aspect=None if nosed else aspect, warp=warp, stagger=stagger,
+                wander=wander, range_m=range_m, hurst=hurst, floor_m=floor_m, relief_sd=relief_sd,
+                mound=bool(lens and mound),
                 tongues=[dict(area=a, aspect=r, length=n, offset=float(v)) for (a, r), n, v in
                          zip(parts, lengths, offsets)] if area is not None and not nosed else [],
                 length=length, line=line, nose=nose, barrier=bool(barrier), net_layers=n_net, seed=seed,
