@@ -165,6 +165,31 @@ def test_faults_and_erosion_still_apply_with_salt():
     assert (with_salt == without * (~cells)).all()
 
 
+def test_the_faults_file_lists_only_faces_of_active_cells_beside_salt(tmp_path):
+    """A salt cell has no connection for the fault multiplier to act on, so FAULTS lists only cells that are live: of the
+    faces a fault would have in this model, those with a salt cell on either side (about half in the review's models, 175 of
+    331) are not written. Read back: every listed cell is active, the fault still has faces on both sides of the stock, and
+    without salt the same fault lists exactly the faces the salt cells took away and the live ones."""
+    L = layer(nz=6, dz=3.0)
+    fault = Fault(center=(CX, CY), strike=90.0, length=2400.0, throw=8.0, dip=60.0, name="F1")
+    body = sl.salt_body((CX, CY), (R, R))
+
+    def rows(**kw):
+        text = to_grdecl(L, tmp_path / "m.grdecl", faults=[fault], **kw).read_text()
+        return [r.split() for r in text.split("\nFAULTS\n")[1].split("\n/\n")[0].splitlines()], read_grdecl(tmp_path / "m.grdecl")
+
+    listed, blocks = rows(salt=body)
+    act = prop_cube(blocks, "ACTNUM", NX, NY, 6)
+    cells = lambda r: [(int(r[1]) - 1, int(r[3]) - 1, k - 1) for k in range(int(r[5]), int(r[6]) + 1)]
+    assert listed and all(act[c] > 0 for r in listed for c in cells(r))
+    bare, _ = rows()
+    in_salt = [r for r in bare if r[7] in ("'X'", "'Y'") and any(act[c] == 0 for c in cells(r))]
+    assert in_salt and len(bare) > len(listed)                                         # the dead faces were listed before
+    assert {" ".join(r) for r in listed} <= {" ".join(r) for r in bare}                # nothing else changes
+    js = {int(r[3]) for r in listed if r[7] == "'X'"}                                  # the trace runs along y through the stock
+    assert min(js) < NY // 2 - 5 and max(js) > NY // 2 + 5 and not {NY // 2} & js      # faces remain on both sides, none inside
+
+
 def test_the_grid_must_resolve_the_upturn():
     body = sl.salt_body((CX, CY), (R, R))
     sl.salt_upturn(body, 30.0, 300.0)                                    # folding zone 300 m: cells up to 150 m

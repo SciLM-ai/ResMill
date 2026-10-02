@@ -319,6 +319,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         (no pore volume, no connection); the wall is a staircase on cell
         faces, and cells must be at most ``salt.max_cell`` wide (half the
         narrowest upturn zone built on it). PORO and PERM keep their values.
+        FAULTS then lists only faces of active cells.
     """
     layers = list(getattr(model, "layers", [model]))
     L0 = layers[0]
@@ -380,7 +381,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
             from .faults import face_records
             f.write("\nFAULTS\n")
             for name, (_, side) in zip(names, faces):
-                for rec in face_records(name, side, Zc, actnum):
+                for rec in face_records(name, side if salt is None else side * (actnum > 0), Zc, actnum):   # no salt cell's face
                     f.write(" '{}' {} {} {} {} {} {} '{}' /\n".format(*rec))
             f.write("/\n\nMULTFLT\n")
             for name, (fault, _) in zip(names, faces):
