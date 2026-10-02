@@ -372,8 +372,9 @@ def relief(sd, range_m, x_len, y_len, hurst=0.75, floor_m=None, seed=None):
     ranges = range_m / 2.0 ** np.arange(int(np.log2(range_m / floor_m) + 1e-9) + 1)
     sds = ranges ** hurst
     sds *= float(sd) / np.sqrt((sds ** 2).sum())
-    return sum(roughness(s, r, x_len, y_len, seed=k)
-               for s, r, k in zip(sds, ranges, np.random.default_rng(seed).bit_generator.seed_seq.spawn(len(ranges))))
+    seq = np.random.default_rng(seed).bit_generator.seed_seq        # the octaves' streams, without spawning from it
+    return sum(roughness(s, r, x_len, y_len, seed=np.random.SeedSequence(seq.entropy, spawn_key=(*seq.spawn_key, i)))
+               for i, (s, r) in enumerate(zip(sds, ranges)))
 
 
 def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):

@@ -298,6 +298,25 @@ def test_relief_is_one_surface_per_seed_and_a_single_octave_when_the_floor_is_th
     assert one(1234.5, 2345.6) == pytest.approx(octave(1234.5, 2345.6))
 
 
+def test_relief_does_not_use_up_the_seed_sequence_it_is_given():
+    """A ``SeedSequence`` is the stream a caller hands out once: relief reads its entropy and spawn key and derives the
+    octaves' streams from them, so it returns the same surface however often it is asked, and the caller's sequence
+    still hands out the children it would have (``spawn`` counts them, and a relief that spawned would change them).
+    An integer seed gives the same octaves as the spawn of ``SeedSequence(seed)``."""
+    args = (10.0, 1500.0, 6000.0, 4000.0)
+    ss = np.random.SeedSequence(5)
+    a, b = (st.relief(*args, seed=ss)(1234.5, 2345.6) for _ in range(2))
+    assert a == b and ss.n_children_spawned == 0
+    assert ss.spawn(1)[0].spawn_key == (0,)
+    assert st.relief(*args, seed=5)(1234.5, 2345.6) == a
+    ranges = 1500.0 / 2.0 ** np.arange(6)                         # the default floor, a 32nd of the range: 6 octaves
+    sds = ranges ** 0.75
+    sds *= 10.0 / np.sqrt((sds ** 2).sum())
+    octaves = [st.roughness(s, r, 6000.0, 4000.0, seed=k)(1234.5, 2345.6)
+               for s, r, k in zip(sds, ranges, np.random.SeedSequence(5).spawn(6))]
+    assert a == pytest.approx(sum(octaves))
+
+
 @pytest.mark.parametrize("kw,message", [(dict(hurst=1.2), "hurst"), (dict(hurst=-0.1), "hurst"),
                                         (dict(floor_m=3000.0), "floor_m")])
 def test_relief_refuses_what_has_no_octaves(kw, message):
