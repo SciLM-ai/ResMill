@@ -32,6 +32,7 @@ transmissibility of those beside the contact falls: its 10th percentile is 0.41 
 30) with 50 m cells. There is no structure inside the salt, and the contact is always sealed (no sheath, no weld leak).
 """
 import math
+from collections import namedtuple
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -48,6 +49,7 @@ MAX_LOBES = 0.3           # the largest outline irregularity, as a fraction of t
 MAX_ROUGH = 0.05          # the largest outline roughness, as a fraction of the radius: beyond it the warp folds
 MIN_RANGE = 150.0         # m: the finest octave of the outline's roughness, three cells of 50 m [J]
 _MAX_SLOPE = 0.9          # the steepest slope the roughness' displacement may have, so that its warp cannot fold
+_ABOVE = -1.0e5           # m: a depth above every cell, where the truncating surface cuts nothing
 _RAYS = 16000             # directions the outline is cast along
 
 
@@ -247,6 +249,51 @@ def salt_thinning(salt, a, width, power=2.0, z_ref=None):
         raise ValueError(f"a must lie in [0, 1], got {a}")
     _zone(salt, width, power)
     return Structure(lambda x, y: 1.0 - a * _taper(salt.distance(x, y, z_ref, width), width, power))
+
+
+def salt_truncation(upturn, datum, cut):
+    """The unconformity that truncates the beds an upturn lifts, as an absolute-depth surface for
+    ``to_grdecl(erode_above=...)``: cells above it are removed. Giles & Rowan (2012) find the beds beside a diapir truncated
+    beneath a bounding unconformity, at over 70 degrees in a hook and under 30 in a wedge.
+
+    Where ``upturn`` (:func:`salt_upturn`) lifts the beds the surface is ``datum`` (the reservoir's top before the upturn: the
+    fold, its roughness and the top depth, any Structure-like) lifted by the fraction ``1 - cut`` of the upturn, so ``cut`` is
+    the share of the lift it removes: 1 a flat surface (the beds are cut off at their full dip), 0 none. A reservoir ``h``
+    thick is gone where ``cut`` x lift >= ``h``: it pinches out within the folding zone (Pichel & Jackson: up to 200 m from
+    the salt for a hook, 300-1000 m for a wedge). Beyond the zone the surface lies far above the model and cuts nothing, so
+    faults there keep their footwalls. It cuts the faulted stack, as the faults of a tier end at the unconformity above
+    (Coleman et al. 2018)."""
+    if not 0.0 <= cut <= 1.0:
+        raise ValueError(f"cut must lie in [0, 1], got {cut}")
+    datum, lift = _as_field(datum), _as_field(upturn)
+
+    def fn(x, y):
+        x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+        shift = lift(x, y)
+        return np.where(shift < 0.0, datum(x, y) + (1.0 - cut) * shift, _ABOVE)
+
+    return Structure(fn)
+
+
+Sequence = namedtuple("Sequence", "upturn truncation relief dip")
+
+
+def salt_sequence(salt, width, taper, cut, datum, power=2.0, z_ref=None):
+    """A halokinetic sequence beside a salt contact: its upturn and truncating unconformity (a :class:`Sequence`, for
+    ``structure=`` and ``erode_above=``), from what Giles & Rowan (2012) and Pichel & Jackson (EarthArXiv 657) measure.
+
+    ``width`` is the folding zone and ``taper`` the angle of the line from the fold's inflection point to its tip, so the
+    relief is ``width x tan(taper)`` (at ``power`` 2, a parabola, the beds meet the contact at ``atan(2 tan taper)``,
+    capped at :data:`MAX_DIP`). Hooks have 20-200 m zones (P10-P90 38-181 m; 36 % of the 96 sequences of the Precaspian walls,
+    50 % on upright and 19 % on inclined walls) and tapers of 40-86 degrees; wedges 300-1,970 m (P10-P90 375-1,020 m) and
+    8-49 degrees; ``cut`` follows the truncation angle (over 70 degrees for a hook: near 1; under 30 for a wedge: below
+    0.7). ``datum`` is the reservoir's top before the upturn (see :func:`salt_truncation`). Like :func:`salt_upturn` it
+    registers ``width`` on the body: the grid must have cells of at most half of it, a hook's 50-200 m included."""
+    if not 0.0 <= taper < 90.0:
+        raise ValueError(f"taper must lie in [0, 90) degrees, got {taper}")
+    dip = math.degrees(math.atan(power * math.tan(math.radians(taper))))
+    up = salt_upturn(salt, dip, width, power, z_ref)
+    return Sequence(up, salt_truncation(up, datum, cut), width * math.tan(math.radians(min(dip, MAX_DIP))) / power, dip)
 
 
 class SaltBase(Structure):
