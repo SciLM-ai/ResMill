@@ -403,3 +403,30 @@ def test_a_nose_belongs_to_the_combination_kinds_and_is_capped_at_the_largest_cl
     args = dict(x_len=8000.0, y_len=6000.0, top=2000.0, thicknesses=[10.0], seed=1, dip=1.0, taper_angle=0.3)
     with pytest.raises(ValueError, match=message):
         strat_trap(**{**args, **kw})
+
+
+@pytest.mark.parametrize("kind,extra", [("pinchout", {}), ("lens", {}), ("pinchout_nose", dict(nose=NOSE))])
+def test_lobes_that_warp_out_of_the_model_are_refused_and_the_rest_leave_a_trap_that_does_not_touch_its_edge(kind,
+                                                                                                          extra):
+    """A trap that reaches the edge of the model leaks over it, whatever it was meant to hold. Strongly warped lobes
+    do (the warp displaces them along strike by a share of their width, more for a long, thin trap), so such a seed
+    is refused, whenever the lobes come within 2 % of the edge; a seed that is accepted gives a trap that touches no
+    edge."""
+    x_len, y_len, dx = 8000.0, 6000.0, 100.0
+    kw = dict(extra) if extra else dict(area=6.0e6, aspect=4.5, warp=0.4)
+    if extra:
+        kw["nose"] = dict(NOSE, warp=0.4, area=8.0e6, aspect=0.5)
+    refused, accepted = 0, 0
+    for seed in range(24):
+        try:
+            built = strat_trap(kind, x_len, y_len, 2000.0, [10.0], seed=seed, dip=1.0, taper_angle=0.5, **kw)
+        except ValueError as error:
+            assert "edge" in str(error)
+            refused += 1
+            continue
+        accepted += 1
+        edge = np.zeros((int(x_len / dx), int(y_len / dx)), dtype=bool)
+        edge[[0, -1], :] = edge[:, [0, -1]] = True
+        trap = trap_report(_layers(x_len, y_len, dx, [10.0], dz=5.0), built)[0]
+        assert not (trap["mask"] & edge).any()
+    assert refused >= 3 and accepted >= 3

@@ -190,6 +190,16 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                              azimuth=azimuth, center=tuple(at), warp=warp, seed=seeds[0])
     if not (lens or nosed):
         line = float(at @ dip_dir)
+    foot = fold if nosed else outline
+    if foot is not None:
+        gx, gy = np.meshgrid(np.linspace(0.0, x_len, 101), np.linspace(0.0, y_len, 101), indexing="ij")
+        edge = np.zeros(gx.shape, dtype=bool)                              # the outer 2 % of the model: a few cells
+        edge[:2], edge[-2:], edge[:, :2], edge[:, -2:] = True, True, True, True
+        along_dip = gx * dip_dir[0] + gy * dip_dir[1]
+        watched = edge if lens else edge & (along_dip > line if nosed else along_dip < line)   # where the trap is
+        if (watched & (foot(gx, gy) < 0.0)).any():
+            raise ValueError("the lobes of the trap come within 2 % of the model's edge, over which it would leak: use "
+                             "another seed, a smaller warp or a larger model")
     f = st.taper(line, taper_m, azimuth, wander=0.0 if lens else wander, range_m=range_m, seed=seeds[1],
                  outline=outline, x_len=x_len, y_len=y_len)
     kwargs = dict(structure=structure)
