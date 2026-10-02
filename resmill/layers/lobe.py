@@ -351,9 +351,10 @@ class LobeLayer(Layer):
             if stack is not None:
                 kvkh = np.where(facies == 2, props[2].get("kvkh", self.kzkx), kvkh)
             self.kvkh_mat = kvkh.astype(np.float32)
-        if stack is not None and (thin > 0.0).any():
-            self.mult_z = self._thin_cap_multipliers(thin, 10.0 ** float(props[-1]["log10_perm"]))
-            self.interlobe["barrier_faces"] = float((self.mult_z[..., 1:] < 0.5).mean())
+        if stack is not None:
+            if (thin > 0.0).any():
+                self.mult_z = self._thin_cap_multipliers(thin, 10.0 ** float(props[-1]["log10_perm"]))
+            self.interlobe["barrier_faces"] = 0.0 if self.mult_z is None else float((self.mult_z[..., 1:] < 0.5).mean())
 
     def _thin_cap_multipliers(self, thin, mud_perm):
         """MULTZ of the thin caps (``thin``: metres on the lower face of each cell, k up), ``(nx, ny, nz)`` float32, 1 elsewhere.
