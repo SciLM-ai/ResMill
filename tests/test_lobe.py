@@ -210,3 +210,137 @@ def test_facies_props_refuses_what_a_lobe_does_not_use():
             _rocky({-1: dict(MUD), **bad}, ntg=0.5)
     with pytest.raises(ValueError, match="between"):                       # a floor above the mean sand fraction
         _rocky({-1: dict(MUD), 2: {"ntg_floor": 0.6}}, ntg=0.5)
+
+
+# --------------------------------------------------------------------------
+# opt-in interlobe mud: a cap on every stamp, thick at the margin, eroded where the next stamp is thick
+# --------------------------------------------------------------------------
+
+def _stack(*surfaces):
+    """A stack of cumulative surfaces (cells), ``(ny=1, nx)`` each, from the empty floor."""
+    return [np.zeros((1, len(surfaces[0])))] + [np.array([s], dtype=float) for s in surfaces]
+
+
+def test_a_stamp_is_capped_with_mud_and_the_next_stamp_cuts_the_cap():
+    """dz 1 m, mud cap M = 1 m, the next stamp cuts a fifth of its own thickness. Stamp 1 is 4 m thick on both columns (cap [3, 4]);
+    stamp 2 adds 3 m to column 0 only: it cuts 0.6 m off the top of that cap (mud [3, 3.4] stays: 0.4 m in cell 3) and lays a cap
+    of its own [6, 7]; column 1 keeps its whole cap, 1 m in cell 3."""
+    from resmill.layers.lobe import _stamp_mud
+
+    mud, amalgamated = _stamp_mud(_stack([4.0, 4.0], [7.0, 4.0]), nz=8, dz=1.0, mud_cap=1.0, erosion=0.2, floor=0.0)
+    expected = np.zeros((8, 1, 2))
+    expected[3, 0, :] = [0.4, 1.0]
+    expected[6, 0, 0] = 1.0
+    np.testing.assert_allclose(mud, expected, atol=1e-12)
+    assert amalgamated == 0.0                   # one contact (column 0), the cap survived
+
+
+def test_a_cap_cut_through_is_amalgamation():
+    """Erosion 0.5: the 3 m stamp cuts 1.5 m, more than the 1 m cap, so the sand of the two stamps touches: the cap of
+    stamp 1 is gone from column 0 (only stamp 2's own cap, 1 m in cell 6, is left) and the one contact is amalgamated."""
+    from resmill.layers.lobe import _stamp_mud
+
+    mud, amalgamated = _stamp_mud(_stack([4.0, 4.0], [7.0, 4.0]), nz=8, dz=1.0, mud_cap=1.0, erosion=0.5, floor=0.0)
+    assert mud[3, 0, 0] == 0.0 and mud[3, 0, 1] == 1.0 and mud[6, 0, 0] == 1.0
+    assert amalgamated == 1.0
+
+
+def test_the_cap_of_a_thin_stamp_keeps_the_fringes_sand_fraction():
+    """With a fringe sand fraction of 0.3 a stamp is never more than 0.7 mud: 4 m thick it is capped at M = 1 m, 1 m thin
+    (a margin) 0.7 m of it is mud and 0.3 m sand, whatever M is: here M = 5 m, so the 4 m stamp is 2.8 m mud."""
+    from resmill.layers.lobe import _stamp_mud
+
+    mud, _ = _stamp_mud(_stack([1.0, 4.0]), nz=4, dz=1.0, mud_cap=5.0, erosion=0.0, floor=0.3)
+    assert mud[:, 0, 0].sum() == pytest.approx(0.7) and mud[:, 0, 1].sum() == pytest.approx(2.8)
+    assert mud[0, 0, 0] == pytest.approx(0.7) and mud[1, 0, 1] == pytest.approx(0.8) and mud[2, 0, 1] == pytest.approx(1.0)
+
+
+def test_mud_above_the_top_of_the_layer_is_cut_off():
+    from resmill.layers.lobe import _stamp_mud
+
+    mud, _ = _stamp_mud(_stack([6.0]), nz=4, dz=1.0, mud_cap=2.0, erosion=0.0, floor=0.0)   # cap [4, 6]: above the layer
+    assert mud.sum() == 0.0
+
+
+def test_the_interlobe_sand_is_the_asked_net_to_gross_and_its_mud_thickens_as_it_falls():
+    """The cap thickness M is found so that the mean sand fraction is the asked net-to-gross; a sandier layer has a thinner
+    mud cap, more of its contacts amalgamated (the erosion is 0.2 of the younger stamp's thickness whatever the layer's
+    sand) and more of its cells sand-dominated."""
+    layer = _stamped(3, nx=60, ny=40, nz=24, r_ave=400.0, upthinning=False)
+    out = {}
+    for ntg in (0.4, 0.55, 0.7, 0.9):
+        sand, outcome = layer._interlobe_sand(ntg=ntg, erosion=0.2, floor=0.1)
+        assert sand.mean() == pytest.approx(ntg, abs=2e-3) and outcome["sand_fraction"] == pytest.approx(ntg, abs=2e-3)
+        assert sand.shape == (60, 40, 24) and 0.0 <= sand.min() and sand.max() <= 1.0
+        assert (sand >= 0.5).mean() == pytest.approx(outcome["net_cells"])
+        out[ntg] = outcome
+    order = (0.4, 0.55, 0.7, 0.9)
+    mud = [out[n]["mud_thickness_m"] for n in order]
+    amalgamated = [out[n]["amalgamated"] for n in order]
+    net = [out[n]["net_cells"] for n in order]
+    assert mud == sorted(mud, reverse=True) and mud[0] > 3.0 * mud[-1]
+    assert all(b >= a - 0.01 for a, b in zip(amalgamated, amalgamated[1:])) and amalgamated[-1] > 1.5 * amalgamated[0]
+    assert net == sorted(net) and 0.15 < net[0] < 0.45 and net[-1] > 0.9
+
+
+def test_an_interlobe_net_to_gross_below_what_the_stack_can_hold_is_warned_of_and_the_least_is_built():
+    """A fringe sand fraction of 0.3 holds sand in every stamp, so an asked 0.001 is out of reach: the thickest mud cap the
+    stack takes is built and the sand it leaves reported; a net-to-gross outside 0-1 is an error."""
+    layer = _stamped(3, nx=60, ny=40, nz=24, r_ave=400.0)
+    with pytest.warns(UserWarning, match="net-to-gross"):
+        sand, outcome = layer._interlobe_sand(ntg=0.001, erosion=0.0, floor=0.3)
+    assert outcome["sand_fraction"] > 0.2 and sand.mean() == pytest.approx(outcome["sand_fraction"])
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        layer._interlobe_sand(ntg=1.0, erosion=0.0, floor=0.3)
+
+
+def test_the_effective_permeability_of_a_mix_of_sand_and_mud():
+    """2-D effective medium (Bruggeman): k = (b + sqrt(b^2 + 4 ks km)) / 2 with b = (2 s - 1)(ks - km). All sand ks, all mud km,
+    half and half sqrt(ks km) = 1 mD for 100 mD and 0.01 mD; 80 % sand of 100 mD against 1e-3 mD: b = 59.9994 and
+    k = 0.5 (59.9994 + sqrt(59.9994^2 + 0.4)) = 60.0011 mD."""
+    from resmill.layers.lobe import _effective_perm
+
+    ks, km = np.array([100.0, 100.0, 100.0, 100.0]), np.array([0.01, 0.01, 0.01, 1e-3])
+    np.testing.assert_allclose(_effective_perm(np.array([1.0, 0.0, 0.5, 0.8]), ks, km), [100.0, 0.01, 1.0, 60.0011], rtol=1e-4)
+
+
+def test_interlobe_lobes_have_the_non_net_rock_the_net_to_gross_leaves():
+    """Where the faded lobes of the sand-fraction option held no cell under 87 mD at a net-to-gross of 0.65 (every cell
+    held a floor of sand, and was net), cells of sand fraction under a half are tight here. The layer's mean sand
+    fraction is the asked 0.65; a fifth to two fifths of its cells are under 1 mD, those with the sand in the minority,
+    and the facies are sand (3), thin-bedded fringe (2) and mud (-1)."""
+    layer = _rocky({-1: dict(MUD), 2: {"ntg_floor": 0.3, "kvkh": 0.002}, 3: {"kvkh": 0.6}}, ntg=0.65, interlobe_erosion=0.3)
+    perm, s = np.asarray(layer.perm_mat), np.asarray(layer.sand_fraction)
+    assert s.mean() == pytest.approx(0.65, abs=3e-3)
+    assert 0.2 < (perm < 1.0).mean() < 0.4 and (perm < 1.0).mean() == pytest.approx(1.0 - layer.interlobe["net_cells"], abs=0.01)
+    assert (perm[s < 0.5] < 1.0).all() and (perm[s > 0.51] > 1.0).all()
+    assert {2, 3} <= set(np.unique(layer.facies)) <= {-1, 2, 3}
+    assert np.array_equal(layer.facies == 3, s >= 0.5)
+    assert layer.interlobe["mud_thickness_m"] > 0.0 and 0.0 <= layer.interlobe["amalgamated"] <= 1.0
+
+
+def test_interlobe_kvkh_is_lowest_in_the_most_heterolithic_cell():
+    """kv/kh runs log-linearly from the mud's (0.1) through the fringe's (0.002 at half sand) to the sand's (0.6)."""
+    layer = _rocky({-1: dict(MUD, kvkh=0.1), 2: {"ntg_floor": 0.3, "kvkh": 0.002}, 3: {"kvkh": 0.6}}, ntg=0.65, interlobe_erosion=0.3)
+    s, kvkh = np.asarray(layer.sand_fraction, dtype=float), np.asarray(layer.kvkh_mat, dtype=float)
+    expected = np.where(s < 0.5, 0.1 * (0.002 / 0.1) ** (s / 0.5), 0.002 * 300.0 ** ((s - 0.5) / 0.5))
+    assert np.allclose(kvkh, expected, rtol=1e-3)
+
+
+def test_interlobe_mud_needs_the_rock_by_facies():
+    with pytest.raises(ValueError, match="facies_props"):
+        _stamped(1, nx=40, ny=30, nz=16, interlobe_erosion=0.3)
+
+
+def test_the_decay_of_a_thin_stamp_is_clipped_when_asked():
+    """A stamp thinner than a couple of cells has cells whose lower face is below its base, and the porosity decay
+    (surface top - lower face) / thickness exceeds 1 there: a ring of porosity above the design maximum of 0.35, in
+    plan view a small bright ring. ``clip_decay`` holds it to 1."""
+    peaks = {}
+    for clip in (False, True):
+        np.random.seed(2)
+        layer = LobeLayer(nx=40, ny=30, nz=16, x_len=2000.0, y_len=1500.0, z_len=24.0, top_depth=1000)
+        _, allporo, _ = layer._lobemodeling(dh_ave=3.0, dh_std=0.6, r_ave=300.0, r_std=60.0, asp=1.7, azimuth=0.0,
+                                            azimuth_std=10.0, upthinning=False, compensation_scale=0.1, clip_decay=clip)
+        peaks[clip] = float(allporo[-1].max())
+    assert peaks[False] > 0.36 and peaks[True] <= 0.35 + 1e-9

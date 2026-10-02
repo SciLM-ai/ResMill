@@ -230,6 +230,22 @@
   one at 0.501 for 0.5 (bars 4 x 1.5). The engine takes the stop as a hook, `after_tree(engine)`, called
   after each network: a True ends the level's networks and none is abandoned. Off by default: outputs
   are bit-identical.
+- `interlobe_erosion` (`LobeLayer`, with `facies_props`): interlobe mud, continuous around each lobe at a low
+  net-to-gross and eroded away at the axes at a high one. The sand-fraction option above fades every cell's sand
+  from the axis to a fringe but leaves every cell with at least that fringe's sand (87 mD at a net-to-gross of 0.65
+  and 3 decades above the mud), so a section holds no non-net rock at all. With `interlobe_erosion` each stamp is
+  capped with mud `min((1 - f) t, M)` thick (`t` its thickness at the column, `f` the sand fraction of its margin,
+  `facies_props[2]["ntg_floor"]`), so a lobe's sand fraction falls from `1 - M / t` where it is thick to `f` at its
+  margin (Tanqua: axis 85-100 %, off-axis 50-85 %, fringe 20-50 %), and the next stamp over a column cuts
+  `interlobe_erosion` times its own thickness off that cap (sand on sand where it is thick, no cut at its
+  margin). `M` is found by bisection so that the layer's mean sand fraction is `ntg` (thickness-based, whatever the
+  grid; a warning if the stack cannot go as low); porosity mixes arithmetically, permeability as the 2-D effective
+  medium (tight below half sand, so a net-to-gross of 0.65 leaves a fifth to two fifths of the cells under 1 mD),
+  kv/kh log-linearly from the mud's through the fringe's at half sand to the sand's. `self.interlobe` holds the
+  cap thickness, the share of contacts amalgamated and the share of net cells. The option also clips the porosity
+  decay of a stamp thinner than a cell or two at 1: a cell whose lower face lies below the stamp's base had a decay
+  above 1, a ring of porosity above the design maximum 0.35 that shows as a small bright ring in a plan view
+  (`clip_decay`, off in every other path). Default `None`: outputs are bit-identical.
 - `max_levels=N` (`DeltaLayer`, with `tree_ntg_stop=True`): the layer is grown level by level instead of
   piling networks at `n_generations` levels. The stop of `tree_ntg_stop` with `n_trees` large puts 100 or
   more networks at each of a few levels, and since every plan view then holds the union of them (a
