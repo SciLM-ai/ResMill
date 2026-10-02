@@ -3,6 +3,7 @@ against it or folded beneath a cover, the thickness draw (N30), and the labels a
 of salt)."""
 import math
 import signal
+import statistics
 from contextlib import contextmanager
 
 import numpy as np
@@ -97,13 +98,23 @@ def test_base_of_salt_is_a_plane_at_the_depth_and_dip_plus_roughness_and_a_high(
     assert lazy(np.zeros(3), y) == pytest.approx(3000.0 + (y - 500.0) * math.tan(math.radians(10.0)))
 
 
-def test_the_thickness_draw_is_the_log_normal_of_the_seven_published_values():
-    published = np.array([302.0, 338.0, 515.0, 1006.0, 2118.0, 2438.0, 3353.0])           # N30, m
-    draws = sl.salt_thickness(np.random.default_rng(0), size=20000)
-    assert np.median(draws) == pytest.approx(np.exp(np.log(published).mean()), rel=0.04)    # about 1.0 km
-    assert np.median(draws) == pytest.approx(1000.0, rel=0.1)
-    assert 0.3 * published.mean() < draws.mean() < 2.0 * published.mean()
-    assert draws.max() <= 4600.0 and draws.min() >= 100.0                                   # the canopy's 4,572 m cap
+def test_the_thickness_draw_is_the_log_normal_of_the_seven_published_values_truncated_not_clipped():
+    """N30: seven published thicknesses (m) give a log-normal of mean 6.895 and sample sd 0.989 in ln m (median 987 m; the
+    population sd of 0.916 would put the P90 at 2,330 m). Cut at 100 and 4,600 m by the inverse CDF it holds no mass at the cuts
+    (a clip made 6.0 % of the draws exactly 4,600 m and 1.0 % exactly 100 m) and its quantiles are those of the standard library's
+    normal distribution (an implementation of its own), renormalised between them: P10/P50/P90 = 283 / 929 / 2,719 m."""
+    published = (302.0, 338.0, 515.0, 1006.0, 2118.0, 2438.0, 3353.0)
+    logs = [math.log(t) for t in published]
+    normal = statistics.NormalDist(statistics.mean(logs), statistics.stdev(logs))
+    lo, hi = normal.cdf(math.log(100.0)), normal.cdf(math.log(4600.0))
+    expected = [math.exp(normal.inv_cdf(lo + q * (hi - lo))) for q in (0.1, 0.5, 0.9, 0.99)]
+    assert expected[:3] == pytest.approx([283.1, 928.5, 2719.4], abs=0.1)
+    draws = sl.salt_thickness(np.random.default_rng(0), size=200000)
+    assert np.percentile(draws, [10, 50, 90, 99]) == pytest.approx(expected, rel=0.03)
+    assert draws.max() < 4600.0 and draws.min() > 100.0
+    share = lambda a, b: (normal.cdf(math.log(b)) - normal.cdf(math.log(a))) / (hi - lo)       # the density's own mass near a cut
+    assert (draws > 4400.0).mean() == pytest.approx(share(4400.0, 4600.0), abs=0.001)          # 0.6 %: a clip gives 6.6 %
+    assert (draws < 120.0).mean() == pytest.approx(share(100.0, 120.0), abs=0.001)             # 0.7 %: a clip gives 1.7 %
     assert (draws > 3400.0).mean() > 0.04                                                    # the tail past the 3.4 km sample
     assert sl.salt_thickness(np.random.default_rng(1)) == sl.salt_thickness(np.random.default_rng(1))
 

@@ -44,13 +44,14 @@ from collections import namedtuple
 import contourpy
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.special import ndtr, ndtri
 
 from .structure import Structure, _as_field, _axes, _mid, _wave_sum, _waves, roughness, surface
 
 # Salt thickness over discovered subsalt reservoirs (m): SMI 200, GB 171, WC 505, Mica, GB 165, Hickory, Tahiti (N30,
 # Moore & Brooks 2009 and the MMS pages): median 1.0 km, the canopy "more than 15,000 ft (4,572 m) thick in some places".
 _THICKNESS_M = (302.0, 338.0, 515.0, 1006.0, 2118.0, 2438.0, 3353.0)
-MAX_THICKNESS = 4600.0    # m: the canopy's thickest
+MAX_THICKNESS = 4600.0    # m: the canopy's thickest, just above the 4,572 m it is "more than" in places [J]
 MIN_THICKNESS = 100.0     # m: below the thinnest sample (302 m) a log-normal tail has a weld, not a sheet [J]
 MAX_DIP = 85.0            # degrees: the largest upturn dip (the owner's choice over 75, 2026-10-01)
 MAX_LOBES = 0.3           # the largest outline irregularity, as a fraction of the radius (closure's warp reaches 0.35)
@@ -377,10 +378,13 @@ def base_of_salt(depth, dip=0.0, azimuth=0.0, rough=None, high=None, center=None
 
 
 def salt_thickness(rng, size=None):
-    """Thickness (m) of the salt over a subsalt trap: log-normal fitted to the seven published values of N30 (median
-    1.0 km), kept between :data:`MIN_THICKNESS` and :data:`MAX_THICKNESS`. ``rng`` a ``numpy.random.Generator``."""
+    """Thickness (m) of the salt over a subsalt trap: the log-normal fitted to the seven published values of N30 (median
+    0.99 km, sample sd 0.99 in ln m) truncated, not clipped, to :data:`MIN_THICKNESS`-:data:`MAX_THICKNESS` by the inverse CDF, so
+    that none of the draws sits at a bound: P10/P50/P90 283 / 929 / 2,719 m. ``rng`` a ``numpy.random.Generator``."""
     logs = np.log(_THICKNESS_M)
-    return np.clip(np.exp(rng.normal(logs.mean(), logs.std(ddof=1), size)), MIN_THICKNESS, MAX_THICKNESS)
+    mu, sd = logs.mean(), logs.std(ddof=1)
+    lo, hi = ndtr((np.log([MIN_THICKNESS, MAX_THICKNESS]) - mu) / sd)
+    return np.exp(mu + sd * ndtri(lo + rng.uniform(size=size) * (hi - lo)))
 
 
 def salt_labels(model, salt=None, structure=None, top=None, base=None, erode_above=None, erode_below=None,
