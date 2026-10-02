@@ -4,10 +4,10 @@ A structural trap closes by the dip of its top surface; a stratigraphic one clos
 absent (pinched out, eroded, onlapped) a column is a wall, never an exit: the only way out of a trap is over the map's
 edge. :func:`zone_trap` reads the traps of the top of a zone's active cells on that rule, as pools (the elder rule of
 :func:`_pools`: every local minimum of the top, with the level at which it spills into a pool with a shallower crest or
-leaves the map), the flood being that of :func:`resmill.structure.closure_stats` for a body's own pool, which neither
-loops on nor leaks through such columns. Read the other way, with an absent neighbour counting as an exit, a tongue of
-sand protruding updip from a sheet that continues downdip has no closure at all, though it holds the dip times its
-length (15.4 m in the research prototype, 0 m by that reading).
+leaves the map; for a body's own pool that level is the spill that :func:`resmill.structure.closure_stats` gives, the
+deepest top on the best way out, which neither loops on nor leaks through such columns). Read the other way, with an
+absent neighbour counting as an exit, a tongue of sand protruding updip from a sheet that continues downdip has no
+closure at all, though it holds the dip times its length (15.4 m in the research prototype, 0 m by that reading).
 
 :func:`barrier_column` is Berg's (1975) oil column that a finer barrier zone holds in a coarser reservoir sand, the
 limit of a facies-change trap's fill.
@@ -73,8 +73,9 @@ def _pools(depth):
     nx, ny = depth.shape
     level = depth.ravel().tolist()
     cells = [c for c in np.argsort(depth.ravel(), kind="stable").tolist() if level[c] < math.inf]
-    parent, crest, opened, pools = {}, {}, {}, []      # union-find over the cells the water has reached; per root:
-    #                                                    the crest of its pool (None: none yet) and if it holds the edge
+    # union-find over the cells the water has reached; per root: the crest of its pool (None: it has none) and whether
+    # its water holds a cell of the edge
+    parent, crest, opened, pools = {}, {}, {}, []
 
     def find(c):
         while parent[c] != c:
@@ -115,7 +116,7 @@ def _pools(depth):
         for c in group:
             i, j = divmod(c, ny)
             parent[c], crest[c], opened[c] = c, c, i in (0, nx - 1) or j in (0, ny - 1)
-        for c in group:                                  # the plateau of each cell first: one pool, not a pool a cell
+        for c in group:                                  # cells of one level that touch are one plateau: one pool, not many
             for m in steps(c):
                 if level[m] == at:
                     a, b = find(c), find(m)
@@ -127,7 +128,7 @@ def _pools(depth):
                 if opened[r]:
                     ends(crest[r], at, None)             # on the map's edge from its birth: no closure
             else:
-                crest[r] = None if lower else crest[r]
+                crest[r] = None                          # it lies beside shallower water: no pool of its own
                 for m in lower:
                     join(r, m, at)
     for r in {find(c) for c in parent}:

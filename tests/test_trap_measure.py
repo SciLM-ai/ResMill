@@ -295,6 +295,10 @@ def test_the_pools_of_random_maps_are_those_a_rising_water_level_finds():
         assert set(found) == set(expected)
         for crest, spill in expected.items():
             assert (np.inf if found[crest]["spill_depth"] is None else found[crest]["spill_depth"]) == pytest.approx(spill)
+        flood = st._spill_levels(depth)                         # a body's own pool ends where the priority flood says
+        for t in found.values():
+            if t["primary"]:
+                assert (np.inf if t["spill_depth"] is None else t["spill_depth"]) == flood[t["crest"]]
         listed = {t["crest"] for t in _traps(depth, 1.0, 1.0, min_height=3.0)}
         assert listed == {c for c, t in found.items() if t["primary"] or t["closure"] >= 3.0}
         checked += len(expected)
