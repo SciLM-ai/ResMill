@@ -38,6 +38,7 @@ from ._genabandoned import paint_abandoned
 from ._calc_levee import paint_levee
 from ._calc_lobe_splay import paint_lobe, paint_splay
 from ._make_cutoff import make_cutoff
+from ._fusion import REACH_WIDTHS, Belts, fuse
 
 # Upper clip applied to every drawn sinuosity in ``_sample_streamline``;
 # used to size the ``ndis_cap`` walk safety net from the grid diagonal.
@@ -468,6 +469,14 @@ class fluvial:
         distinct_events: bool = False,
         # Record each CH/LA cell's local channel direction in ``flow_angle`` (for kx/ky).
         record_flow_angle: bool = False,
+        # A lineage (the migration history of one path between two births) is a reoccupier with this probability: where
+        # its path meets an older path of its own level (a path of an earlier level is another generation and is left
+        # crossing) it bends into the older heading over a few channel widths and follows it to the edge of the model,
+        # as coeval channels merge at a confluence and a new avulsion channel reoccupies an older course; looked for when
+        # the path is born and after every migration. ``fuse_max_angle`` (degrees): a path meeting the older one at more
+        # than this is turned towards it before the bend. 0: today's crossings, nothing drawn.
+        fuse_prob: float = 0.0,
+        fuse_max_angle: float = 70.0,
         # ---- misc -------------------------------------------------------
         seed: int | None = None,
     ):
@@ -692,6 +701,17 @@ class fluvial:
         self.poro_mult_std = float(event_poro_sd)
         self.log_perm_offset_std = float(event_log_perm_sd)
         self.distinct_events = bool(distinct_events)
+        if not 0.0 <= fuse_prob <= 1.0:
+            raise ValueError(f"fuse_prob must be in [0, 1], got {fuse_prob}")
+        if fuse_prob > 0.0 and bifurcate:
+            raise ValueError("fuse_prob joins channel paths; a distributary tree (bifurcate) merges its own branches")
+        self.fuse_prob, self.fuse_max_angle = float(fuse_prob), float(fuse_max_angle)
+        # for ``fuse_prob``: the paths of the level's finished lineages (``_belts``), the paths of the lineage now active
+        # (``_events``), whether it merges where it meets an older path (``_merging``, drawn when it is born, from a stream
+        # of its own) and the metres of its path from the entry to where it left its parent (``_shared_m``)
+        self._belts = Belts(nx, ny, self.xmin, self.ymin, xsiz, ysiz) if fuse_prob > 0.0 else None
+        self._fuse_rng = np.random.default_rng(None if seed is None else [int(seed), 0xF05E]) if fuse_prob > 0.0 else None
+        self._events, self._merging, self._shared_m = [], False, 0.0
 
         # Cache for the current channel event's K-C-coupled poro/perm pair.
         # ``_stamp_channel`` redraws and refreshes this; ``_stamp_levee``
@@ -1048,7 +1068,42 @@ class fluvial:
         self._chwidth_arr = c['chwidth_arr'].copy()
         self._chwidth_state_n = self.cx.size
         self.chelev_arr = np.full(self.ndis, self.chelev, dtype=np.float64)
+        if self._belts is not None:
+            self._begin_lineage(0.0)
+            self._merge(self.cx, self.cy, 0.0)
         return 1
+
+    def _begin_lineage(self, shared_m):
+        """A path is born (``fuse_prob``): the lineage before it is finished, so its paths are older ones; the new lineage
+        merges where it meets an older path with probability ``fuse_prob``. ``shared_m``: metres of the new path, from its
+        entry, that it shares with the path it left."""
+        for x, y in self._events:
+            self._belts.add(x, y, *self._rot_xy(x, y))
+        self._events, self._shared_m = [], shared_m
+        self._merging = bool(self._fuse_rng.random() < self.fuse_prob)
+
+    def _merged(self, x, y, shared_m):
+        """The path ``(x, y)`` joined to the first older path of this level it crosses, or as it is: only a merging lineage
+        joins, and a crossing counts from ``REACH_WIDTHS`` channel widths beyond the first ``shared_m`` metres of the path,
+        which it shares with its parent (:mod:`resmill.layers._fusion`)."""
+        if not (self._merging and self._belts.n_paths):
+            return x, y
+        width = 2.0 * self.CHhalfwidth
+        arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(x), np.diff(y)))])
+        joined = fuse(self._belts, x, y, *self._rot_xy(x, y), width, self.step,
+                      int(np.searchsorted(arc, shared_m + REACH_WIDTHS * width)), self.fuse_max_angle)
+        return (x, y) if joined is None else joined
+
+    def _merge(self, x, y, shared_m):
+        """Make the path ``(x, y)`` the streamline, joined to an older path where it meets one (``_merged``); True when it
+        joined, in which case the widths are to be drawn afresh and the curvature worked out again."""
+        self.cx, self.cy = self._merged(x, y, shared_m)
+        if self.cx is x:
+            return False
+        self.ndis = self.cx.size
+        self.chelev_arr = np.full(self.ndis, self.chelev, dtype=np.float64)
+        self._chwidth_arr, self._chwidth_state_n = None, -1
+        return True
 
     # ----------------------------------------------------------------- per-node onedrf width
 
@@ -1363,6 +1418,9 @@ class fluvial:
         )
         if cx_tail is None or cx_tail.size < 5:
             return False
+        if self._belts is not None:
+            self._begin_lineage(float(np.hypot(np.diff(self.cx[:ianode + 1]), np.diff(self.cy[:ianode + 1])).sum()))
+            cx_tail, cy_tail = self._merged(cx_tail, cy_tail, 0.0)
         # Splice (drop the duplicate first node of the tail)
         cx_new = np.concatenate([self.cx[:ianode + 1], cx_tail[1:]])
         cy_new = np.concatenate([self.cy[:ianode + 1], cy_tail[1:]])
@@ -1561,6 +1619,8 @@ class fluvial:
             ev_poro_mult=ev_pm, ev_log_perm_offset=ev_po,
             slope_banks=self.continuous_banks, flow_angle=self.flow_angle,
         )
+        if self._belts is not None and facies_code == CH:
+            self._events.append((self.cx.copy(), self.cy.copy()))
 
     def _stamp_splays(self, n_splay: int, n_lobe_per_splay: int):
         """Place ``n_splay`` crevasse-splay clusters along the streamline.
@@ -1853,6 +1913,9 @@ class fluvial:
 
         for ilevel in range(self.nlevel):
             self._level = ilevel
+            if self._belts is not None:      # only the paths of its own level are older ones
+                self._belts = Belts(self.nx, self.ny, self.xmin, self.ymin, self.xsiz, self.ysiz)
+                self._events = []
             self.chelev = float(self.level_z[ilevel])
             self.chelev_arr = np.full(self.ndis, self.chelev, dtype=np.float64)
             # When ntime is per-level, reset the event counter so each level
@@ -1938,6 +2001,8 @@ class fluvial:
                     if self._migrate_one_step(distMigrate) == 0:
                         if not self._draw_from_pool():
                             return
+                        self.cal_curv()
+                    elif self._merging and self._merge(self.cx, self.cy, self._shared_m):
                         self.cal_curv()
                     self._is_first_streamline = False
 

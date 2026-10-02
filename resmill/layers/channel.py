@@ -572,6 +572,10 @@ class ChannelLayer(Layer):
         levee_ntg_decay_m: float | None = None,
         # Mud drapes at the bases of storeys as face multipliers (None: none); see the docstring
         drapes: dict | None = None,
+        # Probability that a lineage reoccupies the older path of its own level it meets (0: they cross); the
+        # largest angle a path joins at, degrees; see the docstring
+        fuse_prob: float = 0.0,
+        fuse_max_angle: float = 70.0,
         seed: int | None = None,
     ):
         """Generate channel geology with Alluvsim-faithful semantics.
@@ -613,6 +617,19 @@ class ChannelLayer(Layer):
           (``mCHdepth`` x ``mCHwdratio``; neither: half a width [J]; G-S11 draws 0.25-4).
           Method and sources: :mod:`resmill.layers.drapes`. None (default): no drapes, outputs
           bit-identical, no random number drawn.
+        * ``fuse_prob`` — fusion of channels that meet. The engine has one active channel at a time, so a path drawn from
+          the pool, spliced on by an avulsion inside or moved by migration into an older path *of its own level* cuts
+          straight through it and both go on, sand on sand, at 50-90 degrees, which coeval channels do not do (they merge
+          at a confluence; a new avulsion channel that meets an older course usually reoccupies it). With ``fuse_prob`` > 0
+          a lineage (the migration history of one path between two births, the avulsions) is a reoccupier with this
+          probability, drawn when it is born: at the first crossing at 15 degrees or more beyond three channel widths of
+          its own length, in its first path and again after every migration, its path bends into the older heading over
+          five channel widths (turned first towards it if the two meet at more than ``fuse_max_angle`` degrees: a
+          confluence joins at an acute angle) and follows the older path to the edge of the model. The other lineages cut
+          across as before. Paths of other levels are other generations and stay crossings, though there are fewer of
+          them, as the paths of a level bundle onto fewer trunks. The decision has a random stream of its own, seeded from
+          ``seed``, and a joined path's widths are drawn afresh, so the global stream moves on from the first join.
+          Method: :mod:`resmill.layers._fusion`. 0 (default): nothing changes, outputs bit-identical, nothing drawn.
         """
         from ._fluvial import fluvial
 
@@ -660,6 +677,7 @@ class ChannelLayer(Layer):
             splay_step=splay_step, max_sinuosity=max_sinuosity,
             event_poro_sd=event_poro_sd, event_log_perm_sd=event_log_perm_sd, distinct_events=distinct_events,
             record_flow_angle=any("kxky" in dict(v) for v in (facies_props or {}).values()),
+            fuse_prob=fuse_prob, fuse_max_angle=fuse_max_angle,
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,
             azimuth=azimuth, seed=seed,
