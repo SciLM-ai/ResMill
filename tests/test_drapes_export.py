@@ -4,7 +4,7 @@ import tracemalloc
 import numpy as np
 import pytest
 
-from resmill.export import drape_multipliers, to_grdecl
+from resmill.export import drape_multipliers, horizontal_permeability, to_grdecl
 from resmill.fault_seal import Seal
 from resmill.faults import Fault
 from resmill.layers.base import Layer
@@ -105,3 +105,25 @@ def test_a_model_without_drapes_builds_nothing_for_them():
     finally:
         tracemalloc.stop()
     assert peak < 100_000
+
+
+def test_a_multiplier_of_the_wrong_shape_is_refused_and_leaves_no_truncated_file(tmp_path):
+    """A mult_x that is not the layer's (nx, ny, nz) would be written as a MULTX of the wrong length (a file Flow rejects):
+    it is refused before the file is opened, so an earlier file of that name is not truncated either. The kx / ky
+    multipliers, which share the stacking helper, are held to their layer's shape too (one of (nx, ny, 1) broadcast)."""
+    layer = _plain_layer()
+    layer.mult_x = np.ones((2, 2, 2), dtype=np.float32)
+    layer.mult_y = layer.mult_z = None
+    target = tmp_path / "m.grdecl"
+    target.write_text("an earlier export")
+    with pytest.raises(ValueError, match="mult_x"):
+        to_grdecl(layer, target)
+    assert target.read_text() == "an earlier export"
+    fresh = tmp_path / "new.grdecl"
+    with pytest.raises(ValueError, match="mult_x"):
+        to_grdecl(layer, fresh)
+    assert not fresh.exists()
+    layer.mult_x = None
+    layer.kx_mult = np.ones((4, 3, 1), dtype=np.float32)
+    with pytest.raises(ValueError, match="kx_mult"):
+        horizontal_permeability(layer)
