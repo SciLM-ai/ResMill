@@ -13,6 +13,14 @@
 
 ### Added
 
+- `to_grdecl(report=dict)` and `fault_seal.block_inputs`, `blocks_at`, `block_labels`: the fault blocks of a model for
+  any fluid, without writing the grid again. `fault_blocks` needed the corner stack and the faces, which only
+  `to_grdecl` holds, and its contacts depend on the fluid (`Capillary.delta_rho`), drawn after the model. `report` is
+  filled with `fault_names`, `faults` (the seal's record of each fault, `[]` without a seal) and `block_inputs` (the
+  tops' depth map, which columns hold rock, the cell edges a fault splits and the face records: a few arrays of map
+  size); `blocks_at(inputs, dx, dy, capillary)` is `fault_blocks` on them and `block_labels(inputs)` gives every
+  column its fault block. `fault_blocks` is their composition, `report=None` (the default) writes the same file:
+  outputs are bit-identical to before.
 - `splay_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
   passthrough): metres between the points of a splay's walk. Alluvsim walks a
   splay one grid cell per step, draws as many random numbers as it takes steps,

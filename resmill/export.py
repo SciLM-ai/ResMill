@@ -302,7 +302,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
               erode_above=None, erode_below=None, facies=False, isochore=None, onlap=False,
               faults=None,
               poro_floor=None, perm_floor=None,
-              fmt_z="%.2f", fmt_prop="%.6g", seal=None):
+              fmt_z="%.2f", fmt_prop="%.6g", seal=None, report=None):
     """Write a self-contained Eclipse/Petrel corner-point file (GRDECL).
 
     The file carries SPECGRID, COORD, ZCORN, ACTNUM, PORO, PERMX, PERMY
@@ -360,6 +360,13 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
         anything else is refused before a file is written. ``seal.scatter``,
         ``offset``, ``p_open`` and ``p_enhance`` spread the faults'
         multipliers, a share of them open or raising flow, as in company decks.
+    report : dict, optional
+        Filled in place, nothing more is written for it: ``fault_names`` (the names in FAULTS, ``F01`` ... for a fault
+        without one), ``faults`` (:func:`resmill.fault_seal.face_multipliers`' record of each fault: ``name``,
+        ``mode``, ``sgr``, ``mult``, ``effective``; ``[]`` without a seal) and ``block_inputs``
+        (:func:`resmill.fault_seal.block_inputs`), from which :func:`resmill.fault_seal.blocks_at` draws the fault
+        blocks of any fluid and :func:`resmill.fault_seal.block_labels` labels the map's columns. Without a seal no
+        face has a record, so every edge a fault splits is a wall; a model without faults is one block.
 
     A channel layer made with ``drapes`` (mud drapes at the bases of storeys,
     :mod:`resmill.layers.drapes`) also gets MULTX, MULTY and MULTZ, its drapes'
@@ -433,12 +440,18 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
             for name, (fault, _) in zip(names, faces):
                 f.write(f" '{name}' {fault.mult:g} /\n")
             f.write("/\n")
+        sealed = None
         mults = drapes
         if seal_vsh is not None:
             from .fault_seal import face_multipliers
-            mults = face_multipliers(faces, Zc, actnum, seal_vsh, (permx, permy, permz), L0.dx, L0.dy, seal)
+            sealed = mults = face_multipliers(faces, Zc, actnum, seal_vsh, (permx, permy, permz), L0.dx, L0.dy, seal)
             if drapes is not None:
-                mults = {key: mults[key] * drapes[key] for key in drapes}
+                mults = {key: sealed[key] * drapes[key] for key in drapes}
+        if report is not None:
+            from .fault_seal import _record_array, block_inputs
+            records = sealed if sealed is not None else {"face_records": _record_array([])}
+            report.update(fault_names=list(names), faults=[] if sealed is None else sealed["faults"],
+                          block_inputs=block_inputs(Zc, actnum, faces, records))
         if mults is not None:
             for key in ("MULTX", "MULTY", "MULTZ"):
                 f.write("\n")
