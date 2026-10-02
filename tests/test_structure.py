@@ -345,14 +345,17 @@ def test_taper_gradient_averages_the_drawn_angle_and_is_steepest_at_the_tip():
     assert np.all(np.diff(thickness) >= 0.0) and thickness.min() == 0.0 and thickness.max() == t_m
 
 
-def test_taper_edge_moves_the_limit_by_the_relief_it_is_given():
-    """``edge`` (a Structure, metres) is added to the distance in from the line: where it is +R the sand reaches R m
-    farther updip, so the factor is the profile of (y - position + R) / taper_m."""
+def test_taper_edge_moves_the_limit_by_the_relief_it_is_given_and_less_as_the_sand_thickens():
+    """``edge`` (a Structure, metres) is added to the distance in from the line d, fading out over the taper: where it
+    is +R the sand reaches R m farther updip, and the factor is the profile of (d + R (1 - d / taper_m)) / taper_m
+    for d in the taper, so that the full thickness is as smooth as the line."""
     kw = dict(position=1500.0, taper_m=500.0)
     rough = st.roughness(60.0, 1200.0, 6000.0, 4000.0, seed=5)
     f = st.taper(**kw, edge=rough)
     X, Y = np.meshgrid(np.linspace(0.0, 6000.0, 61), np.linspace(0.0, 4000.0, 41), indexing="ij")
-    assert np.allclose(f(X, Y), _wedge((Y - 1500.0 + rough(X, Y)) / 500.0), atol=1e-12)
+    d = Y - 1500.0
+    assert np.allclose(f(X, Y), _wedge((d + rough(X, Y) * np.clip(1.0 - d / 500.0, 0.0, 1.0)) / 500.0), atol=1e-12)
+    assert np.array_equal(f(X, Y)[:, d[0] >= 500.0], np.ones(f(X, Y)[:, d[0] >= 500.0].shape))
     first = (f(X, Y) > 0.0).argmax(axis=1)                                # the first row of sand in each column
     assert first.max() > first.min()                                      # the limit really is not straight
 

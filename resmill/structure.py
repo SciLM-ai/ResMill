@@ -437,10 +437,11 @@ def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, 
     base of a tongue, as it is across a straight line. The footprint is measured on a grid of ``step`` m (default
     1/800 of the longer side), so ``x_len`` and ``y_len`` (the model's size) are needed with an outline.
 
-    ``edge`` (a Structure, m, e.g. :func:`relief`) is added to that distance: where it is +R the sand reaches R m
-    farther out, so the limit of the sand, and every contour of the factor, follows it. All zones of an interval take
-    the same factor to thin together; the thin cells of the outer ``T f`` below 5 mm collapse (ACTNUM 0), so the
-    factor is 0 exactly where the sand is absent.
+    ``edge`` (a Structure, m, e.g. :func:`relief`) is added to that distance, fading out linearly over the taper:
+    where it is +R the sand's limit reaches R m farther out and the contour of the factor at a share u of the taper
+    (1 - u) R, so the thick part of the sand is smooth and its edge is rough. All zones of an interval take the same
+    factor to thin together; the thin cells of the outer ``T f`` below 5 mm collapse (ACTNUM 0), so the factor is 0
+    exactly where the sand is absent.
     """
     if not taper_m > 0.0:
         raise ValueError(f"taper_m must be positive, not {taper_m}")
@@ -461,7 +462,9 @@ def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, 
 
     def fn(x, y):
         x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
-        d = signed(x, y) + (0.0 if edge is None else edge(x, y))
+        d = signed(x, y)
+        if edge is not None:
+            d = d + edge(x, y) * np.clip(1.0 - d / taper_m, 0.0, 1.0)
         u = np.clip(d / taper_m, 0.0, 1.0)
         return u * (2.0 - u)
 

@@ -12,6 +12,15 @@ A straight pinch-out line on a plane monocline has no closure either: every poin
 oil spills along it. The line has to indent updip (a tongue, a lens: the pure traps, whose closure is the tangent of the
 dip times their length along dip, Berg's 13-37 m columns at 1 degree and a kilometre) or to cross a nose (a combination
 trap, whose closure is the nose's).
+
+Real sand limits are not lines. A pinch-out, a facies change, a truncation or an onlap is irregular at every scale from
+a cell up to the trap, with several tongues (lobate or digitate) and embayments, and the sand thins to its limit
+smoothly: the Berea Sandstone's thickness contour (USGS PP 259), the subcrops of Flanders and the Brussels Sands, the
+House Creek sand ridge (USGS DDS-33). :func:`strat_trap` draws such an edge from a taper and a multi-scale relief
+(:func:`resmill.structure.taper`, :func:`resmill.structure.relief`), lets an erosion surface's relief make a
+truncation's or an onlap's edge, shapes a lens as a mound on a flat base and gives the tops a relief of their own.
+The closure of such a geometry is whatever it holds, read from the cells by :func:`trap_report`; the tangent of the dip
+times the length of the drawn tongue is the nominal one.
 """
 import numpy as np
 from scipy import ndimage
@@ -154,29 +163,32 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     ``x_len``, ``y_len`` (m) is the model, ``top`` the depth (m) of its stack's top at its centre, ``thicknesses`` the
     layers' thicknesses (m, top to bottom: the model's ``z_len``), ``dip`` the plane's dip (degrees) deepening along
     ``azimuth``'s normal (as :func:`resmill.structure.ramp`) and ``seed`` fixes the lobes, their places and the
-    roughness. The sand's thickness ``T`` tapers to nothing over ``T / tan(taper_angle)`` m, as the wedge of
-    :func:`resmill.structure.taper` (a wedge 10 m thick at 0.3 degrees thins over 1.9 km: outcrop and field slopes of
-    0.006-0.6 degrees, step 6 research P9-P12);
-    that is also the width of the subcrop strip of a truncation (discordance) and the length over which layers onlap
-    (onlap angle), and the half-width of a mound at most.
+    roughness. The sand's thickness ``T`` tapers to nothing over ``T / tan(taper_angle)`` m as the wedge of
+    :func:`resmill.structure.taper`, at ``taper_angle`` on average and twice that at its edge (a wedge 10 m thick at
+    0.3 degrees thins over 1.9 km: outcrop and field slopes of 0.006-0.6 degrees, step 6 research P9-P12); that is also
+    the width of the subcrop strip of a truncation (the discordance) and the length over which layers onlap (the
+    onlap angle). A lens tapers over that or its half-width, whichever is less, so that its middle is as thick as the
+    sand.
 
     A straight updip line has no closure, so the line has a tongue of sand ``area`` (m2) and ``aspect`` (strike over
     dip length) protruding updip from it, a lobate half-ellipse (``warp``, :func:`resmill.structure.closure`): its
     length along dip is L = 2 sqrt(area / (pi aspect)) and the closure is tan(dip) L, derived, not drawn
     (``meta["closure_expected"]``): the oil spills over the sheet's updip edge, ``meta["spill_expected"]``.
-    ``area=None`` gives a straight line, no closure. ``tongues`` are further tongues, a sequence of (area, aspect) the caller draws
-    (digitate ones have an aspect under 1), set side by side along the line in an order and with gaps drawn from
-    ``seed``; a set that does not fit within 80 % of the model raises a ValueError. A lens has the area and aspect as
-    a whole ellipse in the middle of the model.
+    ``area=None`` gives a straight line, no closure. ``tongues`` are further tongues, a sequence of (area, aspect)
+    that the caller draws (digitate ones have an aspect under 1), set side by side along the line in an order and with
+    gaps drawn from ``seed``; a set that does not fit within 80 % of the model raises a ValueError. A lens has the
+    area and aspect as a whole ellipse in the middle of the model.
 
-    The sand limit is irregular at every scale from ``floor_m`` up to ``range_m``: ``wander`` (m) is the rms
-    displacement of the edge and of every tongue's outline, a :func:`resmill.structure.relief` surface of Hurst
-    exponent ``hurst`` (its box-counting dimension is 1.5 - hurst / 2 where it dominates: coasts 1.02-1.25, Mandelbrot
-    1967; the thickness contour of the Berea Sandstone about 1.3, USGS PP 259; ``floor_m`` is 1/32 of ``range_m`` unless
-    given). In a truncation or an onlap that is the relief of the erosion surface, tan(taper_angle) times ``wander``
-    (``meta["erosion_relief_m"]``): a valley of that depth preserves sand farther updip by its depth over the
-    discordance. ``relief_sd`` (m) is the low-amplitude relief of the zone's top and base together, a relief surface
-    of range ``relief_range``; it is part of the geometry the closure comes from.
+    The sand limit is irregular from ``floor_m`` up to ``range_m`` (1/32 of it unless given): ``wander`` (m) is the rms
+    displacement of the limit, of the line and of every tongue's outline, a :func:`resmill.structure.relief` surface
+    of Hurst exponent ``hurst`` (the exponent of the edge's own structure function, which the test reads back; the
+    realized edge's dimension is about 1.5 - hurst / 2 where the relief dominates, the 1.02-1.25 of coasts for 0.5-0.96,
+    Kondev and Henley 1995, Mandelbrot 1967). It fades out over the taper, so the thick sand is smooth. More than
+    about 0.2 of the main tongue's length, or of the taper for an erosional edge, breaks the sand into pieces that hold
+    no trap. In a truncation or an onlap the wander is the relief of the erosion surface: tan(taper_angle) times it,
+    ``meta["erosion_relief_m"]`` (a valley of that depth preserves sand farther updip by its depth over the
+    discordance). ``relief_sd`` (m) is the low-amplitude relief of the zone's top and base together, a
+    :func:`resmill.structure.relief` surface of range ``relief_range``: the closure is that of the geometry with it.
 
     A combination trap takes its lateral closure from a ``nose``, the keywords of :func:`resmill.structure.closure`
     (``area``, ``height`` and ``aspect`` are required, ``height`` at most :data:`MAX_NOSE`; give no ``tilt``: the
@@ -185,8 +197,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     The shapes sit on the dip direction through the middle of the model, as far updip as their rims fit within 80 % of
     the model's size (a lens in the middle); a shape that does not fit, or lobes that the warp pushes within 2 % of the
     edge, raise a ValueError for the caller to draw again. ``meta["net_layers"]`` counts the layers that are sand, for
-    :func:`trap_report`. The closure expected is that of the drawn main tongue with a smooth edge; with a rough one
-    (and ``tongues``, and ``relief_sd``) it is whatever the geometry has, read by :func:`trap_report` from the cells.
+    :func:`trap_report`. ``meta["closure_expected"]`` is that of the main tongue with a smooth edge and a flat top; with
+    a rough edge, tongues, relief or a mound the closure is what the geometry has, which :func:`trap_report` reads.
     """
     nosed, lens = kind in NOSED, kind == "lens"
     if kind not in KINDS:
