@@ -56,7 +56,7 @@ MIN_CELLS = 9                       # and spans at least 3 x 3 planning cells, t
 TIP_ASPECT = 2.15                   # tip-line length / height of a fault (Nicol et al. 1996; Fault.aspect's default)
 D_OVER_L = 0.1                      # upper bound of displacement / length (Lathrop et al. 2022)
 RAMP_DIP = (50.0, 75.0)             # a Frio master's dip down to its bend, degrees (T14: 50-60; six published faults 46-77, median 67 [J])
-FLATTEN = (1200.0, 5000.0)          # m: the depth over which its tan(dip) falls by 1/e below the bend, log-uniform (fits to six published faults 0.6-3.1 km, median 2.4; Bruce 1973: 2.2) [J]
+FLATTEN = (1200.0, 5000.0)          # m: the depth over which its tan(dip) falls by 1/e below the bend, log-uniform (fits to six published faults 0.6-3.1 km, median 2.4; Bruce 1973: 60 to 15 degrees over about 4 km is 2.2) [J]
 RAMP_BASE = (0.0, 2000.0)           # m above the reservoir where that ramp ends, uniform (the six faults bend 1.0-2.7 km down, median 1.9, the Frio sands they cut lie at 1-3.5 km) [J]
 
 
@@ -274,7 +274,7 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
     basinward direction (any [J]); ``dip`` of the master fault down to its bend (degrees: Frio 50-75, six published faults
     46-77; for the Wilcox the dip of its planar faults, 50-60, T14); ``flatten`` of the Frio master fault, the depth over which
     its tan(dip) falls by 1/e below the bend (m, log-uniform 1,200-5,000: six published faults fit 600-3,100, median 2,450;
-    Bruce 1973: 2,200); ``ramp_base`` the depth where that ramp ends (m: 0-2,000 above the reservoir where the fault is [J]);
+    Bruce 1973: 60 to 15 degrees over about 4 km, 2,200); ``ramp_base`` the depth where that ramp ends (m: 0-2,000 above the reservoir where the fault is [J]);
     ``length`` of a master fault (m, log-uniform 3-25 km, T17); ``throw`` of the master fault in the
     reservoir (m: clastic displacement-length law, 0.11 L^0.84 sin(dip) with a log10 sd of 0.27 about it, T10, T19);
     ``regional_dip`` toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown

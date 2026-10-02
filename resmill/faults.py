@@ -12,15 +12,16 @@ repeat a section, so each column goes whole to one side), and its trace may curv
 chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surfaces across their slip
 (Candela et al. 2012), for the bends left where segments linked; Walsh et al. 2003).
 
-With ``flatten`` the fault is listric: its plane is straight at ``dip`` down to the base of its ramp (``ramp_base``, default
-the tip ellipse's centre), as the faults of the Gulf's seismic sections are down to their bends, and below it tan(dip) falls by
-1/e every ``flatten`` m of depth, so the plane flattens into a long gentle tail (``flatten`` is 2.4 km at the median of six
-published faults, 2.2 km after Bruce 1973: Xiao & Suppe 1992; Ewing et al. 1986, whose bends lie 1.0-2.7 km down). The footwall is rigid while the hanging wall moves by
-vertical shear with constant heave (Gibbs 1983; White et al. 1986): the horizon of depth z with throw d at the fault has the
-heave H = trace(z + d) - trace(z) and drops by plane(h) - plane(h - H) under the column h from the trace. It is d at the fault,
-stays d down to the bend (a rigid hanging wall over a ramp) and falls away over it, where the plane flattens, so the hanging wall
-rolls over toward the fault above the bend, from the cutoff itself when the cutoff lies below it; a planar plane (``flatten`` infinite) gives the constant throw of a
-rigid hanging wall. ``hw_share`` and ``drag`` play no part.
+With ``flatten`` the fault is listric: its plane is straight at ``dip`` down to the base of its ramp (``ramp_base``, default the
+tip ellipse's centre), as the faults of the Gulf's seismic sections are down to their bends, and below it tan(dip) falls by 1/e
+every ``flatten`` m of depth, so the plane flattens into a long gentle tail. ``flatten`` is 2.4 km at the median of six published
+faults (Xiao & Suppe 1992; Ewing et al. 1986, whose bends lie 1.0-2.7 km down) and 2.2 km if Bruce's (1973) fall from 60 to 15
+degrees takes about 4 km. The footwall is rigid while the hanging wall moves by vertical shear with constant heave (Gibbs 1983;
+White et al. 1986): the horizon of depth z with throw d at the fault has the heave H = trace(z + d) - trace(z) and drops by
+plane(h) - plane(h - H) under the column h from the trace. It is d at the fault, stays d down to the bend (a rigid hanging wall
+over a ramp) and falls away over it, where the plane flattens, so the hanging wall rolls over toward the fault above the bend,
+from the cutoff itself when the cutoff lies below it; a planar plane (``flatten`` infinite) gives the constant throw of a rigid
+hanging wall. ``hw_share`` and ``drag`` play no part.
 
 :func:`apply_fault` displaces the interface stack in 3-D and reports which side of the fault each cell
 ended on; :func:`face_records` turns that into the stair-stepped cell faces the GRDECL export writes as
