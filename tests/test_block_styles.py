@@ -238,19 +238,19 @@ def test_the_population_dips_with_the_blocks_for_four_in_five_faults(monkeypatch
 # ----- rollovers on listric growth faults -----
 
 def test_a_frio_masters_rollover_is_the_explicit_ramp_and_flattening_construction():
-    """Pinned (ramp 55 degrees, tan(dip) falling by 1/e every 2.5 km below the bend, 300 m of throw in a horizon at 2.5 km, no
-    regional dip), the master is a ramp down to its tip ellipse's centre and a flattening plane below it: the top of a thin
-    reservoir follows the explicit construction of vertical shear over that plane (test_faults.research_rollover:
-    z + F(x) - F(x - H)) to 1.5 m, the footwall does not move at all, and the hanging-wall cutoff is 300 m down."""
+    """Pinned (ramp 55 degrees to 1,800 m, tan(dip) falling by 1/e every 2.5 km below it, 300 m of throw in a horizon at 2.5
+    km, no regional dip), the master is a ramp down to 700 m above the reservoir and a flattening plane below, its tip
+    ellipse's centre deeper still: the top of a thin reservoir follows the explicit construction of vertical shear over that
+    plane (test_faults.research_rollover: z + F(x) - F(x - H)) to 1.5 m, the footwall does not move at all, and the
+    hanging-wall cutoff is 300 m down."""
     from resmill.faults import _plane
     x_len, y_len, dx, top = 16000.0, 1000.0, 10.0, 2499.0
-    m = rollover(x_len, y_len, dx, top, 2.0, 1, kind="frio", azimuth=90.0, dip=55.0, flatten=2500.0, throw=300.0,
-                 regional_dip=0.0, density=0.0, length=40000.0, expansion=1.0)
+    m = rollover(x_len, y_len, dx, top, 2.0, 1, kind="frio", azimuth=90.0, dip=55.0, flatten=2500.0, ramp_base=1800.0, throw=300.0,
+                 regional_dip=0.0, density=0.0, length=12000.0, expansion=1.0)
     f, = [f for f in m.faults if f.kind == "master"]
     x, z = sawtooth(m, x_len, y_len, dx, "master", top, 2.0)
-    heave, x_c, depth = research_rollover(f.dip, f.z_center, f.flatten, top, 300.0)
-    assert top + 300.0 < f.z_center                                        # both cutoffs on the ramp: the heave is throw / tan(dip)
-    assert heave == pytest.approx(300.0 / math.tan(math.radians(f.dip)), abs=1e-6)
+    assert f.ramp_base == 1800.0 and m.labels["ramp_base_m"] == 1800.0 and f.z_center > 2500.0
+    heave, x_c, depth = research_rollover(f.dip, f.ramp_base, f.flatten, top, 300.0, z_anchor=f.z_center)
     cutoff = f.center[0] + float(_plane(f, f.z_center)[1](top))            # the footwall cutoff of the top, hanging wall east
     assert cutoff == pytest.approx(f.center[0] + x_c, abs=1e-6)
     assert np.all(z[x < cutoff - 2 * dx] == top)
@@ -260,34 +260,35 @@ def test_a_frio_masters_rollover_is_the_explicit_ramp_and_flattening_constructio
 
 
 def test_a_rollovers_crest_and_relief_on_the_grid_are_the_explicit_constructions():
-    """Pinned (ramp 60 degrees, L = 2.5 km, 300 m of throw, a regional dip of 1 degree toward the basin) and the master
+    """Pinned (ramp 60 degrees to 1,500 m, L = 2.5 km, 300 m of throw, a regional dip of 1 degree toward the basin) and the master
     straightened, the roll's crest, where its dip falls to the regional dip, is where the explicit construction puts it
     (z0 + F(h) - F(h - H) on the ramped top, the heave of each column from the plane written out with np.log and bisection)
-    to a cell, and it stands as high above the hanging-wall cutoff within 0.05 m (4.1 km out and 139 m high for a master 12 km
-    long: a few km from its cutoff, set by the throw, the flattening length and the regional dip, not by an arc's end)."""
+    to a cell, and it stands as high above the hanging-wall cutoff within 0.05 m: a few km out and a closure of its own,
+    set by the throw, the flattening length and the regional dip, not by an arc's end."""
     x_len, y_len, dx, top = 16000.0, 1000.0, 10.0, 2499.0
-    m = rollover(x_len, y_len, dx, top, 2.0, 1, kind="frio", azimuth=90.0, dip=60.0, flatten=2500.0, throw=300.0,
+    m = rollover(x_len, y_len, dx, top, 2.0, 1, kind="frio", azimuth=90.0, dip=60.0, flatten=2500.0, ramp_base=1500.0, throw=300.0,
                  regional_dip=1.0, density=0.0, length=12000.0, expansion=1.0)
     f, = [f for f in m.faults if f.kind == "master"]
     x, z = sawtooth(m, x_len, y_len, dx, "master", top, 2.0)
-    plane, inverse = log_plane(f.dip, f.z_center, f.flatten)
+    plane, inverse = log_plane(f.dip, f.ramp_base, f.flatten)
+    shift = float(inverse(f.z_center))                                       # the bend's trace to the trace at z_center, where `center` is
     z0 = top + math.tan(math.radians(1.0)) * (x - 0.5 * x_len)               # the ramped top at each corner, before the fault
     r = np.abs(z0 - f.z_center) / (math.sin(math.radians(f.dip)) * 0.5 * f.length / f.aspect)
     throw = f.throw * ww_profile(r)
-    h = x - f.center[0]
+    h = x - f.center[0] + shift                                              # from the bend's trace
     heave = inverse(z0 + throw) - inverse(z0)
     built = z0 + plane(h) - plane(h - heave)
     tan_a, h_cut = math.tan(math.radians(1.0)), 0.0
     for _ in range(50):                                                      # the footwall cutoff of the top: the plane meets the ramped top
-        h_cut = float(inverse(top + tan_a * (f.center[0] + h_cut - 0.5 * x_len)))
-    cut = f.center[0] + h_cut
+        h_cut = float(inverse(top + tan_a * (f.center[0] + h_cut - shift - 0.5 * x_len)))
+    cut = f.center[0] + h_cut - shift
     hanging = x > cut + float(np.max(heave)) + 3 * dx
     assert np.abs(z[hanging] - built[hanging]).max() < 0.05
     crest_grid, crest_built = np.argmin(np.where(hanging, z, np.inf)), np.argmin(np.where(hanging, built, np.inf))
     assert abs(x[crest_grid] - x[crest_built]) <= 2 * dx
     first = np.argmax(hanging)
     assert z[first] - z[crest_grid] == pytest.approx(built[first] - built[crest_built], abs=0.05)
-    assert 2000.0 < x[crest_built] - cut < 8000.0 and z[first] - z[crest_grid] > 20.0     # a closure of its own, a few km out
+    assert 1000.0 < x[crest_built] - cut < 8000.0 and z[first] - z[crest_grid] > 20.0     # a closure of its own, a few km out
 
 
 @pytest.mark.parametrize("kind", ["frio", "wilcox"])
@@ -298,7 +299,7 @@ def test_the_hanging_wall_zones_are_thicker_by_the_expansion_index(kind):
     thickness)."""
     x_len, y_len, dx, thick = 16000.0, 1000.0, 50.0, 60.0
     m = rollover(x_len, y_len, dx, TOP, thick, 2, kind=kind, azimuth=90.0, expansion=2.0, regional_dip=1.0, density=0.0,
-                 throw=100.0, length=10000.0, zones=3)
+                 throw=40.0, length=10000.0, zones=3)
     nx, ny = int(x_len / dx), int(y_len / dx)
     layers = [Layer(nx, ny, 3, x_len, y_len, thick / 3.0, top_depth=TOP + k * thick / 3.0, kzkx=0.1) for k in range(3)]
     faults = [dataclasses.replace(f, bends=0.0, seed=None, radius=math.inf) for f in m.faults]
@@ -315,14 +316,14 @@ def test_the_hanging_wall_zones_are_thicker_by_the_expansion_index(kind):
 def test_a_listric_masters_throw_in_the_reservoir_is_the_one_drawn_from_the_displacement_length_law():
     """The throw in the reservoir (cutoff to cutoff, measured on the grid with no regional dip) is the clastic law's
     displacement times the sine of the fault's dip at the reservoir (T10, T19: 0.11 L^0.84, 252 m at 10 km): the record says
-    so, and the grid agrees within 1 %."""
+    so, and the grid agrees within 1 % and the 4 m that the roll rises over half a 20 m cell beside the cutoff."""
     x_len, y_len, dx, top = 16000.0, 1000.0, 20.0, 2499.0
     for seed in range(4):
         m = rollover(x_len, y_len, dx, top, 2.0, seed, kind="frio", azimuth=90.0, regional_dip=0.0, density=0.0)
         L = m.labels["masters"][0]
         assert L["throw_m"] == pytest.approx(L["displacement_m"] * math.sin(math.radians(L["dip_deg"])))
         _, z = sawtooth(m, x_len, y_len, dx, "master", top, 2.0)
-        assert z.max() - top == pytest.approx(L["throw_m"], rel=0.01, abs=1.0)
+        assert z.max() - top == pytest.approx(L["throw_m"], rel=0.01, abs=4.0)      # the first cell top beside the cutoff has risen a few m
 
 
 def test_the_displacements_follow_the_clastic_law_with_the_norne_scatter():
@@ -364,7 +365,7 @@ def test_the_rollover_draws_lie_in_the_research_ranges(drawn_rollovers):
     assert all(1 <= m.labels["tries"] <= 32 for m in drawn_rollovers)
     assert all(json.loads(json.dumps(m.labels)) == m.labels for m in drawn_rollovers)     # plain numbers, for the episode record
     assert all(f.flatten is None for m in drawn_rollovers if m.labels["kind"] == "wilcox" for f in m.faults)
-    assert all(f.flatten == m.labels["flatten_m"] and f.dip == m.labels["dip_deg"]
+    assert all(f.flatten == m.labels["flatten_m"] and f.dip == m.labels["dip_deg"] and f.ramp_base == m.labels["ramp_base_m"]
                for m in drawn_rollovers if m.labels["kind"] == "frio" for f in m.faults[:1])
     # log-uniform across the range: the median is the geometric mean of its ends, 2.45 km, the published median
     assert 1800.0 <= np.median([L["flatten_m"] for L in frio]) <= 3300.0
@@ -372,7 +373,7 @@ def test_the_rollover_draws_lie_in_the_research_ranges(drawn_rollovers):
 
 def test_the_master_faults_are_placed_by_the_tip_ellipse_below_the_reservoir(drawn_rollovers):
     """S11 for growth faults: a master's tip ellipse is centred 0.25-0.5 half-heights below the reservoir (the half-height
-    taken at the ramp's dip, the dip at the centre), so its throw grows downward and the bend starts there."""
+    taken at the ramp's dip), so its throw grows downward; a Frio master's ramp ends 0-2 km above the reservoir."""
     for m in drawn_rollovers:
         az, alpha = math.radians(m.labels["azimuth_deg"]), math.radians(m.labels["regional_dip_deg"])
         for f, rec in zip([f for f in m.faults if f.kind == "master"], m.labels["masters"]):
@@ -381,6 +382,11 @@ def test_the_master_faults_are_placed_by_the_tip_ellipse_below_the_reservoir(dra
             below = (f.z_center - (TOP + 0.5 * THICK + math.tan(alpha) * along)) / half
             assert 0.25 - 1e-9 <= below <= 0.5 + 1e-9
             assert rec["centre_throw_m"] == f.throw and rec["z_center_m"] == f.z_center
+            if f.flatten is not None:                                   # the Frio ramp ends 0-2 km above the reservoir where the fault is
+                z_k = TOP + 0.5 * THICK + math.tan(alpha) * along
+                assert z_k - 2000.0 - 1e-6 <= f.ramp_base <= z_k + 1e-6 and rec["ramp_base_m"] == f.ramp_base
+            else:
+                assert f.ramp_base is None and rec["ramp_base_m"] is None
 
 
 def test_the_graben_and_the_antithetic_share_of_a_rollovers_population_are_the_researchs(monkeypatch):
@@ -405,15 +411,16 @@ def test_the_graben_and_the_antithetic_share_of_a_rollovers_population_are_the_r
 
 
 def test_a_rollover_seed_gives_the_same_model_and_pinning_changes_only_what_is_pinned():
-    """Explicit mode, as for the blocks: the same seed, the same model; a pinned regional dip is used as given and the
-    flavour, direction, flattening length, master length and expansion stay where the seed drew them (seed 3 needs no second
-    draw either way: a model redrawn for want of a trap draws everything again but its flavour and direction)."""
+    """Explicit mode, as for the blocks: the same seed, the same model; a pinned regional dip (a tenth under the drawn one: a
+    trap is still there, so there is no second draw, which would draw everything again but the flavour and direction) is used
+    as given and the flavour, direction, flattening length, master length and expansion stay where the seed drew them."""
     args = (16000.0, 12000.0, 250.0, TOP, THICK, 3)
-    a, b, c = rollover(*args, kind="frio", density=0.0), rollover(*args, kind="frio", density=0.0), \
-        rollover(*args, kind="frio", density=0.0, regional_dip=0.7)
+    a, b = rollover(*args, kind="frio", density=0.0), rollover(*args, kind="frio", density=0.0)
+    pinned = 0.9 * a.labels["regional_dip_deg"]
+    c = rollover(*args, kind="frio", density=0.0, regional_dip=pinned)
     assert a.labels == b.labels and repr(a.faults) == repr(b.faults)
     assert a.labels["tries"] == c.labels["tries"] == 1
-    assert c.labels["regional_dip_deg"] == 0.7 and a.labels["regional_dip_deg"] != 0.7
+    assert c.labels["regional_dip_deg"] == pinned != a.labels["regional_dip_deg"]
     for key in ("kind", "azimuth_deg", "dip_deg", "flatten_m", "expansion"):
         assert c.labels[key] == a.labels[key]
     assert c.labels["masters"][0]["length_m"] == a.labels["masters"][0]["length_m"]
@@ -443,16 +450,16 @@ def test_the_closure_of_the_finished_rollovers_is_about_the_rollover_law(mid_rol
 
 def test_a_rollover_with_no_trap_to_frame_its_faults_is_drawn_again(monkeypatch):
     """The faults inside a trap are drawn on a closure that frames it. Where the masters and the regional dip leave none of
-    at least 1 km2 (a drag that cannot turn the dip), unpinned values are drawn again, the flavour and direction kept (seed 0
+    at least 1 km2 (a drag that cannot turn the dip), unpinned values are drawn again, the flavour and direction kept (seed 2
     takes four draws, seed 3 one); and with no trap at any of the TRIES the model has its masters alone and says so, its
     pinned values as given."""
     import resmill.block_styles as bs
     args = (16000.0, 12000.0, 250.0, TOP, THICK)
-    again, first = rollover(*args, 0, kind="frio", density=0.5), rollover(*args, 3, kind="frio", density=0.0)
+    again, first = rollover(*args, 2, kind="frio", density=0.5), rollover(*args, 3, kind="frio", density=0.0)
     assert again.labels["tries"] == 4 and first.labels["tries"] == 1
     assert again.labels["n_faults"] > again.labels["n_masters"] and again.labels["trap"] is not None
     monkeypatch.setattr(bs, "_measure", lambda *a, **k: None)
-    bare = rollover(*args, 0, kind="frio", regional_dip=3.0, throw=20.0)
+    bare = rollover(*args, 2, kind="frio", regional_dip=3.0, throw=20.0)
     assert bare.labels["tries"] == bs.TRIES and bare.labels["n_faults"] == bare.labels["n_masters"] == 1
     assert bare.labels["trap"] is None and bare.labels["structure_trap"] is None
     assert bare.labels["regional_dip_deg"] == 3.0 and bare.labels["masters"][0]["throw_m"] == 20.0

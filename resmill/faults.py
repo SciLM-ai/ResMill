@@ -12,14 +12,14 @@ repeat a section, so each column goes whole to one side), and its trace may curv
 chord or arc (``bends``: a self-affine profile, Hurst exponent 0.8 as fault surfaces across their slip
 (Candela et al. 2012), for the bends left where segments linked; Walsh et al. 2003).
 
-With ``flatten`` the fault is listric: its plane is straight at ``dip`` down to the tip ellipse's centre, as the faults of the
-Gulf's seismic sections are down to their bends, and below it tan(dip) falls by 1/e every ``flatten`` m of depth, so the plane
-bends sharply where the ramp ends and flattens into a long gentle tail (``flatten`` is 2.4 km at the median of six published
-faults, 2.2 km after Bruce 1973: Xiao & Suppe 1992; Ewing et al. 1986). The footwall is rigid while the hanging wall moves by
+With ``flatten`` the fault is listric: its plane is straight at ``dip`` down to the base of its ramp (``ramp_base``, default
+the tip ellipse's centre), as the faults of the Gulf's seismic sections are down to their bends, and below it tan(dip) falls by
+1/e every ``flatten`` m of depth, so the plane flattens into a long gentle tail (``flatten`` is 2.4 km at the median of six
+published faults, 2.2 km after Bruce 1973: Xiao & Suppe 1992; Ewing et al. 1986, whose bends lie 1.0-2.7 km down). The footwall is rigid while the hanging wall moves by
 vertical shear with constant heave (Gibbs 1983; White et al. 1986): the horizon of depth z with throw d at the fault has the
 heave H = trace(z + d) - trace(z) and drops by plane(h) - plane(h - H) under the column h from the trace. It is d at the fault,
-stays d down to the bend (a rigid hanging wall over a ramp) and falls away over the bend, where the plane flattens, so the
-hanging wall rolls over toward the fault above the bend; a planar plane (``flatten`` infinite) gives the constant throw of a
+stays d down to the bend (a rigid hanging wall over a ramp) and falls away over it, where the plane flattens, so the hanging wall
+rolls over toward the fault above the bend, from the cutoff itself when the cutoff lies below it; a planar plane (``flatten`` infinite) gives the constant throw of a
 rigid hanging wall. ``hw_share`` and ``drag`` play no part.
 
 :func:`apply_fault` displaces the interface stack in 3-D and reports which side of the fault each cell
@@ -56,7 +56,8 @@ class Fault:
     bends: float = 0.0             # rms wander of the trace about its chord or arc, x length (0: none)
     seed: int | None = None        # draws the bends (required with them)
     kind: str = ""                 # the set a fault pattern drew it from (a label only)
-    flatten: float | None = None   # listric: tan(dip) falls by 1/e per this much depth (m) below z_center; None: a planar fault
+    flatten: float | None = None   # listric: tan(dip) falls by 1/e per this much depth (m) below the ramp; None: a planar fault
+    ramp_base: float | None = None  # listric: depth (m) where the straight ramp ends and the flattening starts; None: z_center
 
     def __post_init__(self):
         problems = [msg for bad, msg in (
@@ -73,6 +74,8 @@ class Fault:
             (self.bends > 0.0 and self.seed is None, "bends needs a seed"),
             (self.flatten is not None and not 0.0 < self.flatten < math.inf, "flatten must be a finite length > 0"),
             (self.flatten is not None and self.reverse, "a listric fault (flatten) is a normal fault: reverse must be False"),
+            (self.ramp_base is not None and (self.flatten is None or not math.isfinite(self.ramp_base)),
+             "ramp_base is a finite depth and needs flatten (a listric fault)"),
         ) if bad]
         if problems:
             raise ValueError(f"Fault {self.name!r}: " + "; ".join(problems))
@@ -134,23 +137,25 @@ def _corners(a):
     return np.repeat(np.repeat(a, 2, axis=0), 2, axis=1)
 
 
-def _listric(dip, zc, flatten):
-    """The plane of a listric fault: straight at ``dip`` degrees down to the bend, where its trace is at depth ``zc``, and
-    below it tan(dip) falls as exp(-(z - zc) / flatten): z = zc + flatten ln(1 + h tan(dip) / flatten) under a column ``h`` m
-    from the trace, a curve that leaves the ramp without a kink and is the ramp itself as ``flatten`` grows. Returns
-    ``plane(h)``, its depth under a column ``h`` m from that trace toward the hanging wall, and ``trace(z)``, the inverse
-    (the exponent is capped at 700, where it would overflow: a depth no model reaches)."""
+def _listric(dip, zc, flatten, zb=None):
+    """The plane of a listric fault: straight at ``dip`` degrees down to the bend at depth ``zb`` (default ``zc``), and below it
+    tan(dip) falls as exp(-(z - zb) / flatten): z = zb + flatten ln(1 + h tan(dip) / flatten) under a column ``h`` m from the
+    trace at ``zb``, a curve that leaves the ramp without a kink and is the ramp itself as ``flatten`` grows. Returns
+    ``plane(h)``, its depth under a column ``h`` m from the trace at depth ``zc`` toward the hanging wall, and ``trace(z)``,
+    the inverse (the exponent is capped at 700, where it would overflow: a depth no model reaches)."""
     tan_d = math.tan(math.radians(dip))
+    zb = zc if zb is None else zb
 
-    def plane(h):
+    def plane0(h):                                                       # from the bend's trace
         h = np.asarray(h, dtype=float)
-        return zc + np.minimum(h, 0.0) * tan_d + flatten * np.log1p(np.maximum(h, 0.0) * tan_d / flatten)
+        return zb + np.minimum(h, 0.0) * tan_d + flatten * np.log1p(np.maximum(h, 0.0) * tan_d / flatten)
 
-    def trace(z):
-        z = np.asarray(z, dtype=float) - zc
+    def trace0(z):
+        z = np.asarray(z, dtype=float) - zb
         return np.minimum(z, 0.0) / tan_d + flatten / tan_d * np.expm1(np.minimum(np.maximum(z, 0.0) / flatten, 700.0))
 
-    return plane, trace
+    shift = float(trace0(zc))                                            # the trace at zc, from the bend's: 0 when the bend is at zc
+    return (lambda h: plane0(np.asarray(h, dtype=float) + shift)), (lambda z: trace0(z) - shift)
 
 
 def _plane(fault, zc):
@@ -159,7 +164,7 @@ def _plane(fault, zc):
     if fault.flatten is None:
         tan_d = math.tan(math.radians(fault.dip))
         return (lambda h: zc + h * tan_d), (lambda z: (z - zc) / tan_d)
-    return _listric(fault.dip, zc, fault.flatten)
+    return _listric(fault.dip, zc, fault.flatten, fault.ramp_base)
 
 
 def apply_fault(fault, Xc, Yc, Zc):

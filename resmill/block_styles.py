@@ -23,15 +23,16 @@ faults (0-2) cross the blocks; the faults inside the trap are drawn by :func:`re
 
 :func:`rollover`: a growth fault whose hanging wall rolls over toward it. ``kind="frio"`` (60 % [J]): one sinuous listric
 master fault (a ramp dipping 50-75 degrees down to its bend, then tan(dip) falling by 1/e every 1.2-5 km of depth,
-:attr:`resmill.faults.Fault.flatten`: the shapes of six published faults, whose fits give 0.6-3.1 km), throw from the clastic
+:attr:`resmill.faults.Fault.flatten`: the shapes of six published faults, whose fits give 0.6-3.1 km), the ramp ending 0-2 km above
+the reservoir (the published bends lie 1.0-2.7 km down, so the cutoff is on the curved part and the roll starts at it), throw from the clastic
 displacement-length law, a regional dip toward the basin; ``kind="wilcox"`` (40 % [J]): two or three nearly straight,
 closely spaced planar faults with little rollover and a higher expansion (Ewing et al. 1986). The strata laid down while the
 faults moved thicken into their hanging walls by an expansion index of 1.1-2.5 (:func:`resmill.structure.growth`). The faults
 inside the trap, with the keystone graben half the time and 40-70 % antithetic, come from ``fold_faults``. The vertical
-shear that rolls the hanging wall over a listric fault drags it down by the throw at the fault, leaves it there down to the
-bend and lets it rise over the bend toward the regional dip: the crest, where the roll's dip falls to the regional dip, lies
-a few km from the fault (the throw, the flattening length and the regional dip set it), and a draw whose masters leave no
-trap of 1 km2 (the P10 of the Gulf's rollover traps) is drawn again (:func:`rollover`).
+shear that rolls the hanging wall over a listric fault drags it down by the throw at the fault and lets it rise as the plane
+flattens, toward the regional dip: the crest, where the roll's dip falls to the regional dip, lies a few km from the fault (the
+throw and the regional dip set it, the flattening length hardly), and a draw whose masters leave no trap of 1 km2 (the P10 of
+the Gulf's rollover traps) is drawn again (:func:`rollover`).
 """
 import math
 from dataclasses import dataclass, field
@@ -56,6 +57,7 @@ TIP_ASPECT = 2.15                   # tip-line length / height of a fault (Nicol
 D_OVER_L = 0.1                      # upper bound of displacement / length (Lathrop et al. 2022)
 RAMP_DIP = (50.0, 75.0)             # a Frio master's dip down to its bend, degrees (T14: 50-60; six published faults 46-77, median 67 [J])
 FLATTEN = (1200.0, 5000.0)          # m: the depth over which its tan(dip) falls by 1/e below the bend, log-uniform (fits to six published faults 0.6-3.1 km, median 2.4; Bruce 1973: 2.2) [J]
+RAMP_BASE = (0.0, 2000.0)           # m above the reservoir where that ramp ends, uniform (the six faults bend 1.0-2.7 km down, median 1.9, the Frio sands they cut lie at 1-3.5 km) [J]
 
 
 @dataclass
@@ -262,8 +264,8 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
     return _finish(faults, structure, None, x_len, y_len, grid, top, labels, frame)
 
 
-def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, azimuth=None, flatten=None, dip=None,
-             throw=None, regional_dip=None, expansion=None, density=None, length=None, zones=1):
+def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, azimuth=None, flatten=None, ramp_base=None,
+             dip=None, throw=None, regional_dip=None, expansion=None, density=None, length=None, zones=1):
     """A growth-fault rollover model (see the module docstring).
 
     ``x_len``, ``y_len``, ``dx``, ``top``, ``thickness`` as for :func:`tilted_blocks`, ``zones`` the number of layers of
@@ -272,7 +274,8 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
     basinward direction (any [J]); ``dip`` of the master fault down to its bend (degrees: Frio 50-75, six published faults
     46-77; for the Wilcox the dip of its planar faults, 50-60, T14); ``flatten`` of the Frio master fault, the depth over which
     its tan(dip) falls by 1/e below the bend (m, log-uniform 1,200-5,000: six published faults fit 600-3,100, median 2,450;
-    Bruce 1973: 2,200); ``length`` of a master fault (m, log-uniform 3-25 km, T17); ``throw`` of the master fault in the
+    Bruce 1973: 2,200); ``ramp_base`` the depth where that ramp ends (m: 0-2,000 above the reservoir where the fault is [J]);
+    ``length`` of a master fault (m, log-uniform 3-25 km, T17); ``throw`` of the master fault in the
     reservoir (m: clastic displacement-length law, 0.11 L^0.84 sin(dip) with a log10 sd of 0.27 about it, T10, T19);
     ``regional_dip`` toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown
     thickness, log-uniform 1.1-2.5, 5 % of cases 2.5-5, T18; Wilcox 1.3-2.5), shared among its faults as the count-th root;
@@ -323,16 +326,18 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
             reach = 0.25 * (1.0 + u["reach"])                                 # the tip ellipse's centre 0.25-0.5 half-heights
             zc = z_k + reach * ly * sin_d                                     # below the reservoir, as the population's faults
             r = (zc - z_k) / (sin_d * ly)                                     # the reservoir on the tip ellipse, from its centre
+            base = (z_k - RAMP_BASE[0] - (RAMP_BASE[1] - RAMP_BASE[0]) * float(rng.uniform()) if ramp_base is None
+                    else float(ramp_base)) if frio else None                  # the ramp ends above the reservoir, the bend there
             faults.append(Fault(
                 center=tuple(float(v) for v in mid + places[k] * n), strike=azimuth, length=float(L),
-                throw=float(t_res / ww_profile(r)), dip=float(steep), hanging_wall=1, z_center=float(zc), flatten=bend,
+                throw=float(t_res / ww_profile(r)), dip=float(steep), hanging_wall=1, z_center=float(zc), flatten=bend, ramp_base=base,
                 radius=float((_log_uniform(rng, 2.0, 10.0) if frio else _log_uniform(rng, 10.0, 30.0)) * L),
                 hw_share=1.0 if frio else float(rng.uniform(0.6, 0.9)),
                 drag=(0.0, 0.0) if frio else (float(rng.uniform(0.1, 0.3)), float(rng.uniform(0.1, 0.2))),
                 bends=float(rng.uniform(0.02, 0.04) if frio else rng.uniform(0.004, 0.012)),
                 seed=int(rng.integers(2 ** 31)), kind="master"))
             masters.append(dict(length_m=float(L), displacement_m=float(displacement), throw_m=t_res,
-                                centre_throw_m=faults[-1].throw, dip_deg=float(steep), flatten_m=bend, z_center_m=float(zc)))
+                                centre_throw_m=faults[-1].throw, dip_deg=float(steep), flatten_m=bend, ramp_base_m=base, z_center_m=float(zc)))
         ramp = st.ramp(alpha, azimuth=azimuth, center=(float(mid[0]), float(mid[1])))
         return dict(faults=faults, masters=masters, places=places, tan_a=tan_a, alpha=alpha, steep=steep, bend=bend,
                     structure=ramp if fold is None else ramp + fold)
@@ -359,7 +364,7 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
                   for i, f in enumerate(faults[:count])]
         isochore.append(Structure(lambda x, y, fs=fields: np.prod([g(x, y) for g in fs], axis=0)))
     labels = dict(style="rollover", kind=kind, seed=int(seed), tries=tries, azimuth_deg=azimuth, dip_deg=built["steep"],
-                  flatten_m=built["bend"], regional_dip_deg=float(built["alpha"]), expansion=ei, expansion_per_fault=each,
+                  flatten_m=built["bend"], ramp_base_m=built["masters"][0]["ramp_base_m"], regional_dip_deg=float(built["alpha"]), expansion=ei, expansion_per_fault=each,
                   zones=int(zones), n_masters=count, density_per_km2=dens, regional_ratio=ratio, basinward_share=basinward,
                   masters=built["masters"])
     return _finish(faults, structure, isochore, x_len, y_len, grid, top, labels, frame)

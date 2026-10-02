@@ -373,25 +373,29 @@ def log_plane(dip, z_c, flatten):
     return plane, inverse
 
 
-def research_rollover(dip, z_c, flatten, z_r, throw):
-    """The rollover of a flat horizon at z_r over such a plane, by vertical shear with constant heave (Gibbs 1983; White et
-    al. 1986): the footwall cutoff is at x_c on the plane, the hanging-wall cutoff where the plane is z_r + throw, the heave
-    H between them, and the horizon's depth z_r + F(x_c + p) - F(x_c + p - H) at the distance p east of the footwall cutoff.
-    Returns H, x_c and that depth."""
-    plane, inverse = log_plane(dip, z_c, flatten)
+def research_rollover(dip, z_b, flatten, z_r, throw, z_anchor=None):
+    """The rollover of a flat horizon at z_r over such a plane (ramp to z_b, the bend), by vertical shear with constant heave
+    (Gibbs 1983; White et al. 1986): the footwall cutoff is at x_c on the plane, the hanging-wall cutoff where the plane is
+    z_r + throw, the heave H between them, and the horizon's depth z_r + F(x_c + p) - F(x_c + p - H) at the distance p east of
+    the footwall cutoff. Returns H, x_c (from the bend's trace, or from the trace at ``z_anchor`` when given) and that depth."""
+    plane, inverse = log_plane(dip, z_b, flatten)
     x_c = float(inverse(z_r))
     heave = float(inverse(z_r + throw)) - x_c
-    return heave, x_c, (lambda p: z_r + plane(x_c + p) - plane(x_c + p - heave))
+    x_a = 0.0 if z_anchor is None else float(inverse(z_anchor))
+    return heave, x_c - x_a, (lambda p: z_r + plane(x_c + p) - plane(x_c + p - heave))
 
 
-def rollover_section(dip, flatten, z_r, throw, dx=25.0, nx=320, z_center=None, **kw):
+def rollover_section(dip, flatten, z_r, throw, dx=25.0, nx=320, z_center=None, ramp_base=None, **kw):
     """Top-interface corner depths along the middle row of a 10 m thick layer cut by a huge listric fault (so its throw does
     not taper) whose footwall cutoff at z_r passes x = 1000 m, the hanging wall to the east; returns x of the corners and
-    depths. The plane bends at ``z_center`` (default z_r, where the cutoff is): below the horizon the cutoff is on the ramp."""
+    depths. The plane's tip ellipse is centred at ``z_center`` (default z_r, where the cutoff is) and its ramp ends at
+    ``ramp_base`` (default z_center): the fault is placed by the explicit plane so that its cutoff at z_r is at x = 1000."""
     zc = z_r if z_center is None else z_center
+    zb = zc if ramp_base is None else ramp_base
+    _, inverse = log_plane(dip, zb, flatten)
     layer = Layer(nx, 6, 2, nx * dx, 6 * dx, 10.0, top_depth=z_r, kzkx=0.1)
-    f = Fault(center=(1000.0 + (zc - z_r) / math.tan(math.radians(dip)), 3 * dx), strike=90.0, length=4.0e5, throw=throw, dip=dip,
-              flatten=flatten, z_center=zc, **kw)
+    f = Fault(center=(1000.0 + float(inverse(zc)) - float(inverse(z_r)), 3 * dx), strike=90.0, length=4.0e5, throw=throw, dip=dip,
+              flatten=flatten, z_center=zc, ramp_base=None if ramp_base is None else zb, **kw)
     xc, _, zc, _ = _build_geometry([layer], faults=[f])
     return xc[:, 6], zc[:, 6, 0]
 
@@ -520,10 +524,49 @@ def test_the_listric_hanging_wall_drags_by_the_throw_at_the_fault_and_falls_mono
     assert np.all(z[x < 950.0] == 2500.0) and np.all(np.diff(zc, axis=2) >= -1e-9)
 
 
+def test_the_ramp_may_end_above_the_tip_ellipses_centre_and_the_plane_still_passes_the_trace_there():
+    """``ramp_base``: the depth where the straight ramp ends and tan(dip) begins to fall. Published faults bend at 1.0-2.7 km,
+    above the reservoirs they cut; the tip ellipse's centre, where ``center`` is the trace, stays where it was. With the bend
+    1.2 km above z_center the plane is the explicit one (bend at the base, np.log) shifted to pass the trace at z_center, its
+    dip at z_center is atan(tan(dip) exp(-1200 / L)), and a bend at z_center itself is the plane without the option."""
+    from resmill.faults import _listric
+    dip, zc, flatten, zb = 60.0, 3500.0, 2500.0, 2300.0
+    plane, trace = _listric(dip, zc, flatten, zb)
+    exact, inverse = log_plane(dip, zb, flatten)
+    shift = float(inverse(zc))
+    h = np.linspace(-6000.0, 30000.0, 3601)
+    assert float(plane(0.0)) == pytest.approx(zc, abs=1e-6) and float(trace(zc)) == pytest.approx(0.0, abs=1e-6)
+    assert np.abs(plane(h) - exact(h + shift)).max() < 1e-6
+    assert np.abs(trace(plane(h)[plane(h) < zc + 15000.0]) - h[plane(h) < zc + 15000.0]).max() < 1e-6
+    slope = (plane(1.0) - plane(-1.0)) / 2.0
+    assert math.degrees(math.atan(slope)) == pytest.approx(math.degrees(math.atan(math.tan(math.radians(dip)) * math.exp(-1200.0 / flatten))), abs=1e-3)
+    same, same_trace = _listric(dip, zc, flatten, zc), _listric(dip, zc, flatten)
+    assert np.array_equal(same[0](h), same_trace[0](h)) and np.array_equal(same[1](h + zc), same_trace[1](h + zc))
+
+
+def test_a_horizon_cut_below_the_bend_rolls_from_its_cutoff_with_no_plateau():
+    """Ramp 62 degrees to 1,500 m, tan(dip) falling by 1/e every 2.5 km below it, the tip ellipse's centre at the horizon (2,500
+    m, 1 km below the bend): the cutoff is on the curved part, the heave is (L / t) (exp(T / L) - 1) with t = tan(dip) exp(-1
+    km / L) and the hanging wall rises from the cutoff at once, steepest there (no level run): the grid's top surface is the
+    explicit construction to 0.05 m, the drag falls monotonically and no part of it is level."""
+    heave, x_c, depth = research_rollover(62.0, 1500.0, 2500.0, 2500.0, 300.0, z_anchor=2500.0)
+    t_local = math.tan(math.radians(62.0)) * math.exp(-1000.0 / 2500.0)
+    assert x_c == pytest.approx(0.0, abs=1e-6)
+    assert heave == pytest.approx(2500.0 / t_local * math.expm1(300.0 / 2500.0), abs=1e-6)
+    x, z = rollover_section(62.0, 2500.0, 2500.0, 300.0, ramp_base=1500.0, aspect=1e-6)
+    east = x > 1000.0 + heave + 50.0
+    assert np.abs(z[east] - depth(x[east] - 1000.0)).max() < 0.05
+    drag = z[east] - 2500.0
+    assert np.all(np.diff(drag) <= 1e-9) and drag[0] < 300.0 - 3.0                # already falling at the first column
+    assert np.all(z[x < 950.0] == 2500.0)
+
+
 def test_a_listric_fault_refuses_values_that_make_no_plane():
-    """A flattening depth that is zero, negative or infinite, and a reverse listric fault, have no plane."""
+    """A flattening depth that is zero, negative or infinite, a reverse listric fault, and a ramp base without a flattening plane
+    (or an infinite one) have no plane."""
     base = dict(center=(1500.0, 1000.0), strike=90.0, length=1200.0, throw=20.0)
-    for bad in (dict(flatten=0.0), dict(flatten=-5.0), dict(flatten=math.inf), dict(flatten=3000.0, reverse=True)):
+    for bad in (dict(flatten=0.0), dict(flatten=-5.0), dict(flatten=math.inf), dict(flatten=3000.0, reverse=True),
+                dict(ramp_base=2000.0), dict(flatten=3000.0, ramp_base=math.inf)):
         with pytest.raises(ValueError):
             Fault(**{**base, **bad})
 
