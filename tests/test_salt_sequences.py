@@ -121,3 +121,19 @@ def test_a_sequence_that_cannot_exist_is_refused(kw):
     body = sl.salt_body((0.0, 0.0), (500.0, 500.0))
     with pytest.raises(ValueError):
         sl.salt_sequence(body, datum=TOP, **kw)
+
+
+def test_the_cells_a_truncation_removes_are_inactive_but_not_salt_in_the_labels():
+    """salt_labels marks salt only: the cells the unconformity cuts away (a hook pinches the reservoir out 43.5 m from the contact)
+    are written inactive too, and are not part of the salt mask, its volume fraction or its thickness."""
+    m = build(100.0, 62.0, 1.0, 12, 5.0, 5.0)
+    body, seq, L = m["body"], m["seq"], m["L"]
+    labels = sl.salt_labels(L, salt=body, structure=seq.upturn, erode_above=seq.truncation)
+    xc, yc, zc, act = _build_geometry([L], structure=seq.upturn, erode_above=seq.truncation, salt=body)
+    salt = sl.salt_cells(body, xc, yc, zc)
+    inactive = act == 0
+    assert (labels["mask"] == salt).all() and labels["mask"].sum() == salt.sum()
+    assert inactive.sum() > salt.sum()                                    # the truncated columns are dead as well
+    assert labels["volume_fraction"] == pytest.approx(salt.mean())
+    cut = inactive & ~salt
+    assert cut.any() and not (labels["mask"][cut]).any()
