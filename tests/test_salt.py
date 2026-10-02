@@ -164,6 +164,20 @@ def test_rough_makes_the_outline_irregular_by_the_drawn_sd_octave_by_octave(hurs
     assert 0.4 * expected < min(rms) and max(rms) < 1.8 * expected
 
 
+def test_a_long_body_is_irregular_at_the_scale_of_its_length_not_only_of_its_width():
+    """The octaves start at the larger of the radius and half the long axis, so that a wall meanders over its length as the
+    Precaspian walls and the Sigsbee feeders do (sd rises with range as range^hurst): a 6 km x 1 km wall with rough 0.03 has
+    octaves of range 3000, 1500, 750, 375 and 187.5 m with sd 90, 45, 22.5, 11 and 5.6 m (hurst 1): 102 m in all, read as the
+    outline's distance from the plain ellipse."""
+    plain = sl.salt_body((CX, CY), (6000.0, 1000.0))
+    expected = math.sqrt(sum(x * x for x in (90.0, 45.0, 22.5, 11.25, 5.625)))
+    rms = []
+    for seed in range(16):
+        out = sl.salt_body((CX, CY), (6000.0, 1000.0), rough=0.03, hurst=1.0, seed=seed).outline()
+        rms.append(math.sqrt(np.mean(plain.distance(out[:, 0], out[:, 1]) ** 2)))
+    assert np.mean(rms) == pytest.approx(expected, rel=0.25)
+
+
 def test_rough_adds_short_wavelengths_in_the_proportion_the_hurst_exponent_sets():
     """With hurst 0 every octave has the same sd, so waves shorter than 1.2 km hold a larger share of the outline's variance
     than with hurst 1.5, where the coarse octaves dominate (hand-computed from the octave sds: the 375 and 187.5 m octaves

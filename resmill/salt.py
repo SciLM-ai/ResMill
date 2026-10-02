@@ -98,13 +98,14 @@ class SaltBody:
 
     def _roughen(self, rough, hurst, rng):
         """The displacement fields (m, along and across the body's axes) that roughen its outline at several scales: a sum
-        of octaves of :func:`resmill.structure.roughness`, ranges ``radius``, ``radius / 2`` ... down to :data:`MIN_RANGE`,
-        each of sd ``rough x radius x (range / radius)^hurst``, drawn over a box round the body and resampled once on a
-        grid of 30 m. Reduced where their slope would exceed :data:`_MAX_SLOPE`, so that the warp they make cannot fold.
-        Returns ``((fu, fv), half)``: two Structures over ``[0, 2 half]^2``."""
+        of octaves of :func:`resmill.structure.roughness`, ranges from the larger of the radius and half the long axis, halving
+        down to :data:`MIN_RANGE`, each of sd ``rough x radius x (range / radius)^hurst``, drawn over a box round the body and
+        resampled once on a grid of 30 m. Reduced where their slope would exceed :data:`_MAX_SLOPE`, so that the warp they
+        make cannot fold. Returns ``((fu, fv), half)``: two Structures over ``[0, 2 half]^2``."""
         a0 = self.radius
-        ranges = [a for a in (a0 / 2 ** i for i in range(24)) if a >= MIN_RANGE] or [a0]
-        half = 1.5 * max(self.axes) + 6.0 * rough * a0
+        top = max(a0, 0.5 * max(self.axes))                           # a wall meanders over its length
+        ranges = [a for a in (top / 2 ** i for i in range(24)) if a >= MIN_RANGE] or [a0]
+        half = 1.5 * max(self.axes) + 6.0 * rough * a0 * max(1.0, top / a0) ** max(hurst, 1.0)
         size, step = 2.0 * half, MIN_RANGE / 5.0
         grid = np.linspace(0.0, size, int(math.ceil(size / step)) + 1)
         G = np.meshgrid(grid, grid, indexing="ij")
@@ -207,8 +208,8 @@ def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, 
     an overhang, > 0 a pedestal; N3, N8); ``lobes`` (0 to 0.3) is the outline's rms irregularity as a fraction of the
     smaller semi-axis, drawn from ``seed`` (required with lobes); ``shape`` is the superellipse exponent (2 an ellipse,
     larger flatter-sided: walls). ``rough`` (0 to :data:`MAX_ROUGH`, a fraction of the smaller semi-axis) adds the
-    irregularity of real outlines at the smaller scales: octaves of ranges one radius, a half, a quarter ... down to
-    :data:`MIN_RANGE` (150 m), each of sd ``rough x radius x (range / radius)^hurst`` (the Santos stock and the Sigsbee
+    irregularity of real outlines at the smaller scales: irregularity of real outlines at the smaller scales: octaves of ranges from one radius (half the long axis of a wall, if
+    larger) halving down to :data:`MIN_RANGE` (150 m), each of sd ``rough x radius x (range / radius)^hurst`` (the Santos stock and the Sigsbee ``rough x radius x (range / radius)^hurst`` (the Santos stock and the Sigsbee
     feeders show 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave: ``hurst`` about 1.2),
     displacing the outline along its normal and moving with its lean; ``seed`` is required with it. ``overhang`` =
     (lateral extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck) from H above it upward, linearly
