@@ -77,7 +77,7 @@ def _upturn(width, dip, thinning, relief_cap, taper, angle, loss, thickness):
 
 def salt_flank_trap(x_len, y_len, dx, top, thickness, closure, body, *, normal, wall_at, width, dip=None, thinning=0.0,
                     relief_cap=350.0, taper=None, angle=None, loss=None, neck=0.6, waist=50.0, roughness=None,
-                    faults=None, n_layers=1, rim=None):
+                    faults=None, n_layers=1, rim=None, upturn_in_outline=False):
     """A three-way trap against a salt flank (decision S15): ``{"kwargs": ..., "meta": ...}`` with the keywords of
     :func:`resmill.export.to_grdecl` (``structure``, ``salt``, ``faults`` and either ``isochore`` or ``erode_above``, and
     ``outline`` with a ``rim``) and what was built.
@@ -115,7 +115,11 @@ def salt_flank_trap(x_len, y_len, dx, top, thickness, closure, body, *, normal, 
     (x, y) in m), the upturn (``upturn`` ``"plain"`` or ``"sequence"``, ``width``, ``dip`` at the contact, ``power``,
     ``relief_m``, ``thinning``, and for a sequence its ``cut`` and ``truncation_angle_deg``), ``overhang`` (L, H) or None,
     ``n_faults``, ``fault_sets`` and with a ``rim`` its value and ``outline_columns``. The trap as the grid holds it is read
-    with :func:`resmill.fault_seal.blocks_at` from ``to_grdecl(report=)``."""
+    with :func:`resmill.fault_seal.blocks_at` from ``to_grdecl(report=)``.
+
+    The cut (``rim``) is read on the fold and its roughness unless ``upturn_in_outline``, when it is read on the structure
+    written (the upturn included, around the crest of the trap the salt leaves): the ridge the upturn lifts along the wall can
+    be most of the model's main trap and lie outside a cut of the pre-salt fold (half of it, with a wide folding zone)."""
     if not 0.0 < wall_at < 1.0:
         raise ValueError(f"wall_at must lie between 0 and 1, got {wall_at}")
     if len(body["axes"]) != 2:
@@ -167,7 +171,9 @@ def salt_flank_trap(x_len, y_len, dx, top, thickness, closure, body, *, normal, 
                 overhang=None if overhang is None else tuple(float(v) for v in overhang),
                 n_faults=len(drawn), fault_sets=sorted({fault.kind for fault in drawn}))
     if rim is not None:
-        kwargs["outline"] = trap_outline(fold, surface, closure, center, x_len, y_len, dx, top, tuple(crest), rim)
+        kwargs["outline"] = (trap_outline(fold, surface + up, closure, center, x_len, y_len, dx, top, meta["crest"], rim)
+                             if upturn_in_outline else
+                             trap_outline(fold, surface, closure, center, x_len, y_len, dx, top, tuple(crest), rim))
         meta.update(rim=float(rim), outline_columns=int(kwargs["outline"].sum()))
     return dict(kwargs=kwargs, meta=meta)
 

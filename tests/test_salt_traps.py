@@ -309,6 +309,26 @@ def test_a_flank_has_dead_columns_on_the_salt_side_and_a_trap_against_the_wall(t
     assert not inside(built["kwargs"]["salt"], *built["meta"]["crest"], built["meta"]["z_ref"])   # not under the salt
 
 
+def test_the_outline_can_be_cut_from_the_structure_with_the_upturn_and_is_otherwise_the_folds(tmp_path):
+    """ResSimMill's review B5: the cut is read on the fold and its roughness, which the upturn's ridge along the wall is not
+    part of, so a wide folding zone leaves half of the main trap of the built model outside it (width 500 m, wall at 0.55:
+    53 % of its 1,308 columns). With ``upturn_in_outline`` the trap is read on the structure written, from the crest of the
+    trap the salt leaves, and the cut holds it; without it (the default) the outline is what it was."""
+    args = dict(rim=500.0, width=500.0, wall_at=0.55, normal=0.0, dip=40.0)
+    default, upturned = flank(**args), flank(upturn_in_outline=True, **args)
+    assert default["kwargs"]["outline"].sum() == flank(upturn_in_outline=False, **args)["kwargs"]["outline"].sum()
+    assert upturned["meta"]["outline_columns"] == int(upturned["kwargs"]["outline"].sum()) > int(
+        default["kwargs"]["outline"].sum())
+    shares = {}
+    for name, built in (("default", default), ("upturned", upturned)):
+        report = {}
+        to_grdecl(layer(), tmp_path / f"{name}.grdecl", report=report, **built["kwargs"])
+        main = max(blocks_at(report["block_inputs"], DX, DX, Capillary(delta_rho=300.0)),
+                   key=lambda b: b["area"] * b["height"])
+        shares[name] = float((main["mask"] & ~built["kwargs"]["outline"]).sum() / main["mask"].sum())
+    assert shares["default"] > 0.4 and shares["upturned"] < 0.01
+
+
 def test_the_labels_say_what_was_built():
     meta = flank(faults=dict(density=1.0, seed=5))["meta"]
     assert meta["closure_area_km2"] == pytest.approx(math.pi * RADIUS ** 2 / 1e6, rel=0.08)

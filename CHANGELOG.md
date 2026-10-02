@@ -22,6 +22,10 @@
 
 ### Added
 
+- `salt_traps.salt_flank_trap(..., upturn_in_outline=False)`: with it the cut (`rim`) is read on the structure written, the
+  upturn included, around the crest of the trap the salt leaves, instead of on the fold and its roughness. The ridge an upturn
+  lifts along the wall can be most of the model's main trap and lie outside a cut of the pre-salt fold (53 % of it, with a
+  folding zone of 500 m and the contact at 0.55 of the half-width); the default outline is what it was.
 - `block_styles.tilted_blocks(..., rim=None)` and `rollover(..., rim=None)`: with a `rim` (m) the model also carries
   `BlockModel.outline`, the `(nx, ny)` bool map of the columns within `rim` of the trap the model measured
   (`labels["trap"]`), as `fold_trap` cuts a fold's: pass it to `to_grdecl(outline=)`. The trap is read on the planning
