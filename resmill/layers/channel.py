@@ -591,7 +591,7 @@ class ChannelLayer(Layer):
           engine records the event's level (storey) under that pair, which is how levee fading and ``drapes`` find a
           cell's storey. Two events can draw the same pair (80 anchor models: 13 had cells with a wrong level, 0.45 %
           of the sand cells, 16 % in the worst), and the cells of the earlier event then carry the later one's level.
-          True moves a repeated pair to the next float32 poro_mult (a relative 1e-7 change, no random number drawn),
+          True moves a repeated pair to the next free float32 poro_mult (a relative 1e-7 per repeat, no random number drawn),
           so the pair names its event. Compare runs made with the same setting. False (default): outputs
           bit-identical to before.
         * ``drapes`` — mud drapes on the bases of channel storeys (levels), as transmissibility

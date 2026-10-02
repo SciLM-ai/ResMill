@@ -466,6 +466,8 @@ def test_distinct_events_give_every_sand_cell_the_level_of_the_event_that_stampe
     assert truth.min() >= 0 and truth.max() >= 4                               # every cell's event is known; many levels
     assert len(distinct._engine.event_levels) == len(exact) > len(default._engine.event_levels)   # one entry per event
     assert np.array_equal(_storeys(distinct)[sand], truth)
+    pm_d, pm_s = (np.asarray(x._engine.poro_mult_field, dtype=float) for x in (distinct, default))
+    assert 0.0 < np.abs(pm_d - pm_s).max() < 1e-5 * pm_s.max()               # a few float32 steps, on the cells of repeated pairs
     assert (_storeys(default)[sand] != truth).sum() > 100                      # without it, many cells carry another level
 
 

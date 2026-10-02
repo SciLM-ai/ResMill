@@ -436,8 +436,8 @@ class fluvial:
         event_log_perm_sd: float = 0.12,
         # Both components of an event's rock pair are clipped at +-2 sd, so about 1 % of the events draw one of the two corner
         # pairs and ``event_levels`` (pair -> level) keeps only the last such event's level: the cells of an earlier event of
-        # another level then carry the wrong storey. True nudges a pair already drawn to the next float32 poro_mult (a
-        # relative 1e-7 change, no extra random number), so the pair identifies its event. False: today's outputs.
+        # another level then carry the wrong storey. True nudges a pair already drawn to the next free float32 poro_mult (a
+        # relative 1e-7 per repeat, no extra random number), so the pair identifies its event. False: today's outputs.
         distinct_events: bool = False,
         # Record each CH/LA cell's local channel direction in ``flow_angle`` (for kx/ky).
         record_flow_angle: bool = False,

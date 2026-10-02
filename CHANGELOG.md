@@ -40,7 +40,7 @@
   level, how levee fading and `drapes` find a cell's storey) keeps the last
   one's level: in 80 anchor models 13 had cells of a wrong storey (0.45 %
   of the sand, 16 % in the worst). A repeated pair moves to the next
-  float32 poro_mult (1e-7 relative, no random number drawn). Compare runs
+  free float32 poro_mult (1e-7 relative per repeat, no random number drawn). Compare runs
   made with the same setting. Off by default: outputs are bit-identical to
   before.
 - `path_step` (`ChannelLayer`, and `DeltaLayer` through its fluvial
