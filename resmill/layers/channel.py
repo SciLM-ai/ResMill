@@ -603,8 +603,10 @@ class ChannelLayer(Layer):
           (``self.mult_x`` / ``mult_y`` / ``mult_z``, written by ``to_grdecl`` as MULTX, MULTY and
           MULTZ; facies, porosity and permeability do not change). A dict: ``coverage`` (required),
           the mean share of each storey's base covered (Barton et al. 2010: 0.05-0.92 over 17
-          outcrops); ``margin_bias`` (0), how much more of the margin than of the axis is covered
-          (0 random, 0.34 Vento 2020); ``thickness`` (0.5 m); ``perm`` (mD, None: the FF mud's
+          outcrops); ``coverage_concentration`` (None), k of the Beta(c k, (1 - c) k) each storey's
+          coverage is drawn from, mean c = ``coverage`` (None: every storey gets c; 0.71: drapes
+          continuous in a quarter of Barton's elements); ``margin_bias`` (0), how much more of the
+          margin than of the axis is covered (0 random, 0.34 Vento 2020); ``thickness`` (0.5 m); ``perm`` (mD, None: the FF mud's
           ``facies_props[-1]``, which seals the face); ``hole_range_m`` (practical range of the
           holes; None: half a channel, ``mCHdepth`` x ``mCHwdratio`` / 2). Method and sources:
           :mod:`resmill.layers.drapes`. None (default): no drapes, outputs bit-identical, no

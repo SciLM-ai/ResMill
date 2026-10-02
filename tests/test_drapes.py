@@ -9,6 +9,7 @@ import math
 
 import numpy as np
 import pytest
+from scipy.special import betainc
 
 from resmill.layers.channel import ChannelLayer
 from resmill.layers.drapes import (COVERAGE_BETA, COVERAGE_RANGE, coverage_from_unit, draped_columns, drape_faces,
@@ -115,6 +116,43 @@ def test_coverage_is_the_share_of_the_footprint_that_is_draped(coverage):
     fill[:, :60] = False
     draped = draped_columns(fill, np.where(fill, 0, -1), dn, coverage, 0.0, (3.0, 3.0), np.random.default_rng(3))
     assert not draped[0][:, :60].any() and draped[0][:, 60:].mean() == pytest.approx(coverage, abs=1.0 / 7200)
+
+
+def _many_storeys(levels, nx=24, ny=24):
+    """``levels`` storeys, each one fill cell thick over the whole map, one above the other."""
+    fill = np.ones((nx, ny, levels), dtype=bool)
+    return fill, np.broadcast_to(np.arange(levels), fill.shape), np.full(fill.shape, 0.5, dtype=np.float32)
+
+
+def test_each_storeys_coverage_is_a_beta_draw_that_holds_the_mean():
+    """With ``concentration`` k each storey's own share is drawn from Beta(c k, (1 - c) k): mean c, variance
+    c (1 - c) / (k + 1). Barton et al. (2010): drapes continuous in about 25 % of the channel elements, at their
+    mean coverage of 0.5565 (read as: coverage of 0.95 or more) is k = 0.71. A very large k leaves every storey at c."""
+    fill, storey, dn = _many_storeys(800)
+    c, k = 0.5565, 0.71
+    share = draped_columns(fill, storey, dn, c, 0.0, (1.0, 1.0), np.random.default_rng(0), concentration=k).mean(axis=(1, 2))
+    assert share.mean() == pytest.approx(c, abs=0.04)
+    assert share.var() == pytest.approx(c * (1 - c) / (k + 1), abs=0.02)
+    assert (share >= 0.95).mean() == pytest.approx(1 - betainc(c * k, (1 - c) * k, 0.95), abs=0.04) == pytest.approx(0.25, abs=0.05)
+    assert (share <= 0.05).mean() > 0.1 and share.min() == 0.0 and share.max() == 1.0       # bare and sealed storeys both occur
+    tight = draped_columns(fill, storey, dn, c, 0.0, (1.0, 1.0), np.random.default_rng(1), concentration=1e9).mean(axis=(1, 2))
+    assert np.abs(tight - c).max() < 2.0 / 576
+    for edge in (0.0, 1.0):                                             # no spread to draw: the Beta would have a parameter 0
+        shares = draped_columns(fill, storey, dn, edge, 0.0, (1.0, 1.0), np.random.default_rng(2), concentration=k).mean(axis=(1, 2))
+        assert np.all(shares == edge)
+
+
+def test_without_a_concentration_nothing_more_is_drawn_and_every_storey_gets_the_coverage():
+    """Off (None) the stream is what it was: one noise field per storey and nothing else, so the next number is the one
+    a fresh generator gives after that field; every storey is covered to the share asked for."""
+    fill, storey, dn = _one_storey(40, 30)
+    rng, ref = np.random.default_rng(3), np.random.default_rng(3)
+    draped = draped_columns(fill, storey, dn, 0.4, 0.0, (3.0, 3.0), rng)
+    ref.standard_normal((40, 30))
+    assert rng.random() == ref.random() and draped[0].mean() == pytest.approx(0.4, abs=1.0 / 1200)
+    rng = np.random.default_rng(3)
+    draped_columns(fill, storey, dn, 0.4, 0.0, (3.0, 3.0), rng, concentration=1.0)
+    assert rng.random() != ref.random()
 
 
 def test_the_margin_bias_moves_the_drape_from_the_axis_to_the_margin():

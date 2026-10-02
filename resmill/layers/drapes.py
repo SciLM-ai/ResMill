@@ -26,6 +26,13 @@ Where, per storey (a level of the layer's aggradation):
 * the drape lies on the storey's fill footprint (the columns holding channel fill or lateral accretion of that level),
   on a share of columns equal to ``coverage`` (the mean over the base, Barton's measure), chosen by the ranks of a
   smooth random field of practical range ``hole_range_m``: the columns left bare are the holes;
+* with ``coverage_concentration`` k each storey's own share is drawn from Beta(c k, (1 - c) k), mean c = ``coverage``,
+  clipped to [0, 1]: a storey drawn at 1 seals its whole base. Without it every storey gets exactly c, and while the holes
+  are at least a cell wide no interface is ever sealed, though a stack is as tight as its tightest interface. Barton et al.
+  (2010) found drapes "continuous in approximately 25 % of the channel elements" and discontinuous in the rest; at their
+  mean coverage of 0.5565, P(coverage >= 0.95) = 0.25 is k = 0.71 (reading "continuous" as 95 % or more of the base is
+  [J], and so is treating a storey, a belt of 4-15 flow events, as one element). The spread is the sampler's choice,
+  not a fact fixed here: ``None`` (default) draws nothing and gives today's maps;
 * with ``margin_bias`` b the share covered is b higher at the margin than at the axis, where the axis-ness of a
   column is the engine's ``depth_norm`` of the lowest fill cell (1 at the thalweg, 0 at the banks), the mean held at
   ``coverage``;
@@ -58,7 +65,7 @@ MARGIN_BIAS_MAX = 0.34
 # log-uniform shape between is a judgement.
 THICKNESS_RANGE_M = (0.1, 1.5)
 MULTIPLIER_FLOOR = 1e-12            # the floor ``fault_seal.face_multipliers`` keeps too
-_DEFAULTS = {"margin_bias": 0.0, "thickness": 0.5, "perm": None, "hole_range_m": None}
+_DEFAULTS = {"margin_bias": 0.0, "thickness": 0.5, "perm": None, "hole_range_m": None, "coverage_concentration": None}
 _STREAM = 0x44524150                # tags the drape stream: ``default_rng([seed, tag])`` is not the engine's ``seed``
 
 
@@ -71,7 +78,9 @@ def check_drapes(drapes: dict) -> dict:
     bad = [name for name, ok in (
         ("coverage", 0.0 <= s["coverage"] <= 1.0), ("margin_bias", -1.0 <= s["margin_bias"] <= 1.0),
         ("thickness", s["thickness"] > 0.0), ("perm", s["perm"] is None or s["perm"] > 0.0),
-        ("hole_range_m", s["hole_range_m"] is None or s["hole_range_m"] > 0.0)) if not ok]
+        ("hole_range_m", s["hole_range_m"] is None or s["hole_range_m"] > 0.0),
+        ("coverage_concentration", s["coverage_concentration"] is None or 0.0 < s["coverage_concentration"] < math.inf)
+    ) if not ok]
     if bad:
         raise ValueError(f"drapes: {', '.join(bad)} out of range in {drapes!r}")
     return s
@@ -126,7 +135,15 @@ def _local_coverage(axis_ness, coverage, margin_bias):
     return np.clip(0.5 * (lo + hi) + shape, 0.0, 1.0)
 
 
-def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng) -> np.ndarray:
+def _storey_coverage(coverage, concentration, rng):
+    """One storey's coverage: a draw from Beta(c k, (1 - c) k), mean ``coverage`` = c and concentration k, clipped to
+    [0, 1]. Coverage 0 or 1 has no spread (and a Beta parameter of 0), so it is returned as it is."""
+    if not 0.0 < coverage < 1.0:
+        return coverage
+    return float(np.clip(rng.beta(coverage * concentration, (1.0 - coverage) * concentration), 0.0, 1.0))
+
+
+def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng, concentration=None) -> np.ndarray:
     """Which columns of each storey's base are draped: bool ``(n_storeys, nx, ny)``, ``n_storeys`` the top level + 1 (at
     least 1, an undraped level 0, when no storey is known).
 
@@ -134,7 +151,8 @@ def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng) 
     channel (its lowest fill cell in a column gives the axis-ness) and ``sigma`` the smoothing (cells along x and y) of
     the white noise behind the holes, one field per storey drawn from ``rng``. A storey's fill footprint is covered on
     exactly the share ``coverage`` (to one column) when ``margin_bias`` is 0: the columns whose rank in the field is
-    below it.
+    below it. With a ``concentration`` each storey's share is a Beta draw from ``rng`` (:func:`_storey_coverage`), after
+    that storey's field, instead; None draws nothing more.
     """
     nx, ny, _ = fill.shape
     draped = np.zeros((max(int(storey.max()), 0) + 1, nx, ny), dtype=bool)
@@ -146,7 +164,8 @@ def draped_columns(fill, storey, depth_norm, coverage, margin_bias, sigma, rng) 
         lowest = np.take_along_axis(depth_norm, mine.argmax(axis=2)[..., None], axis=2)[..., 0][base]
         noise = gaussian_filter(rng.standard_normal((nx, ny)), sigma=sigma, mode="reflect")[base]
         rank = (np.argsort(np.argsort(noise)) + 0.5) / noise.size
-        draped[level][base] = rank < _local_coverage(lowest, coverage, margin_bias)
+        share = coverage if concentration is None else _storey_coverage(coverage, concentration, rng)
+        draped[level][base] = rank < _local_coverage(lowest, share, margin_bias)
     return draped
 
 
@@ -195,6 +214,6 @@ def place_drapes(facies, storey, depth_norm, perms, size, drapes, mud_perm, seed
     rng = np.random.default_rng(None if seed is None else [int(seed), _STREAM])
     sigma = tuple(s["hole_range_m"] / _RANGE_PER_SIGMA / d for d in size[:2])
     draped = draped_columns((facies == 3) | (facies == 4), storey, depth_norm, s["coverage"], s["margin_bias"], sigma,
-                            rng)
+                            rng, s["coverage_concentration"])
     return drape_faces(facies, storey, draped, perms, size, s["thickness"],
                        mud_perm if s["perm"] is None else s["perm"])
