@@ -329,17 +329,17 @@ def test_a_rollovers_crest_and_relief_on_the_grid_are_the_explicit_constructions
 def test_the_hanging_wall_zones_next_to_the_master_are_as_thick_as_the_index_says(expansion):
     """T18, Thorsen's index (downthrown over upthrown thickness): one heave moves every column of the hanging wall as a unit, so the
     zones' thickness there is the footwall's times the index asked for and nothing else. Three zones of a 90 m reservoir, a 250 m
-    throw and ramp 60 degrees, L = 2.5 km, a regional dip of 1 degree: on the grid, 100 m, 1 km and 2.5 km beyond the hanging-wall
-    cutoff the middle zone is 1.000 (no growth asked for) or 2.000 times as thick as in the footwall, to 0.1 %. (Taking each horizon's
-    heave at its own depth made 2.0 into 2.5-2.6 and 1.0 into 1.2-1.3 right next to the fault: review of step 4, F1.)"""
-    from resmill.faults import _plane
+    throw and ramp 60 degrees, L = 2.5 km, a regional dip of 1 degree, the master as drawn (its trace wanders: the growth isochore and the
+    displacement share one frame): on the grid, 100 m, 1 km and 2.5 km beyond the hanging-wall cutoff the middle zone is 1.000 (no growth
+    asked for) or 2.000 times as thick as in the footwall, to 0.1 %. (Taking each horizon's heave at its own depth made 1.0 into 1.15-1.17
+    and 2.0 into 2.31-2.35 at 100 m, and 1.08 and 2.16-2.19 at 2.5 km, for the five of seeds 0-7 with a footwall on the map: review of step 4, F1.)"""
+    from resmill.faults import _frame, _plane
     x_len, y_len, dx, thick = 24000.0, 1500.0, 25.0, 90.0
     m = rollover(x_len, y_len, dx, TOP, thick, 1, kind="frio", azimuth=90.0, dip=60.0, flatten=2500.0, ramp_base=1500.0, throw=250.0,
                  regional_dip=1.0, density=0.0, length=20000.0, expansion=expansion, zones=3)
     nx, ny = int(x_len / dx), int(y_len / dx)
     layers = [Layer(nx, ny, 1, x_len, y_len, thick / 3.0, top_depth=TOP + k * thick / 3.0, kzkx=0.1) for k in range(3)]
     f, = [f for f in m.faults if f.kind == "master"]
-    f = dataclasses.replace(f, bends=0.0, seed=None, radius=math.inf)
     _, _, zc, _ = _build_geometry(layers, structure=m.structure, faults=[f], isochore=m.isochore)
     j = ny // 2
     z = 0.25 * (zc[0::2, 2 * j] + zc[1::2, 2 * j] + zc[0::2, 2 * j + 1] + zc[1::2, 2 * j + 1])          # (nx, 4 interfaces)
@@ -347,7 +347,8 @@ def test_the_hanging_wall_zones_next_to_the_master_are_as_thick_as_the_index_say
     x = (np.arange(nx) + 0.5) * dx
     trace = _plane(f, f.z_center)[1]
     heave = float(trace(f.z_center + f.throw) - trace(f.z_center))
-    cutoff = f.center[0] + float(trace(TOP + thick + 20.0)) + heave           # the base's hanging-wall cutoff, a little deeper in the ramped top
+    _, h_centre = _frame(f, np.array([f.center[0]]), np.array([f.center[1]]))       # the wandering trace's offset at the centre, along the dip
+    cutoff = f.center[0] + float(trace(TOP + thick + 20.0)) + heave - h_centre[0]     # the base's hanging-wall cutoff, a little deeper in the ramped top
     for beyond in (100.0, 1000.0, 2500.0):
         i = int(np.argmin(np.abs(x - (cutoff + beyond))))
         assert zone[i, 1] / zone[:20, 1].mean() == pytest.approx(expansion, rel=1e-3)
