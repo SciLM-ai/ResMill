@@ -434,6 +434,11 @@ class fluvial:
         # standard deviations of the per-event draw (today's values by default).
         event_poro_sd: float = 0.04,
         event_log_perm_sd: float = 0.12,
+        # Both components of an event's rock pair are clipped at +-2 sd, so about 1 % of the events draw one of the two corner
+        # pairs and ``event_levels`` (pair -> level) keeps only the last such event's level: the cells of an earlier event of
+        # another level then carry the wrong storey. True nudges a pair already drawn to the next float32 poro_mult (a
+        # relative 1e-7 change, no extra random number), so the pair identifies its event. False: today's outputs.
+        distinct_events: bool = False,
         # Record each CH/LA cell's local channel direction in ``flow_angle`` (for kx/ky).
         record_flow_angle: bool = False,
         # ---- misc -------------------------------------------------------
@@ -653,6 +658,7 @@ class fluvial:
         # channel slightly cleaner than another in the same reservoir.
         self.poro_mult_std = float(event_poro_sd)
         self.log_perm_offset_std = float(event_log_perm_sd)
+        self.distinct_events = bool(distinct_events)
 
         # Cache for the current channel event's K-C-coupled poro/perm pair.
         # ``_stamp_channel`` redraws and refreshes this; ``_stamp_levee``
@@ -1475,7 +1481,12 @@ class fluvial:
             po = po_lo
         elif po > po_hi:
             po = po_hi
-        self.event_levels[(np.float32(pm), np.float32(po))] = self._level
+        key = (np.float32(pm), np.float32(po))
+        if self.distinct_events:
+            while key in self.event_levels:        # another event drew this pair (both components clipped)
+                key = (np.nextafter(key[0], np.float32(np.inf)), key[1])
+            pm = float(key[0])
+        self.event_levels[key] = self._level
         return pm, po
 
     def _stamp_channel(self, facies_code: int, erode_above: bool):

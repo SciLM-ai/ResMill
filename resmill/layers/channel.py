@@ -555,6 +555,9 @@ class ChannelLayer(Layer):
         fining_amplitude: float | None = None,
         event_poro_sd: float = 0.04,
         event_log_perm_sd: float = 0.12,
+        # Give every flow event its own rock pair, so each sand cell's storey is the level of the event that stamped it
+        # (see the docstring); False keeps the pairs, and so the outputs, as they were
+        distinct_events: bool = False,
         # Permeability fining upward in channel fills and noise ranges in metres (see
         # _finalize_facies_table; None: off)
         fining_perm_decades: float | None = None,
@@ -588,6 +591,13 @@ class ChannelLayer(Layer):
         * Output: ``self.facies`` is the full Alluvsim 6-class array
           (-1..4); ``self.active`` is the binary 0/1 sand mask
           (``self.facies >= 1``).
+        * ``distinct_events`` — each flow event draws a (poro_mult, log_perm_offset) pair, clipped at +-2 sd, and the
+          engine records the event's level (storey) under that pair, which is how levee fading and ``drapes`` find a
+          cell's storey. Two events can draw the same pair (80 anchor models: 13 had cells with a wrong level, 0.45 %
+          of the sand cells, 16 % in the worst), and the cells of the earlier event then carry the later one's level.
+          True moves a repeated pair to the next float32 poro_mult (a relative 1e-7 change, no random number drawn),
+          so the pair names its event. Compare runs made with the same setting. False (default): outputs
+          bit-identical to before.
         * ``drapes`` — mud drapes on the bases of channel storeys (levels), as transmissibility
           multipliers on the faces between a channel-fill cell and the older-storey sand next to it
           (``self.mult_x`` / ``mult_y`` / ``mult_z``, written by ``to_grdecl`` as MULTX, MULTY and
@@ -642,7 +652,7 @@ class ChannelLayer(Layer):
             cutoff_loop_ratio=cutoff_loop_ratio, extend_to_boundary=extend_to_boundary,
             thalweg_max=thalweg_max, unwrap_azimuth=unwrap_azimuth, thalweg_lag=thalweg_lag,
             path_buffer=path_buffer, continuous_banks=continuous_banks, path_step=path_step,
-            event_poro_sd=event_poro_sd, event_log_perm_sd=event_log_perm_sd,
+            event_poro_sd=event_poro_sd, event_log_perm_sd=event_log_perm_sd, distinct_events=distinct_events,
             record_flow_angle=any("kxky" in dict(v) for v in (facies_props or {}).values()),
             Cf=Cf, A=scour_factor, I=gradient, Q=Q,
             CHndraw=CHndraw, ndiscr=ndiscr, nCHcor=nCHcor,

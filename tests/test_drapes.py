@@ -327,14 +327,56 @@ def _layer(seed=5, **drapes):
     return _build(seed=seed, **({"drapes": drapes} if drapes else {}))
 
 
-def _storeys(layer):
-    """Every sand cell's level, looked up cell by cell in the engine's event record (the slow, plain way)."""
+def _storeys(layer, levels=None):
+    """Every sand cell's level, looked up cell by cell in an event record (the engine's own unless ``levels`` is given;
+    the slow, plain way)."""
     eng = layer._engine
+    levels = eng.event_levels if levels is None else levels
     pm, po = np.asarray(eng.poro_mult_field), np.asarray(eng.log_perm_offset_field)
     storey = np.full(pm.shape, -1)
     for idx in zip(*np.nonzero(layer.facies >= 1)):
-        storey[idx] = eng.event_levels.get((pm[idx], po[idx]), -1)
+        storey[idx] = levels.get((pm[idx], po[idx]), -1)
     return storey
+
+
+def _global_state():
+    """numpy's global generator state in full: the key array, the position in it and the Gaussian cache."""
+    _, key, pos, has_gauss, cached = np.random.get_state()
+    return key.tobytes(), pos, has_gauss, cached
+
+
+EVENT_SDS = dict(event_poro_sd=2.0, event_log_perm_sd=0.01)       # nearly every event clips to a corner pair: pairs repeat
+
+
+def test_distinct_events_give_every_sand_cell_the_level_of_the_event_that_stamped_it(monkeypatch):
+    """An event's (poro_mult, log_perm_offset) pair is clipped at +-2 sd in both components, so now and then two events
+    draw the same pair and the record (pair -> level) keeps the later one's level: the cells of the earlier event, of
+    another level, then carry the wrong storey. ``distinct_events`` makes each event's pair its own and changes nothing
+    else. The reference is the same build with a counter added to every event's poro_mult (steps far above a float32
+    ulp): each cell then holds the pair of the one event that stamped it, whose level the counter's own record gives."""
+    from resmill.layers._fluvial import fluvial
+    draw, exact = fluvial._draw_event_mults, {}
+
+    def counted(self):
+        pm, po = draw(self)
+        pm += 1e-3 * (len(exact) + 1)
+        exact[(np.float32(pm), np.float32(po))] = self._level
+        return pm, po
+
+    default = _build(**EVENT_SDS)
+    state = _global_state()
+    monkeypatch.setattr(fluvial, "_draw_event_mults", counted)
+    reference = _build(**EVENT_SDS)
+    monkeypatch.undo()
+    distinct = _build(distinct_events=True, **EVENT_SDS)
+    sand = np.asarray(reference.facies) >= 1
+    assert np.array_equal(default.facies, reference.facies) and np.array_equal(distinct.facies, reference.facies)
+    assert _global_state() == state                                            # no random number drawn differently
+    truth = _storeys(reference, exact)[sand]
+    assert truth.min() >= 0 and truth.max() >= 4                               # every cell's event is known; many levels
+    assert len(distinct._engine.event_levels) == len(exact) > len(default._engine.event_levels)   # one entry per event
+    assert np.array_equal(_storeys(distinct)[sand], truth)
+    assert (_storeys(default)[sand] != truth).sum() > 100                      # without it, many cells carry another level
 
 
 def test_drapes_are_off_by_default_and_change_no_rock():
