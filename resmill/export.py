@@ -206,6 +206,22 @@ def _stack_prop(layers, name):
     return np.concatenate(mats, axis=2)
 
 
+def _stack_optional(layers, name):
+    """Concatenate an optional per-layer (nx, ny, nz) attribute into Eclipse K-down order as floats; a layer without it
+    counts as 1. A shape other than the layer's is refused: it would be broadcast or written with the wrong length."""
+    parts = []
+    for L in layers:
+        a = getattr(L, name, None)
+        if a is None:
+            parts.append(np.ones((L.nx, L.ny, L.nz)))
+            continue
+        a = np.asarray(a, dtype=float)
+        if a.shape != (L.nx, L.ny, L.nz):
+            raise ValueError(f"{type(L).__name__}.{name} has shape {a.shape}, not the layer's {(L.nx, L.ny, L.nz)}")
+        parts.append(a[:, :, ::-1])
+    return np.concatenate(parts, axis=2)
+
+
 def horizontal_permeability(model):
     """PERMX and PERMY of ``model`` (a layer or a Reservoir) in Eclipse K-down order, before floors.
 
@@ -217,10 +233,23 @@ def horizontal_permeability(model):
     perm = _stack_prop(layers, "perm_mat").astype(float)
     if all(getattr(L, "kx_mult", None) is None for L in layers):
         return perm, perm
-    return tuple(perm * np.concatenate(
-        [np.ones((L.nx, L.ny, L.nz)) if getattr(L, name, None) is None
-         else np.asarray(getattr(L, name), dtype=float)[:, :, ::-1] for L in layers], axis=2)
-        for name in ("kx_mult", "ky_mult"))
+    return tuple(perm * _stack_optional(layers, name) for name in ("kx_mult", "ky_mult"))
+
+
+def drape_multipliers(model):
+    """MULTX, MULTY and MULTZ of ``model``'s mud drapes in Eclipse K-down order, or None when there are none.
+
+    A channel layer made with ``drapes`` carries ``mult_x``, ``mult_y`` and ``mult_z``, the transmissibility multiplier
+    across each cell's +x, +y and lower face (k up); in K-down order the lower face is the + z face, which MULTZ
+    multiplies. A layer without them counts as 1, an array that is not the layer's shape is a ``ValueError``. None when
+    no layer has a multiplier below 1; a model none of whose layers has the attributes returns before building anything.
+    """
+    layers = list(getattr(model, "layers", [model]))
+    if all(getattr(L, name, None) is None for L in layers for name in ("mult_x", "mult_y", "mult_z")):
+        return None
+    out = {key: _stack_optional(layers, name)
+           for key, name in (("MULTX", "mult_x"), ("MULTY", "mult_y"), ("MULTZ", "mult_z"))}
+    return out if any((a != 1.0).any() for a in out.values()) else None
 
 
 def _write_array(f, keyword, values, fmt, per_line):
@@ -246,6 +275,27 @@ def _write_rle(f, keyword, values, per_line=12, fmt="%d"):
     for i in range(0, len(toks), per_line):
         f.write(" ".join(toks[i:i + per_line]) + "\n")
     f.write("/\n\n")
+
+
+def _seal_vsh(seal, layers, shape):
+    """The clay fraction per cell, k top-down (``shape``: nx, ny, nz), that ``seal.vsh`` stands for: an array of that
+    shape, or a dict {facies code: clay fraction} over the layers' facies."""
+    vsh = seal.vsh
+    if vsh is None:
+        raise ValueError("Seal.vsh is required to write the fault seal: the clay fraction per cell (an array of shape "
+                         f"{shape}, k top-down) or per facies code ({{code: fraction}})")
+    if isinstance(vsh, dict):
+        codes = _stack_prop(layers, "facies").astype(int)
+        used, inverse = np.unique(codes, return_inverse=True)
+        missing = [int(c) for c in used if c not in vsh]
+        if missing:
+            raise ValueError(f"Seal.vsh has no clay fraction for facies code(s) {missing}")
+        return np.array([vsh[int(c)] for c in used], dtype=float)[inverse.reshape(shape)]
+    vsh = np.asarray(vsh, dtype=float)
+    if vsh.shape != shape:
+        raise ValueError(f"Seal.vsh must be an array of shape {shape} (k top-down) or a dict by facies code, "
+                         f"not shape {vsh.shape}")
+    return vsh
 
 
 def to_grdecl(model, path, structure=None, top=None, base=None,
@@ -304,8 +354,16 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     seal : resmill.fault_seal.Seal, optional
         With ``faults``: also write MULTX, MULTY and MULTZ, each fault face's
         transmissibility multiplier from its shale gouge ratio
-        (:mod:`resmill.fault_seal`); ``seal.vsh`` holds the clay fraction per
-        cell or per facies code.
+        (:mod:`resmill.fault_seal`); ``seal.vsh`` (required) holds the clay
+        fraction per cell (an array of the grid's shape, k top-down) or per
+        facies code (``{code: fraction}``, every code the layers hold), and
+        anything else is refused before a file is written. ``seal.scatter``,
+        ``offset``, ``p_open`` and ``p_enhance`` spread the faults'
+        multipliers, a share of them open or raising flow, as in company decks.
+
+    A channel layer made with ``drapes`` (mud drapes at the bases of storeys,
+    :mod:`resmill.layers.drapes`) also gets MULTX, MULTY and MULTZ, its drapes'
+    multipliers; where a seal writes them too, the two multiply face by face.
     """
     layers = list(getattr(model, "layers", [model]))
     L0 = layers[0]
@@ -318,6 +376,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
     names = [fault.name or f"F{n + 1:02d}" for n, (fault, _) in enumerate(faces)]
     if len(set(names)) < len(names) or any(len(nm) > 8 for nm in names):
         raise ValueError(f"fault names must be unique within 8 characters (OPM keeps 8): {names}")
+    seal_vsh = _seal_vsh(seal, layers, actnum.shape) if faces and seal is not None else None
 
     fac = _stack_prop(layers, "facies").astype(int) if facies else None
     poro = _stack_prop(layers, "poro_mat").astype(float)
@@ -345,6 +404,7 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
 
     from . import __version__
 
+    drapes = drape_multipliers(model)          # before the file is opened: a refusal must not leave a truncated GRDECL
     path = Path(path)
     with open(path, "w") as f:
         f.write(f"-- Generated by ResMill v{__version__}\n")
@@ -373,14 +433,13 @@ def to_grdecl(model, path, structure=None, top=None, base=None,
             for name, (fault, _) in zip(names, faces):
                 f.write(f" '{name}' {fault.mult:g} /\n")
             f.write("/\n")
-        if faces and seal is not None:
+        mults = drapes
+        if seal_vsh is not None:
             from .fault_seal import face_multipliers
-            vsh = seal.vsh
-            if isinstance(vsh, dict):
-                codes = _stack_prop(layers, "facies").astype(int)
-                vsh = np.vectorize(lambda c: vsh[int(c)], otypes=[float])(codes)
-            mults = face_multipliers(faces, Zc, actnum, np.asarray(vsh, dtype=float), (permx, permy, permz),
-                                     L0.dx, L0.dy, seal)
+            mults = face_multipliers(faces, Zc, actnum, seal_vsh, (permx, permy, permz), L0.dx, L0.dy, seal)
+            if drapes is not None:
+                mults = {key: mults[key] * drapes[key] for key in drapes}
+        if mults is not None:
             for key in ("MULTX", "MULTY", "MULTZ"):
                 f.write("\n")
                 _write_rle(f, key, mults[key].ravel(order="F"), fmt="%.6g")
