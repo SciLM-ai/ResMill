@@ -179,6 +179,27 @@ def test_a_long_body_is_irregular_at_the_scale_of_its_length_not_only_of_its_wid
     assert np.mean(rms) == pytest.approx(expected, rel=0.25)
 
 
+def test_a_wall_is_as_rough_at_its_ends_as_in_its_middle():
+    """The roughness is drawn over a box of 1.5 x the long axis, so a 6 km x 1 km wall is irregular over the whole of its length;
+    in a box of 0.6 x the long axis, beyond 3.6 km from the centre the displacement would be one constant, and the flanks there
+    a copy of the plain ellipse's. Read as the sd of the outline's distance from the plain ellipse after a high-pass over 600 m
+    (the octaves of 375 and 187.5 m: about 9 m in the middle), on the flanks 3.8-4.8 km along from the centre against those within 2 km:
+    about 1 (0.1 with the small box)."""
+    plain = sl.salt_body((CX, CY), (6000.0, 1000.0))
+    ratios = []
+    for seed in range(8):
+        out = sl.salt_body((CX, CY), (6000.0, 1000.0), rough=0.03, hurst=1.0, seed=seed).outline()
+        arc = np.concatenate([[0.0], np.cumsum(np.hypot(*(np.roll(out, -1, axis=0) - out).T))])
+        grid = np.arange(0.0, arc[-1], 10.0)
+        closed = np.vstack([out, out[:1]])
+        x, y = np.interp(grid, arc, closed[:, 0]), np.interp(grid, arc, closed[:, 1])
+        resid = plain.distance(x, y)
+        fine = resid - ndimage.uniform_filter1d(resid, 61, mode="wrap")
+        along = np.abs(x - CX)
+        ratios.append(fine[(along > 3800.0) & (along < 4800.0)].std() / fine[along < 2000.0].std())
+    assert min(ratios) > 0.4 and 0.6 < np.mean(ratios) < 1.6
+
+
 def test_rough_adds_short_wavelengths_in_the_proportion_the_hurst_exponent_sets():
     """With hurst 0 every octave has the same sd, so waves shorter than 1.2 km hold a larger share of the outline's variance
     than with hurst 1.5, where the coarse octaves dominate (hand-computed from the octave sds: the 375 and 187.5 m octaves
@@ -356,6 +377,14 @@ def test_the_roughness_is_reduced_where_its_slope_would_fold_the_outline_and_the
     assert all(b.rough_scale == 1.0 for b in unguarded) and sum(pieces(b) for b in unguarded) >= 4
 
 
+def test_a_grid_point_on_the_contact_does_not_repeat_a_vertex_of_the_outline():
+    """A circle of 300 m on a grid of 6 m has grid points exactly on it (g = 1), where marching squares writes the same point three
+    times: the outline has no segment of length zero, so its tangents and its segment weights are defined."""
+    out = stock().outline()
+    seg = np.hypot(*np.diff(np.vstack([out, out[:1]]), axis=0).T)
+    assert seg.min() > 0.05 and len(out) > 300
+
+
 def test_a_body_that_has_pinched_out_at_depth_is_absent_there():
     cone = stock(z_ref=2000.0, flare=0.5)                           # R + 0.5 (z - 2000): gone 600 m above (R = 300)
     assert not cone.inside(CX, CY, 1300.0)
@@ -405,6 +434,20 @@ def test_the_dip_is_capped_at_85_degrees():
     assert radial_shift(capped, 0.0) == pytest.approx(radial_shift(limit, 0.0))
     assert radial_shift(limit, 0.0) == pytest.approx(-400.0 * math.tan(math.radians(85.0)) / 2.0, rel=1e-3)
     assert sl.MAX_DIP == 85.0
+
+
+@pytest.mark.parametrize("p,peak,at_100", [(1.0, 400.0, 300.0), (3.0, 400.0 / 3.0, 56.25), (8.0, 50.0, 5.00564), (20.0, 20.0, 0.063424)])
+def test_the_upturn_profile_has_the_drawn_exponent_and_the_dip_whatever_it_is(p, peak, at_100):
+    """-A (1 - d / W)^p with A = W tan(dip) / p, so that the beds meet the contact at the dip for any p: at dip 45 and W = 400 m
+    the peak is 400 / p (400, 133.3, 50 and 20 m) and 100 m from the contact the lift is A x 0.75^p: 300, 56.25, 5.0056 and
+    0.0634 m. The same exponent thins: 1 - a (1 - d / W)^p."""
+    term = sl.salt_upturn(stock(), dip=45.0, width=400.0, power=p)
+    assert radial_shift(term, 0.0) == pytest.approx(-peak, rel=1e-3) and radial_shift(term, 100.0) == pytest.approx(-at_100, rel=1e-3)
+    h = 0.25
+    slope = (radial_shift(term, 2 * h) - radial_shift(term, h)) / h
+    assert math.degrees(math.atan(slope)) == pytest.approx(45.0, abs=1.5)
+    thin = sl.salt_thinning(stock(), 0.4, 400.0, power=p)
+    assert radial_shift(thin, 100.0) == pytest.approx(1.0 - 0.4 * 0.75 ** p, rel=1e-9)
 
 
 def test_the_upturn_follows_the_contact_at_the_reference_depth():
