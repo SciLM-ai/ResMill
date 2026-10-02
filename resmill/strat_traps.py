@@ -158,6 +158,8 @@ def _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger,
         raise ValueError("a lens needs an area")
     if nosed != (nose is not None):
         raise ValueError(f"a nose (its area, height and aspect) is what {', '.join(NOSED)} need, not a {kind}")
+    if nosed and not {"area", "height", "aspect"} <= set(nose):
+        raise ValueError(f"a nose needs its area, height and aspect, not {sorted(nose)}")
     if nosed and not 0.0 < nose["height"] <= MAX_NOSE:
         raise ValueError(f"the nose's height must lie between 0 and {MAX_NOSE:.0f} m, the closure of Kuparuk")
     if nosed and nose.get("tilt", 0.0):
@@ -168,6 +170,9 @@ def _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger,
     if len(tongues) and (nosed or lens or area is None):
         raise ValueError(f"tongues are further lobes on the edge of a pinch-out, truncation or onlap with an area, "
                          f"not on a {kind}{' without one' if area is None else ''}")
+    if not all(t > 0.0 for t in thicknesses) or not all(a > 0.0 and r > 0.0 for a, r in tongues):
+        raise ValueError(f"thicknesses and the (area, aspect) of the tongues must be positive, not {thicknesses} "
+                         f"and {list(tongues)}")
     n_net = len(thicknesses) - bool(barrier)
     if n_net < 1:
         raise ValueError("thicknesses needs a sand layer as well as the barrier")
@@ -175,6 +180,15 @@ def _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger,
         raise ValueError(f"a stagger (the sand layers ending each farther downdip) needs a pinch-out or a facies "
                          f"change of more than one sand layer, not a {kind} of {n_net}")
     return n_net
+
+
+def _check_numbers(**given):
+    """Refuse a number that is not a size: ``warp``, ``stagger``, ``wander`` and ``relief_sd`` may be 0, the others
+    (``dip``, ``area``, ``aspect``, the ranges, ``floor_m``, ``cell``) are positive where given."""
+    for name, value in given.items():
+        zero_ok = name in ("warp", "stagger", "wander", "relief_sd")
+        if value is not None and not (value >= 0.0 if zero_ok else value > 0.0):
+            raise ValueError(f"{name} must be {'at least 0' if zero_ok else 'positive'}, not {value}")
 
 
 def _shapes(nose, area, aspect, tongues, lens):
@@ -392,6 +406,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     """
     nosed, lens = kind in NOSED, kind == "lens"
     thicknesses = [float(t) for t in thicknesses]
+    _check_numbers(dip=dip, area=area, aspect=aspect, warp=warp, stagger=stagger, wander=wander, range_m=range_m,
+                   floor_m=floor_m, cell=cell, relief_sd=relief_sd, relief_range=relief_range)
     n_net = _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger, nose)
     t_sand = sum(thicknesses[:n_net])
     taper_m = t_sand / np.tan(np.radians(taper_angle))
@@ -439,7 +455,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     tan_dip, along = np.tan(np.radians(dip)), float(centre @ dip_dir)
     cut = t_sand if kind.startswith("truncation") else 0.0              # a truncation's top is its sand's base
     level = top + tan_dip * ((along if lens else line) - along) + cut   # the depth of the line (of the middle)
-    meta = dict(kind=kind, dip=dip, azimuth=azimuth, taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
+    meta = dict(kind=kind, x_len=x_len, y_len=y_len, top=top, thicknesses=thicknesses, dip=dip, azimuth=azimuth,
+                taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
                 area=None if nosed else area, aspect=None if nosed else aspect, warp=warp, stagger=stagger,
                 wander=wander, range_m=range_m, hurst=hurst, floor_m=floors[0], cell=cell, relief_sd=relief_sd,
                 mound=bool(lens and mound),
@@ -464,6 +481,13 @@ def trap_report(model, built, column=None):
     ``column`` below that top, not below the crest, if it reaches updip of it; cut the model's outline there, or keep
     the contact above ``barrier_top + column``."""
     layers = list(model) if isinstance(model, (list, tuple)) else list(getattr(model, "layers", [model]))
+    meta = built["meta"]
+    made = [meta["x_len"], meta["y_len"], meta["top"], *meta["thicknesses"]]
+    given = [layers[0].x_len, layers[0].y_len, layers[0].top_depth, *(layer.z_len for layer in layers)]
+    if len(made) != len(given) or not np.allclose(made, given) or any(layer.dip for layer in layers):
+        raise ValueError(f"the layers (size {given[:2]}, top {given[2]}, thicknesses {given[3:]}, flat) are not the "
+                         f"ones the trap was built for ({made[:2]}, {made[2]}, {made[3:]}): a model's own dip or "
+                         f"thickness changes the trap")
     _, _, zc, act = _build_geometry(layers, **built["kwargs"])
     cells = sum(layer.nz for layer in layers[:built["meta"]["net_layers"]])
     traps = zone_trap(zc, act, layers[0].dx, layers[0].dy, k=slice(0, cells), column=column)

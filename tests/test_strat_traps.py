@@ -819,7 +819,7 @@ def test_the_report_gives_the_trap_with_the_most_closure_first():
     big = st.taper(None, 200.0, outline=_disc(3000.0, 3600.0, 1200.0), x_len=nx * dx, y_len=ny * dx)
     small = st.taper(None, 100.0, outline=_disc(4500.0, 1200.0, 400.0), x_len=nx * dx, y_len=ny * dx)
     built = dict(kwargs=dict(structure=st.ramp(1.0, azimuth=0.0), isochore=[big + small]),
-                 meta=dict(net_layers=1, barrier=False))
+                 meta=dict(net_layers=1, barrier=False, x_len=nx * dx, y_len=ny * dx, top=1500.0, thicknesses=[10.0]))
     first, second = trap_report([layer], built)
     assert first["height"] == pytest.approx(42.0, abs=2.5) and second["height"] == pytest.approx(14.0, abs=2.5)
     assert first["crest_depth"] > second["crest_depth"]
@@ -1037,3 +1037,39 @@ def test_the_wander_is_at_most_a_fifth_of_the_tongue_or_a_quarter_of_the_taper(k
                 assert "at most" not in str(error)
         else:
             raise AssertionError("every seed was refused")
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Inputs that are not a trap (review F10)
+
+@pytest.mark.parametrize("kw,message", [
+    (dict(dip=-1.0), "dip"), (dict(dip=0.0), "dip"),
+    (dict(thicknesses=[10.0, -2.0]), "thicknesses"), (dict(thicknesses=[0.0, 4.0]), "thicknesses"),
+    (dict(area=-1.0e6), "area"), (dict(aspect=0.0), "aspect"), (dict(tongues=[(1.0e6, -1.0)]), "tongues"),
+    (dict(tongues=[(0.0, 1.0)]), "tongues"), (dict(wander=-50.0, cell=100.0), "wander"),
+    (dict(relief_sd=-1.0, cell=100.0), "relief_sd"), (dict(stagger=-100.0), "stagger"), (dict(warp=-0.1), "warp"),
+    (dict(cell=0.0), "cell"), (dict(floor_m=-5.0, wander=10.0), "floor_m"), (dict(range_m=0.0, cell=100.0), "range_m"),
+    (dict(nose=dict(area=6.0e6, aspect=0.7), kind="pinchout_nose", area=None), "height"),
+])
+def test_strat_trap_refuses_inputs_that_are_not_a_trap(kw, message):
+    """A negative or zero dip, thickness, area or aspect, a negative wander, relief or stagger, a nose without its
+    height: ValueError before anything is drawn (a dip of -1 degree returned a closure of -24 m and no trap)."""
+    args = dict(kind="facies_change", x_len=8000.0, y_len=6000.0, top=2000.0, thicknesses=[10.0, 8.0], seed=1,
+                barrier=True, dip=1.0, taper_angle=0.3, area=3.4e6, aspect=2.2)
+    if kw.get("kind", "").endswith("_nose"):
+        args["barrier"], args["thicknesses"] = False, [10.0]
+    with pytest.raises(ValueError, match=message):
+        strat_trap(**{**args, **kw})
+
+
+def test_a_report_of_layers_that_are_not_the_ones_the_trap_was_built_for_is_refused():
+    """A truncation built for 10 m of sand and read on layers of 20 m had no closure, silently (26.9 m for the layers it
+    was built for); the report compares the model's layers with the thicknesses, the size and the top that were
+    drawn."""
+    built = strat_trap("truncation", 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.1, taper_angle=0.5, area=3.4e6,
+                       aspect=2.2, warp=0.0)
+    assert trap_report(_layers(8000.0, 6000.0, 50.0, [10.0]), built)[0]["height"] == pytest.approx(27.0, abs=3.0)
+    for layers in (_layers(8000.0, 6000.0, 50.0, [20.0]), _layers(8000.0, 6000.0, 50.0, [10.0], top=1900.0),
+                   _layers(7000.0, 6000.0, 50.0, [10.0]), _layers(8000.0, 6000.0, 50.0, [5.0, 5.0])):
+        with pytest.raises(ValueError, match="built for"):
+            trap_report(layers, built)
