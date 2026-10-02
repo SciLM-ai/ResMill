@@ -266,6 +266,39 @@ def test_the_spill_flood_ends_on_columns_of_infinite_depth():
     assert np.all(spill[ring <= 2] == np.inf) and np.all(spill[ring > 2] == 10.0)
 
 
+def test_relief_has_the_sd_it_was_given_and_a_structure_function_that_rises_as_lag_to_the_two_hurst():
+    """Octaves of ``roughness`` whose ranges halve from ``range_m`` to ``floor_m`` and whose SDs fall as range^H, so
+    that the surface is self-affine between them: the SD is the one asked for (to 8 %: the octaves are independent
+    only on average) and the structure function S(lag) = mean (z(x + lag) - z(x))^2 rises as lag^(2H) between 100
+    and 800 m (the fitted exponent within 0.3 of 2H, the Gaussian covariance of each octave rounding it off at the
+    largest H)."""
+    x_len, y_len, dx = 8000.0, 6000.0, 25.0
+    X, Y = np.meshgrid(np.arange(0.0, x_len, dx), np.arange(0.0, y_len, dx), indexing="ij")
+    lags = np.array([4, 6, 8, 12, 16, 24, 32])
+    for hurst in (0.3, 0.5, 0.75):
+        z = st.relief(10.0, 2000.0, x_len, y_len, hurst=hurst, floor_m=50.0, seed=3)(X, Y)
+        assert z.std() == pytest.approx(10.0, rel=0.08)
+        s = [np.mean((z[lag:] - z[:-lag]) ** 2) for lag in lags]
+        slope = np.polyfit(np.log(lags * dx), np.log(s), 1)[0]
+        assert slope == pytest.approx(2.0 * hurst, abs=0.3)
+
+
+def test_relief_is_one_surface_per_seed_and_a_single_octave_when_the_floor_is_the_range():
+    args = (10.0, 1500.0, 6000.0, 4000.0)
+    a, b, c = (st.relief(*args, seed=s)(1234.5, 2345.6) for s in (7, 7, 8))
+    assert a == b and a != c
+    one = st.relief(*args, floor_m=1500.0, seed=7)
+    octave = st.roughness(10.0, 1500.0, 6000.0, 4000.0, seed=np.random.SeedSequence(7).spawn(1)[0])
+    assert one(1234.5, 2345.6) == pytest.approx(octave(1234.5, 2345.6))
+
+
+@pytest.mark.parametrize("kw,message", [(dict(hurst=1.2), "hurst"), (dict(hurst=-0.1), "hurst"),
+                                        (dict(floor_m=3000.0), "floor_m")])
+def test_relief_refuses_what_has_no_octaves(kw, message):
+    with pytest.raises(ValueError, match=message):
+        st.relief(10.0, 1500.0, 6000.0, 4000.0, **kw)
+
+
 def test_taper_is_a_linear_ramp_across_the_pinch_out_line():
     """The factor is 0 at and beyond the line, 1 once ``taper_m`` in from it, and linear between: with the line at
     1,000 m along the dip direction (+y, azimuth 0) and 400 m of taper, 0.25 / 0.5 / 1 at 1,100 / 1,200 / 1,400 m,

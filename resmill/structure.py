@@ -352,6 +352,30 @@ def roughness(sd, range_m, x_len, y_len, seed=None):
     return surface(float(sd) * (field - field.mean()) / field.std(), x_len, y_len)
 
 
+def relief(sd, range_m, x_len, y_len, hurst=0.75, floor_m=None, seed=None):
+    """A multi-scale random surface (m) with standard deviation ``sd`` over ``[0, x_len] x [0, y_len]``.
+
+    Octaves of :func:`roughness` whose ranges halve from ``range_m`` to ``floor_m`` (default a 32nd of the range) and
+    whose SDs fall as range ** ``hurst``, scaled so that the sum has SD ``sd`` (to a few per cent: the octaves are
+    independent only on average). Between those scales the surface is self-affine: its structure function
+    S(lag) = mean (z(x + lag) - z(x))^2 rises as lag ** (2 hurst), ``hurst`` being the Hurst exponent, 0 to 1 (the
+    Gaussian covariance of each octave rounds the realized exponent off a little from 0.6 up). Each octave has its own
+    stream of ``seed``. The contour of a Gaussian surface of Hurst exponent H has the fractal dimension 1.5 - H / 2
+    (Kondev and Henley 1995, Phys. Rev. Lett. 74:4580), so the coasts' 1.02-1.25 (Mandelbrot 1967) are exponents of
+    0.5-0.96.
+    """
+    floor_m = range_m / 32.0 if floor_m is None else float(floor_m)
+    if not 0.0 <= hurst <= 1.0:
+        raise ValueError(f"hurst must lie between 0 and 1, not {hurst}")
+    if not 0.0 < floor_m <= range_m:
+        raise ValueError(f"floor_m must lie between 0 and range_m ({range_m}), not {floor_m}")
+    ranges = range_m / 2.0 ** np.arange(int(np.log2(range_m / floor_m) + 1e-9) + 1)
+    sds = ranges ** hurst
+    sds *= float(sd) / np.sqrt((sds ** 2).sum())
+    return sum(roughness(s, r, x_len, y_len, seed=k)
+               for s, r, k in zip(sds, ranges, np.random.default_rng(seed).bit_generator.seed_seq.spawn(len(ranges))))
+
+
 def isochore(cv, trend_share, range_m, x_len, y_len, azimuth=0.0, seed=None):
     """A zone-thickness factor field with mean 1 over ``[0, x_len] x [0, y_len]``: 1 + a l + e.
 
