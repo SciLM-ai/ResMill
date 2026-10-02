@@ -2,18 +2,20 @@ import warnings
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
-from scipy.optimize import brentq
 
 from .base import Layer
 from .channel import FACIES_PROPS, _correlated_noise
+from .drapes import thin_barrier
 from ._fluvial import _gauss_clip
 
-# ``facies_props`` entries a lobe uses: -1 mud rock, 2 the faded fringe, 3 the sand
-# (its rock is poro_ave, perm_ave, poro_std and perm_std).
+# ``facies_props`` entries a lobe uses: -1 mud rock, 2 the heterolithic fringe (its rock, and ``ntg_floor``, the sand share of a
+# lobe's margin, which ``interlobe_erosion`` needs), 3 the sand (its rock is poro_ave, perm_ave, poro_std and perm_std).
 _FACIES_KEYS = {-1: {"poro", "log10_perm", "poro_sd", "log10_perm_sd", "kvkh"},
-                2: {"ntg_floor", "ntg_crest", "kvkh"}, 3: {"kvkh"}}
-_SAND_SHARE_MIN = 0.5    # a faded cell with at least this sand fraction is labelled sand (3)
-_MUD_SHARE_MAX = 0.2     # below this sand fraction it is mud (-1), the Tanqua's distal fringe (under 20 % sandstone), in between thin-bedded fringe (2)
+                2: {"ntg_floor", "poro", "log10_perm", "poro_sd", "log10_perm_sd", "kvkh"}, 3: {"kvkh"}}
+_SAND_SHARE_MIN = 0.5    # a cell with at least this sand share is sand (3)
+_MUD_SHARE_MAX = 0.2     # below this sand share it is mud (-1), the Tanqua's distal fringe (under 20 % sandstone); in between the heterolithic fringe (2)
+_MIN_CAP_SHARE = 1e-3    # mud thinner than this share of a cell is dust of the overlap arithmetic, not a thin cap
+_NET_LOG10_PERM = 0.0    # a facies is net rock above 1 mD (ResSimMill's net cut-off)
 
 
 def _compensation_weights(surface, dz, dh_ave, scale):
@@ -28,28 +30,8 @@ def _compensation_weights(surface, dz, dh_ave, scale):
     return weight / weight.sum()
 
 
-def _faded_sand_fraction(structure, ntg, floor, crest=1.0):
-    """Sub-cell sand fraction of every cell, an exponential of the cell's rank in ``structure``.
-
-    ``floor + (crest - floor) * exp(-(1 - u) / lam)`` with ``u`` the rank of the cell's
-    ``structure`` value (0 the poorest, 1 the richest, uniform): ``crest`` in the best
-    cells (the lobe axis, the base of a bed), falling to ``floor`` in the poorest (the
-    fringe, the top of a bed). ``lam``, the e-folding in ranks, is found so that the mean
-    over the cells is ``ntg``, which must lie between ``floor`` and ``crest``.
-    """
-    if not floor < ntg < crest:
-        raise ValueError(f"the mean sand fraction ntg = {ntg} must lie between ntg_floor = {floor} "
-                         f"and ntg_crest = {crest}")
-    # mean over uniform u: floor + (crest - floor) * lam * (1 - exp(-1 / lam))
-    lam = brentq(lambda lam: floor + (crest - floor) * lam * (1.0 - np.exp(-1.0 / lam)) - ntg, 1e-6, 1e6)
-    flat = np.asarray(structure).ravel()
-    rank = np.empty(flat.size)
-    rank[np.argsort(flat, kind="stable")] = (np.arange(flat.size) + 0.5) / flat.size
-    return (floor + (crest - floor) * np.exp(-(1.0 - rank) / lam)).reshape(np.shape(structure))
-
-
 def _stamp_mud(allsurface, nz, dz, mud_cap, erosion, floor):
-    """Metres of mud in every cell of a stack of stamps, ``(nz, ny, nx)``, and the share of caps cut through.
+    """Metres of mud in every cell of a stack of stamps, ``(nz, ny, nx)``, where it sits in the cell, and the share of caps cut through.
 
     ``allsurface`` holds the surface after every stamp (cells of ``dz``, the first the empty floor), so a stamp's
     deposit at a column is the rise of the surface there. Each deposit of thickness ``t`` is capped with mud on its
@@ -60,9 +42,13 @@ def _stamp_mud(allsurface, nz, dz, mud_cap, erosion, floor):
     keeps its part below the deepest reach of any later stamp, and none of it where that reach passes its base. The
     share returned is the caps of at least a tenth of a cell met by a later stamp that were cut through. Mud above the top of the
     layer is not counted. Stamps are taken last to first, the deepest reach so far kept per column.
+
+    The second array is the first moment of the mud about each cell's base: the sum over its pieces of their thickness times the
+    height of their middle in cell heights, so ``moment / mud`` is where the mud sits in the cell, 0 at its base and 1 at its top.
     """
     shape = allsurface[0].shape
     mud = np.zeros((nz,) + shape)
+    moment = np.zeros_like(mud)
     reach = np.full(shape, np.inf)
     met = cut = 0
     for before, after in zip(allsurface[-2::-1], allsurface[:0:-1]):
@@ -80,21 +66,55 @@ def _stamp_mud(allsurface, nz, dz, mud_cap, erosion, floor):
         first = np.floor(bottom / dz).astype(int)
         for step in range(int(np.ceil(length.max() / dz)) + 1):
             k = first + step
-            overlap = np.clip(np.minimum(bottom + length, (k + 1) * dz) - np.maximum(bottom, k * dz), 0.0, None)
+            low, high = np.maximum(bottom, k * dz), np.minimum(bottom + length, (k + 1) * dz)
+            overlap = np.clip(high - low, 0.0, None)
             ok = (k >= 0) & (k < nz) & (overlap > 0.0)
             mud[k[ok], rows[ok], cols[ok]] += overlap[ok]
+            moment[k[ok], rows[ok], cols[ok]] += overlap[ok] * (0.5 * (low + high)[ok] / dz - k[ok])
         reach[rows, cols] = np.minimum(deepest, before[rows, cols] * dz - erosion * t)
-    return mud, (cut / met if met else 0.0)
+    return mud, moment, (cut / met if met else 0.0)
 
 
-def _effective_perm(sand, k_sand, k_mud):
-    """Permeability of a cell of sand fraction ``sand`` whose sand and mud are mixed at random: the 2-D effective medium
-    (Bruggeman), ``(b + sqrt(b^2 + 4 k_sand k_mud)) / 2`` with ``b = (2 sand - 1)(k_sand - k_mud)``. The sand percolates
-    from half of the cell: below it the cell is tight (``sqrt(k_sand k_mud)`` at exactly half), above it
-    ``(2 sand - 1) k_sand`` and more, so a cell is net (above 1 mD) where its sand is the majority. The arithmetic mean, right for
-    layers that run through the whole cell, would leave a cell with a tenth of 300 mD sand at 30 mD, net though 90 % mud."""
-    b = (2.0 * sand - 1.0) * (k_sand - k_mud)
-    return 0.5 * (b + np.sqrt(b * b + 4.0 * k_sand * k_mud))
+def _cap_cells(mud, moment, dz):
+    """What the mud of a stack makes of every cell: its sand share, its facies and the thin caps, all ``(nx, ny, nz)`` with k up.
+
+    A cell is one facies, by what fills it: sand (3) from half sand, the heterolithic fringe (2) from a fifth to half (the
+    Tanqua's classes, Spychala et al. 2017), mud (-1) below, with the share ``s = 1 - mud / dz``; no cell is a mix. The mud in
+    a sand cell is under half of it, too thin to be a cell: it is a thin cap, put on the face of the cell nearest its middle
+    (the upper face if the mud's middle is in the upper half of the cell, else the lower). ``thin[..., k]`` is the metres of such
+    mud on the lower face of cell ``k`` (the face between ``k - 1`` and ``k``); the layer's base and top carry none.
+    """
+    s = np.clip(1.0 - mud / dz, 0.0, 1.0)
+    facies = np.where(s >= _SAND_SHARE_MIN, 3, np.where(s >= _MUD_SHARE_MAX, 2, -1)).astype(np.int8)
+    inside = (facies == 3) & (mud > _MIN_CAP_SHARE * dz)
+    height = np.divide(moment, mud, out=np.zeros_like(mud), where=mud > 0.0)
+    thin = np.zeros_like(mud)
+    thin[..., 1:] += np.where(inside & (height >= 0.5), mud, 0.0)[..., :-1]      # the upper face of cell k is the lower face of k + 1
+    thin[..., 1:] += np.where(inside & (height < 0.5), mud, 0.0)[..., 1:]
+    return s, facies, thin
+
+
+def _facies_rock(entry, shape):
+    """Porosity and log10 permeability (mD) of a facies with a rock of its own, ``shape`` arrays: the entry's ``poro`` and
+    ``log10_perm``, with ``poro_sd`` (relative) and ``log10_perm_sd`` (decades) as correlated noise when given."""
+    poro = np.full(shape, float(entry["poro"]))
+    log_perm = np.full(shape, float(entry["log10_perm"]))
+    if entry.get("poro_sd"):
+        poro = poro * np.exp(float(entry["poro_sd"]) * _correlated_noise(shape, 3.0))
+    if entry.get("log10_perm_sd"):
+        log_perm = log_perm + float(entry["log10_perm_sd"]) * _correlated_noise(shape, 3.0)
+    return poro, log_perm
+
+
+def _check_facies_props(facies_props, interlobe):
+    """Refuse a ``facies_props`` a lobe does not read: an unknown facies or key, and with ``interlobe_erosion`` a fringe (2)
+    without the rock of its own that every cell of it takes (``poro`` and ``log10_perm``)."""
+    for code, entry in facies_props.items():
+        if int(code) not in _FACIES_KEYS or set(entry) - _FACIES_KEYS[int(code)]:
+            uses = "; ".join(f"{c}: {', '.join(sorted(k))}" for c, k in sorted(_FACIES_KEYS.items()))
+            raise ValueError(f"facies_props[{code}] = {dict(entry)}: a lobe uses {uses}")
+    if interlobe and not {"poro", "log10_perm"} <= set(facies_props.get(2, {})):
+        raise ValueError("interlobe_erosion needs the fringe's rock: facies_props[2] with 'poro' and 'log10_perm'")
 
 
 class LobeLayer(Layer):
@@ -164,16 +184,12 @@ class LobeLayer(Layer):
             the calibrated rock: the sand keeps exactly ``poro_ave``, ``perm_ave`` and
             the spreads ``poro_std``, ``perm_std``; the mud (``-1``) has its own ``poro``,
             ``log10_perm`` and optional ``poro_sd`` (relative) and ``log10_perm_sd``
-            (decades), correlated noise; ``kvkh`` entries (``-1`` mud, ``3`` sand) give the
-            vertical to horizontal permeability ratio per cell (``self.kvkh_mat``, PERMZ =
-            kvkh x PERMX; none given: ``kzkx``). ``{2: {"ntg_floor": f, "ntg_crest": c,
-            "kvkh": k}}`` also fades the sand: each cell's sub-cell sand fraction is an
-            exponential of the rank of its lobe structure, ``c`` (default 1) in the axis
-            and the base of a bed and ``f`` in the fringe and the top of a bed, and ``ntg``
-            is then the mean sand fraction; porosity and permeability are the arithmetic
-            mix of the sand and the mud, kv/kh runs log-linearly from ``k`` at ``f`` to
-            the sand's at 1, and the facies are 3 (sand fraction of 0.5 or more) and 2
-            (thin-bedded fringe), with no mud lattice. ``self.sand_fraction`` holds it.
+            (decades), correlated noise; ``kvkh`` entries (``-1`` mud, ``2`` fringe, ``3`` sand) give the
+            vertical to horizontal permeability ratio of every cell of the facies (``self.kvkh_mat``, PERMZ =
+            kvkh x PERMX; none given: ``kzkx``). Every cell is one facies and has that facies' rock, nothing is
+            mixed. ``2``, the heterolithic fringe, is used with ``interlobe_erosion`` only: its
+            ``ntg_floor`` is the sand fraction of a lobe's margin, and it has a rock of its own
+            (``poro``, ``log10_perm``, ``poro_sd``, ``log10_perm_sd``, as the mud).
         interlobe_erosion : float or None
             Needs ``facies_props``. ``None``: the sand is as above. A number replaces the sand's
             definition by a stack of stamps whose deposits carry interlobe mud: each stamp
@@ -186,17 +202,22 @@ class LobeLayer(Layer):
             thickness below its base and the mud in that reach is gone, replaced by its sand
             (sand on sand, amalgamation, where it is thick, the axis, and none where it is thin,
             the margin), whichever older cap it reaches, so the mud wraps each lobe at a low
-            net-to-gross and is gone from the axes at a high one. ``M`` is found so that the mean sand fraction of the layer is ``ntg``
-            (net-to-gross by thickness, as outcrop and core give it, whatever the grid); a cell's porosity is
-            the arithmetic mix of the sand and the mud, its permeability the 2-D effective
-            medium of the two (``_effective_perm``: tight below half sand, so the cells under
-            1 mD are the non-net share), kv/kh runs log-linearly from the mud's through the
-            fringe's (``facies_props[2]["kvkh"]``, at half sand: the most heterolithic) to the
-            sand's. It also keeps the stamps' porosity decay at 1 (``clip_decay``). Facies are
-            3 (net), 2 (sand fraction 0.2 to 0.5, the Tanqua's fringe) and -1 (under 0.2, its distal fringe); ``self.sand_fraction`` holds the
-            fraction and ``self.interlobe`` the cap thickness ``mud_thickness_m``, the share of
-            contacts ``amalgamated``, the mean ``sand_fraction`` (``ntg``) and ``net_cells``,
-            the share of cells whose sand is the majority (those above 1 mD).
+            net-to-gross and is gone from the axes at a high one. ``M`` is found so that the share of
+            net cells is ``ntg``. Each cell is one facies, by the share of it that is sand: sand (3,
+            half or more), the heterolithic fringe (2, a fifth to a half, with the fringe's rock) or mud
+            (-1, under a fifth), as channel, levee and floodplain cells are, with the rock and the
+            kv/kh of its facies and no mixing rule. A cap fills cells where it is thick: the mud of
+            a cap half a cell thick or more makes mud cells (or fringe cells at its edge). The mud in a sand
+            cell, under half of it, is a thin cap and no cell: it is a vertical transmissibility barrier on the Z
+            face nearest its middle, the thin-barrier factor of the mud drapes
+            (:func:`resmill.layers.drapes.thin_barrier`, with the cap's thickness, the mud's permeability and the
+            harmonic mean of the two cells' PERMZ), written as MULTZ: ``self.mult_z``, or None if there is no
+            thin cap. Net cells (``ntg`` counts them, they are the cells above 1 mD) are the sand and, if
+            its ``log10_perm`` is above 0, the fringe. ``self.sand_fraction`` holds each cell's sand share
+            and ``self.interlobe`` the cap thickness ``mud_thickness_m``, the share of
+            contacts ``amalgamated``, ``net_cells`` (the realized share), ``sand_fraction`` (the mean sand
+            share, net-to-gross by thickness), ``aim_missed`` and ``barrier_faces`` (the share of the layer's
+            interior faces with a multiplier under a half). It also keeps the stamps' porosity decay at 1 (``clip_decay``).
         """
         self.poro_ave = poro_ave
         self.perm_ave = perm_ave
@@ -206,6 +227,9 @@ class LobeLayer(Layer):
 
         if interlobe_erosion is not None and facies_props is None:
             raise ValueError("interlobe_erosion needs facies_props: the mud and the sand have rock of their own")
+        if facies_props is not None:
+            _check_facies_props(facies_props, interlobe_erosion is not None)
+        self.mult_z = None
         allfacies, allporo, self.allsurface = self._lobemodeling(
             dh_ave=dh_ave, dh_std=dh_std, r_ave=r_ave, r_std=r_std,
             asp=asp, azimuth=azimuth, azimuth_std=azimuth_std, m=m,
@@ -264,8 +288,10 @@ class LobeLayer(Layer):
         elif interlobe_erosion is None:
             self._calibrated_rock(structure, jitter, facies_props)
         else:
-            sand, self.interlobe = self._interlobe_sand(ntg, interlobe_erosion, float(facies_props.get(2, {}).get("ntg_floor", 0.0)))
-            self._calibrated_rock(structure, jitter, facies_props, sand=sand)
+            fringe = facies_props[2]
+            mud, moment, self.interlobe = self._interlobe_cells(
+                ntg, interlobe_erosion, float(fringe.get("ntg_floor", 0.0)), float(fringe["log10_perm"]) > _NET_LOG10_PERM)
+            self._calibrated_rock(structure, jitter, facies_props, stack=(mud, moment))
 
         # ``lobe_id`` keeps the per-lobe stacking index (1..N) for users
         # who want to colour by lobe generation. ``facies`` is the
@@ -280,33 +306,25 @@ class LobeLayer(Layer):
         if facies_props is None:
             self.facies = np.where(self.active == 1, 3, -1).astype(np.int8)
 
-    def _calibrated_rock(self, structure, jitter, facies_props, sand=None):
+    def _calibrated_rock(self, structure, jitter, facies_props, stack=None):
         """Opt-in rock by facies (see ``create_geology``'s ``facies_props``): sets ``active``,
-        ``facies``, ``poro_mat``, ``perm_mat``, ``sand_fraction`` and, with a ``kvkh``, ``kvkh_mat``.
+        ``facies``, ``poro_mat``, ``perm_mat``, ``sand_fraction``, ``mult_z`` and, with a ``kvkh``, ``kvkh_mat``.
 
-        The sand fraction ``s`` is the binary sand mask, or with ``ntg_floor`` the faded
-        fraction. The sand-bed rock keeps the lobe structure's porosity (best at the axis and
-        the base of a bed) standardized over the sand, weighted by ``s``, to ``poro_ave`` and
-        ``poro_std``, and its log permeability follows with the slope ``perm_std / poro_std``,
-        a small jitter, and an average of exactly ``perm_ave``. A cell is the arithmetic
-        mix ``s x sand + (1 - s) x mud`` of porosity and permeability. ``sand``, the sand fraction of
-        every cell from the interlobe mud (``interlobe_erosion``), replaces both and mixes the
-        permeability as the 2-D effective medium (``_effective_perm``) instead.
+        Every cell is one facies, by its sand share ``s``: the binary sand mask (sand and mud), or with ``stack``,
+        the ``(mud, moment)`` of the interlobe stamps (:func:`_cap_cells`: sand, fringe and mud, and the thin caps). The
+        sand-bed rock keeps the lobe structure's porosity (best at the axis and the base of a bed) standardized over the sand
+        cells to ``poro_ave`` and ``poro_std``, and its log permeability follows with the slope ``perm_std / poro_std``,
+        a small jitter, and an average of exactly ``perm_ave``. The fringe and the mud have the rock their entries give;
+        no cell mixes the rock of two facies.
         """
-        for code, entry in facies_props.items():
-            if int(code) not in _FACIES_KEYS or set(entry) - _FACIES_KEYS[int(code)]:
-                uses = "; ".join(f"{c}: {', '.join(sorted(k))}" for c, k in sorted(_FACIES_KEYS.items()))
-                raise ValueError(f"facies_props[{code}] = {dict(entry)}: a lobe uses {uses}")
         props = {code: {**FACIES_PROPS.get(code, {}), **facies_props.get(code, {})} for code in _FACIES_KEYS}
-        fringe = facies_props.get(2, {})
-        if sand is not None:
-            s = sand
-        elif "ntg_floor" in fringe:
-            s = _faded_sand_fraction(structure, self.ntg, float(fringe["ntg_floor"]),
-                                     float(fringe.get("ntg_crest", 1.0)))
-        else:
+        if stack is None:
             s = self.active.astype(float)
-        weight = s / s.sum()
+            facies = np.where(s >= _SAND_SHARE_MIN, 3, -1).astype(np.int8)
+        else:
+            s, facies, thin = _cap_cells(*stack, self.dz)
+        sand = facies == 3
+        weight = sand / sand.sum()
         mean = (weight * self.poro_mat).sum()
         z = (self.poro_mat - mean) / max(np.sqrt((weight * (self.poro_mat - mean) ** 2).sum()), 1e-12)
         poro_sd, perm_sd = self.poro_std, self.perm_std
@@ -315,60 +333,75 @@ class LobeLayer(Layer):
         log_sand = self.perm_ave + perm_sd / max(poro_sd, 1e-6) * (poro_sand - self.poro_ave) + jitter
         log_sand = np.clip(log_sand, self.perm_ave - 5 * perm_sd, self.perm_ave + 5 * perm_sd)
         log_sand = log_sand + self.perm_ave - (weight * log_sand).sum()
-        mud, shape = props[-1], s.shape
-        poro_mud = np.full(shape, float(mud["poro"]))
-        log_mud = np.full(shape, float(mud["log10_perm"]))
-        if mud.get("poro_sd"):
-            poro_mud = poro_mud * np.exp(float(mud["poro_sd"]) * _correlated_noise(shape, 3.0))
-        if mud.get("log10_perm_sd"):
-            log_mud = log_mud + float(mud["log10_perm_sd"]) * _correlated_noise(shape, 3.0)
-        self.poro_mat = s * poro_sand + (1.0 - s) * poro_mud
-        self.perm_mat = (s * 10.0 ** log_sand + (1.0 - s) * 10.0 ** log_mud if sand is None
-                         else _effective_perm(s, 10.0 ** log_sand, 10.0 ** log_mud))
+        shape = s.shape
+        poro_mud, log_mud = _facies_rock(props[-1], shape)
+        poro, log_perm = np.where(sand, poro_sand, poro_mud), np.where(sand, log_sand, log_mud)
+        if stack is not None:
+            fringe = facies == 2
+            poro_fringe, log_fringe = _facies_rock(props[2], shape)
+            poro, log_perm = np.where(fringe, poro_fringe, poro), np.where(fringe, log_fringe, log_perm)
+        self.poro_mat = poro
+        self.perm_mat = 10.0 ** log_perm
         self.sand_fraction = s.astype(np.float32)
-        self.active = (s >= _SAND_SHARE_MIN).astype(np.int8)
-        self.facies = np.where(s >= _SAND_SHARE_MIN, 3, np.where(s >= _MUD_SHARE_MAX, 2, -1)).astype(np.int8)
+        self.active = sand.astype(np.int8)
+        self.facies = facies
         if any("kvkh" in entry for entry in props.values()):
-            knots = {0.0: props[-1].get("kvkh", self.kzkx), 1.0: props[3].get("kvkh", self.kzkx)}
-            if sand is not None:
-                if "kvkh" in fringe:       # the most heterolithic cell is the half-sand one
-                    knots[0.5] = fringe["kvkh"]
-            elif "ntg_floor" in fringe:
-                knots[float(fringe["ntg_floor"])] = fringe.get("kvkh", self.kzkx)
-            at = sorted(knots)
-            self.kvkh_mat = np.exp(np.interp(s, at, np.log([float(knots[x]) for x in at]))).astype(np.float32)
+            kvkh = np.where(sand, props[3].get("kvkh", self.kzkx), props[-1].get("kvkh", self.kzkx))
+            if stack is not None:
+                kvkh = np.where(facies == 2, props[2].get("kvkh", self.kzkx), kvkh)
+            self.kvkh_mat = kvkh.astype(np.float32)
+        if stack is not None and (thin > 0.0).any():
+            self.mult_z = self._thin_cap_multipliers(thin, 10.0 ** float(props[-1]["log10_perm"]))
+            self.interlobe["barrier_faces"] = float((self.mult_z[..., 1:] < 0.5).mean())
 
-    def _interlobe_sand(self, ntg, erosion, floor):
-        """Sand fraction of every cell ``(nx, ny, nz)`` of the stamps' stack with interlobe mud, and its outcome.
+    def _thin_cap_multipliers(self, thin, mud_perm):
+        """MULTZ of the thin caps (``thin``: metres on the lower face of each cell, k up), ``(nx, ny, nz)`` float32, 1 elsewhere.
 
-        The mud cap ``M`` (see ``_stamp_mud``) is found by bisection so that the mean sand fraction of the layer is
-        ``ntg``: it falls as ``M`` grows, from 1 at ``M = 0``. A layer whose sand exceeds ``ntg`` even with the
-        thickest cap the stack can have (a fringe holds ``floor`` of sand, erosion cuts caps) is built with that cap,
-        with a warning. Returns the fractions and ``dict(mud_thickness_m, amalgamated, sand_fraction, net_cells)``,
-        the last the share of cells of sand fraction one half or more.
+        The thin-barrier factor of the mud drapes (:func:`resmill.layers.drapes.thin_barrier`) for the metres of mud on a face,
+        ``mud_perm`` (mD) and the harmonic mean of the PERMZ of the cell above and the cell below, in cells of ``dz``.
+        """
+        kz = self.perm_mat * (self.kzkx if self.kvkh_mat is None else self.kvkh_mat)
+        k_lo, k_hi = kz[..., :-1], kz[..., 1:]
+        ks = 2.0 * k_lo * k_hi / (k_lo + k_hi)
+        mult = np.ones(kz.shape, dtype=np.float32)
+        faces = thin[..., 1:] > 0.0
+        mult[..., 1:][faces] = thin_barrier(thin[..., 1:][faces], self.dz, ks[faces], mud_perm)
+        return mult
+
+    def _interlobe_cells(self, ntg, erosion, floor, fringe_net):
+        """The mud of the stamps' stack as ``(mud, moment, outcome)``, ``mud`` and ``moment`` ``(nx, ny, nz)`` with k up.
+
+        The mud cap ``M`` (see ``_stamp_mud``) is found by bisection so that the share of net cells is ``ntg``: a cell is
+        net from a sand share of one half, or from a fifth when the fringe is net rock (``fringe_net``, its permeability above
+        1 mD). The share falls as ``M`` grows, from 1 at ``M = 0``. A layer whose net share exceeds ``ntg`` even with the
+        thickest cap the stack can have (a fringe holds ``floor`` of sand, erosion cuts caps) is built with that cap, with a
+        warning. ``outcome`` is ``dict(mud_thickness_m, amalgamated, net_cells, sand_fraction, aim_missed)``, the realized
+        share of net cells, the mean sand share (net-to-gross by thickness) and whether the aim was out of reach.
         """
         nz, dz, surfaces = self.nz, self.dz, self.allsurface
+        net_share = _MUD_SHARE_MAX if fringe_net else _SAND_SHARE_MIN
 
         def stack(mud_cap):
-            mud, amalgamated = _stamp_mud(surfaces, nz, dz, mud_cap, erosion, floor)
-            return mud, amalgamated, 1.0 - float(mud.mean()) / dz
+            mud, moment, amalgamated = _stamp_mud(surfaces, nz, dz, mud_cap, erosion, floor)
+            return mud, moment, amalgamated, float((1.0 - mud / dz >= net_share).mean())
 
         if not 0.0 < ntg < 1.0:
             raise ValueError(f"the net-to-gross must lie between 0 and 1, not {ntg}")
         lo, hi = 0.0, (1.0 - floor) * dz * max(float(np.max(b - a)) for a, b in zip(surfaces[:-1], surfaces[1:]))
-        least = stack(hi)[2]
-        if least > ntg:
+        least = stack(hi)[3]
+        missed = least > ntg
+        if missed:
             warnings.warn(f"the net-to-gross {ntg} is below the least this stack of stamps can hold, {least:.3f} (a mud cap "
                           f"as thick as the thickest stamp, a fringe sand fraction of {floor}, erosion {erosion}): "
                           f"it will be {least:.3f}", stacklevel=3)
             lo = hi
         for _ in range(22):
             mid = 0.5 * (lo + hi)
-            lo, hi = (mid, hi) if stack(mid)[2] > ntg else (lo, mid)
-        mud, amalgamated, sand = stack(hi)
-        return (np.swapaxes(np.clip(1.0 - mud / dz, 0.0, 1.0), 0, -1),
-                dict(mud_thickness_m=hi, amalgamated=amalgamated, sand_fraction=sand,
-                     net_cells=float((mud <= 0.5 * dz).mean())))
+            lo, hi = (mid, hi) if stack(mid)[3] > ntg else (lo, mid)
+        mud, moment, amalgamated, net = stack(hi)
+        return (np.swapaxes(mud, 0, -1), np.swapaxes(moment, 0, -1),
+                dict(mud_thickness_m=hi, amalgamated=amalgamated, net_cells=net, sand_fraction=1.0 - float(mud.mean()) / dz,
+                     aim_missed=bool(missed)))
 
     def _lobemodeling(self, dh_ave=4.0, dh_std=0.5, r_ave=450.0, r_std=20.0,
                       asp=1.5, azimuth=0.0, azimuth_std=10.0, m=100,

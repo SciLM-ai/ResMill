@@ -217,15 +217,10 @@
   deck's floors) and PERMZ is one `kzkx` per layer. With it the sand keeps exactly `poro_ave`,
   `perm_ave`, `poro_std` and `perm_std` at any `ntg`; the mud (`-1`) has its own `poro`, `log10_perm`
   and optional `poro_sd` / `log10_perm_sd`; `kvkh` entries give each facies' vertical to horizontal
-  ratio per cell (`kvkh_mat`, written as PERMZ). `{2: {"ntg_floor": f, "ntg_crest": c, "kvkh": k}}`
-  also fades the sand: a cell's sub-cell sand fraction is an exponential of the rank of its lobe
-  structure, `c` (default 1) in the axis and the base of a bed and `f` in the fringe and the top of a
-  bed, with the mean (`ntg`) kept; porosity and permeability are the arithmetic mix of sand and mud
-  and kv/kh runs log-linearly from `k` at `f` to the sand's at 1. Binary lobes leave a connected
-  mud lattice 100-400 m wide around round sand cores in plan view, where Tanqua lobes fade from 85-100 %
-  sand at the axis to 20-50 % at the fringe (Spychala et al. 2017); faded lobes have no cell below
-  `f` of the sand's permeability. Facies are 3 (sand fraction of 0.5 or more) and 2 (thin-bedded
-  fringe); `sand_fraction` holds the fraction. Default `None`: outputs are bit-identical to before.
+  ratio per cell (`kvkh_mat`, written as PERMZ). Every cell is one facies with that facies' rock. Binary lobes
+  leave a connected mud lattice 100-400 m wide around round sand cores in plan view, where Tanqua lobes
+  fade from 85-100 % sand at the axis to 20-50 % at the fringe (Spychala et al. 2017): that fringe is the
+  heterolithic facies of `interlobe_erosion`, below. Default `None`: outputs are bit-identical to before.
 - `tree_ntg_stop=True` (`DeltaLayer`, with `bifurcate=True`): grow distributary networks in each
   generation until the layer holds its cumulative share of `NTGtarget` (sand cells, facies 1 or more,
   mouth bars included; generation g of `n_generations` asks for (g + 1) / `n_generations` of it, counted
@@ -240,23 +235,30 @@
   after each network: a True ends the level's networks and none is abandoned. Off by default: outputs
   are bit-identical.
 - `interlobe_erosion` (`LobeLayer`, with `facies_props`): interlobe mud, continuous around each lobe at a low
-  net-to-gross and eroded away at the axes at a high one. The sand-fraction option above fades every cell's sand
-  from the axis to a fringe but leaves every cell with at least that fringe's sand (87 mD at a net-to-gross of 0.65
-  and 3 decades above the mud), so a section holds no non-net rock at all. With `interlobe_erosion` each stamp is
+  net-to-gross and eroded away at the axes at a high one, in cells that are one facies each. Each stamp is
   capped with mud `min((1 - f) t, M)` thick (`t` its thickness at the column, `f` the sand fraction of its margin,
   `facies_props[2]["ntg_floor"]`), so a lobe's sand fraction falls from `1 - M / t` where it is thick to `f` at its
   margin (Tanqua: axis 85-100 %, off-axis 50-85 %, fringe 20-50 %), and a younger stamp scours
   `interlobe_erosion` times its own thickness below its base, the mud in that reach, of whichever older
   cap, becoming its sand (sand on sand where it is thick, no cut at its margin; the deepest reach of any later
-  stamp counts, so a sliver of a deposit between two stamps shields nothing). `M` is found by bisection so that the layer's mean sand fraction is `ntg` (thickness-based, whatever the
-  grid; a warning if the stack cannot go as low); porosity mixes arithmetically, permeability as the 2-D effective
-  medium (tight below half sand, so a net-to-gross of 0.65 leaves a fifth to two fifths of the cells under 1 mD),
-  kv/kh log-linearly from the mud's through the fringe's at half sand to the sand's. Facies are 3 (net), 2 (sand
-  fraction 0.2-0.5, the Tanqua's fringe) and -1 (under 0.2, its distal fringe). `self.interlobe` holds the
-  cap thickness, the share of contacts amalgamated and the share of net cells. The option also clips the porosity
-  decay of a stamp thinner than a cell or two at 1: a cell whose lower face lies below the stamp's base had a decay
-  above 1, a ring of porosity above the design maximum 0.35 that shows as a small bright ring in a plan view
-  (`clip_decay`, off in every other path). Default `None`: outputs are bit-identical.
+  stamp counts, so a sliver of a deposit between two stamps shields nothing). A cell is sand (3, half sand or more), the
+  heterolithic fringe (2, a fifth to a half) or mud (-1), by what fills it, as channel, levee and floodplain cells are,
+  with the rock and the kv/kh of its facies (the fringe has `poro`, `log10_perm`, spreads and `kvkh` of its own, 1-2 decades
+  below the sand's in the Tanqua); nothing is mixed, so a cell's permeability does not depend on the cell's size. `M` is
+  found by bisection so that the share of net cells (sand, and the fringe when its permeability is above 1 mD: the
+  cells above 1 mD) is `ntg`, a warning and `interlobe["aim_missed"]` when the stack cannot go as low (cells as thick as
+  the lobes, a fringe that is net). The mud of a cap half a cell thick or more fills cells; the mud in a sand cell, under
+  half of it, is a thin cap and no cell: it is a vertical transmissibility barrier on the face of the cell nearest its
+  middle, the thin-barrier factor of the mud drapes (`resmill.layers.drapes.thin_barrier`: the cap's thickness, the mud's
+  permeability and the harmonic mean of the PERMZ of the two cells), written as MULTZ through the drapes' export path
+  (`self.mult_z`), which multiplies into a fault seal. A cap of 0.3 cells of 1e-3 mD mud between sand of 300 mD gives a face of about 2e-5, and a
+  stack of caps a set of compartments joined where the later lobes scoured the caps away. Facies 3, 2 and -1;
+  `self.interlobe` holds the cap thickness, the share of contacts amalgamated, the realized `net_cells`, the mean sand
+  share and the share of faces under a half. The option also clips the porosity decay of a stamp thinner than a
+  cell or two at 1: a cell whose lower face lies below the stamp's base had a decay above 1, a ring of porosity above the
+  design maximum 0.35 that shows as a small bright ring in a plan view (`clip_decay`, off in every other path).
+  With cells of 0.3 m on lobes of 5 m, 40 x 30 columns, the cells above 1 mD are the 0.25, 0.5, 0.65 and 0.85 asked,
+  at 1 m the last two, at 3 m none (cells as thick as the lobe). Default `None`: outputs are bit-identical.
 - `max_levels=N` (`DeltaLayer`, with `tree_ntg_stop=True`): the layer is grown level by level instead of
   piling networks at `n_generations` levels. The stop of `tree_ntg_stop` with `n_trees` large puts 100 or
   more networks at each of a few levels, and since every plan view then holds the union of them (a
