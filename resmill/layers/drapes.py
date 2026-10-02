@@ -33,9 +33,11 @@ Where, per storey (a level of the layer's aggradation):
   mean coverage of 0.5565, P(coverage >= 0.95) = 0.25 is k = 0.71 (reading "continuous" as 95 % or more of the base is
   [J], and so is treating a storey, a belt of 4-15 flow events, as one element). The spread is the sampler's choice,
   not a fact fixed here: ``None`` (default) draws nothing and gives today's maps;
-* with ``margin_bias`` b the share covered is b higher at the margin than at the axis, where the axis-ness of a
-  column is the engine's ``depth_norm`` of the lowest fill cell (1 at the thalweg, 0 at the banks), the mean held at
-  ``coverage``;
+* with ``margin_bias`` b the share covered is b higher in a column of axis-ness 0 than in one of 1 (the axis-ness of a
+  column is the engine's ``depth_norm`` of the lowest fill cell: 1 at the thalweg, 0 at the banks), the mean held at
+  ``coverage``. That axis-ness is concentrated (means 0.19, 0.52 and 0.81 over its thirds in 8 anchor models), so between the
+  margin and axis thirds of a base the share differs by 0.61 b: b = 0.55 is Vento (2020)'s 0.67 against 0.33 (realised 0.36,
+  sd 0.04, at coverage 0.5), and shares clipped at 0 and 1 flatten it as the coverage nears either;
 * a face is draped when a fill cell meets older-storey sand across it and its column is draped in its own storey's map.
   A drape thus survives only where the older storey's sand still lies under the younger element, and a later storey
   that cut through an older base takes its drape away with the cells. A lateral face is the element's wall, a vertical
@@ -60,8 +62,10 @@ __all__ = ["COVERAGE_BETA", "COVERAGE_RANGE", "HOLE_RANGE_WIDTHS", "MARGIN_BIAS_
 # 0.257), cut to the span of those outcrops (the truncation moves them to 0.53 and 0.23).
 COVERAGE_BETA = (1.52, 1.21)
 COVERAGE_RANGE = (0.05, 0.92)
-# Margin minus axis: none (Barton: "apparently random") to Vento (2020)'s 0.33 against 0.67; uniform in between [J].
-MARGIN_BIAS_MAX = 0.34
+# Margin bias, the share covered at axis-ness 0 minus at 1: none (Barton: "apparently random") to 0.55, which the engine's
+# axis-ness (thirds with means 0.19 and 0.81) turns into Vento (2020)'s 0.33 against 0.67 between the axis and margin thirds
+# of the base (0.61 b); uniform in between [J].
+MARGIN_BIAS_MAX = 0.55
 # A drape's thickness (m): an element's own drape under 0.5 m, a story set's over 1 m (Barton et al. 2010); the
 # log-uniform shape between is a judgement.
 THICKNESS_RANGE_M = (0.1, 1.5)

@@ -608,7 +608,7 @@ class ChannelLayer(Layer):
           outcrops); ``coverage_concentration`` (None), k of the Beta(c k, (1 - c) k) each storey's
           coverage is drawn from, mean c = ``coverage`` (None: every storey gets c; 0.71: drapes
           continuous in a quarter of Barton's elements); ``margin_bias`` (0), how much more of the
-          margin than of the axis is covered (0 random, 0.34 Vento 2020); ``thickness`` (0.5 m);
+          margin than of the axis is covered (0 random, 0.55 Vento 2020); ``thickness`` (0.5 m);
           ``perm`` (mD, None: the FF mud's ``facies_props[-1]``, which seals the face); the holes'
           practical range as ``hole_range_m`` or as ``hole_range_widths`` channel widths
           (``mCHdepth`` x ``mCHwdratio``; neither: half a width [J]; G-S11 draws 0.25-4).

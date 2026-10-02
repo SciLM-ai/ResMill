@@ -12,8 +12,8 @@ import pytest
 from scipy.special import betainc
 
 from resmill.layers.channel import ChannelLayer
-from resmill.layers.drapes import (COVERAGE_BETA, COVERAGE_RANGE, HOLE_RANGE_WIDTHS, check_drapes, coverage_from_unit,
-                                   draped_columns, drape_faces, sample_drapes, storey_map)
+from resmill.layers.drapes import (COVERAGE_BETA, COVERAGE_RANGE, HOLE_RANGE_WIDTHS, MARGIN_BIAS_MAX, check_drapes,
+                                   coverage_from_unit, draped_columns, drape_faces, sample_drapes, storey_map)
 
 
 # Barton et al. 2010, AAPG Memoir 92 Fig. 10: mean share of an element base covered by a drape, one value per outcrop
@@ -51,13 +51,16 @@ def test_sampled_coverage_is_that_beta_cut_to_the_span_of_the_outcrops():
 
 
 def test_sample_drapes_draws_the_three_settings_of_a_reservoir():
-    """Coverage as above, the axis-to-margin contrast uniform 0-0.34 (none to Vento's 0.33 against 0.67), thickness
-    log-uniform 0.1-1.5 m; three random numbers a reservoir, the same for the same generator state."""
+    """Coverage as above, the margin bias uniform from none to 0.55 (which the axis-ness of real layers turns into Vento's
+    0.33 against 0.67 between the axis and margin thirds), thickness log-uniform 0.1-1.5 m; three random numbers a
+    reservoir, the same for the same generator state."""
     draws = [sample_drapes(np.random.default_rng(s)) for s in range(4000)]
     bias = np.array([d["margin_bias"] for d in draws])
     thick = np.log(np.array([d["thickness"] for d in draws]))
-    assert bias.min() >= 0.0 and bias.max() <= 0.34
-    assert bias.mean() == pytest.approx(0.17, abs=0.01) and bias.std() == pytest.approx(0.34 / math.sqrt(12), abs=0.005)
+    assert MARGIN_BIAS_MAX == 0.55
+    assert bias.min() >= 0.0 and bias.max() <= MARGIN_BIAS_MAX
+    assert bias.mean() == pytest.approx(MARGIN_BIAS_MAX / 2, abs=0.01)
+    assert bias.std() == pytest.approx(MARGIN_BIAS_MAX / math.sqrt(12), abs=0.005)
     assert thick.min() >= math.log(0.1) and thick.max() <= math.log(1.5)
     assert thick.mean() == pytest.approx(0.5 * (math.log(0.1) + math.log(1.5)), abs=0.05)
     assert all(COVERAGE_RANGE[0] <= d["coverage"] <= COVERAGE_RANGE[1] for d in draws)
@@ -535,19 +538,23 @@ def test_drapes_cover_about_the_coverage_of_the_contacts():
     assert draped.sum() / possible.sum() == pytest.approx(0.6, abs=0.05)          # 0.59-0.61 over four seeds of this layer
 
 
-def test_the_margin_bias_moves_drapes_from_the_axis_to_the_margin_on_a_real_layer():
-    """At coverage 0.5, a bias of 0.34 leaves the draped share of the base contacts near the axis (the top third of the
-    engine's axis-ness) well below that near the margin (the bottom third), about the bias times the terciles'
-    difference in axis-ness (0.5 or so); with no bias the thirds are alike. The share of all contacts stays near 0.5."""
+def test_the_largest_margin_bias_reaches_vento_between_the_axis_and_margin_thirds_on_a_real_layer():
+    """At coverage 0.5 the draped share of the base contacts near the axis (the top third of the engine's axis-ness) falls
+    below that near the margin (the bottom third) by the bias times the thirds' difference in mean axis-ness (0.6 or so),
+    so MARGIN_BIAS_MAX gives about Vento's 0.33 against 0.67 (a contrast of 0.34, 0.28-0.35 over four layers); with no bias
+    the thirds are alike. The share of all contacts stays near 0.5."""
     possible = np.asarray(_layer(coverage=1.0).mult_z) < 1.0
     axis_ness = np.asarray(_layer(coverage=1.0)._engine.depth_norm)[possible]
     low, high = np.quantile(axis_ness, [1 / 3, 2 / 3])
+    spread = axis_ness[axis_ness > high].mean() - axis_ness[axis_ness <= low].mean()
     contrast = {}
-    for bias in (0.0, 0.34):
+    for bias in (0.0, MARGIN_BIAS_MAX):
         draped = (np.asarray(_layer(coverage=0.5, margin_bias=bias, hole_range_m=30.0).mult_z) < 1.0)[possible]
         contrast[bias] = draped[axis_ness <= low].mean() - draped[axis_ness > high].mean()
         assert draped.mean() == pytest.approx(0.5, abs=0.05)
-    assert abs(contrast[0.0]) < 0.05 and 0.1 < contrast[0.34] < 0.34 * 0.7
+    assert abs(contrast[0.0]) < 0.05
+    assert contrast[MARGIN_BIAS_MAX] == pytest.approx(MARGIN_BIAS_MAX * spread, abs=0.04)
+    assert 0.25 < contrast[MARGIN_BIAS_MAX] < 0.40
 
 
 def _exported(path, keyword, shape):
