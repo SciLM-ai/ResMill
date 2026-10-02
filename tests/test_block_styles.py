@@ -15,7 +15,7 @@ from resmill.export import _build_geometry, to_grdecl
 from resmill.faults import Fault, ww_profile
 from resmill.layers.base import Layer
 
-from .test_faults import lateral_contacts, log_plane, research_rollover
+from .fault_helpers import lateral_contacts, log_plane, research_rollover
 
 TOP, THICK = 2500.0, 40.0
 
@@ -241,7 +241,7 @@ def test_a_frio_masters_rollover_is_the_explicit_ramp_and_flattening_constructio
     """Pinned (ramp 55 degrees to 1,800 m, tan(dip) falling by 1/e every 2.5 km below it, 300 m of throw in a horizon at 2.5
     km, no regional dip), the master is a ramp down to 700 m above the reservoir and a flattening plane below, its tip
     ellipse's centre deeper still: the top of a thin reservoir follows the explicit construction of vertical shear over that
-    plane (test_faults.research_rollover: z + F(x) - F(x - H)) to 1.5 m, the footwall does not move at all, and the
+    plane (fault_helpers.research_rollover: z + F(x) - F(x - H)) to 1.5 m, the footwall does not move at all, and the
     hanging-wall cutoff is 300 m down."""
     from resmill.faults import _plane
     x_len, y_len, dx, top = 16000.0, 1000.0, 10.0, 2499.0
