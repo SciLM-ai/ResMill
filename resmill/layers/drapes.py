@@ -77,7 +77,9 @@ THICKNESS_RANGE_M = (0.1, 1.5)
 # The holes' practical range in channel widths (mCHdepth x mCHwdratio), log-uniform per reservoir: the owner's G-S11 [J], so
 # that the dataset spans mild drapes (small holes, little open area) to strong ones (large windows, more open area).
 HOLE_RANGE_WIDTHS = (0.25, 4.0)
-MULTIPLIER_FLOOR = 1e-12            # the floor ``fault_seal.face_multipliers`` keeps too
+# The floor ``fault_seal`` keeps too: a literal there on this branch, ``_MIN_MULT`` on fault-seal-3c, so there is one
+# definition to import once the two meet.
+MULTIPLIER_FLOOR = 1e-12
 _DEFAULTS = {"margin_bias": 0.0, "thickness": 0.5, "perm": None, "hole_range_m": None, "hole_range_widths": None,
              "coverage_concentration": None}
 _STREAM = 0x44524150                # tags the drape stream: ``default_rng([seed, tag])`` is not the engine's ``seed``
