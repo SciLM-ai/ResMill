@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 from resmill import salt as sl
-from resmill import structure as st
 from resmill.export import _build_geometry
 from resmill.faults import Fault
 from resmill.layers.base import Layer
