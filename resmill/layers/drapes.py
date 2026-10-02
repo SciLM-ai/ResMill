@@ -47,6 +47,7 @@ random number; without ``drapes`` nothing here runs.
 from __future__ import annotations
 
 import math
+import numbers
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
@@ -73,19 +74,30 @@ _DEFAULTS = {"margin_bias": 0.0, "thickness": 0.5, "perm": None, "hole_range_m":
 _STREAM = 0x44524150                # tags the drape stream: ``default_rng([seed, tag])`` is not the engine's ``seed``
 
 
+# Each setting's range: (lowest, highest, lowest excluded, may be None for its default)
+_BOUNDS = {"coverage": (0.0, 1.0, False, False), "margin_bias": (-1.0, 1.0, False, False),
+           "thickness": (0.0, math.inf, True, False), "perm": (0.0, math.inf, True, True),
+           "hole_range_m": (0.0, math.inf, True, True), "hole_range_widths": (0.0, math.inf, True, True),
+           "coverage_concentration": (0.0, math.inf, True, True)}
+
+
+def _in_range(name, x):
+    """Whether ``x`` is an allowed value of the setting ``name``: a finite real number (not a bool) within its bounds."""
+    low, high, open_low, optional = _BOUNDS[name]
+    if x is None:
+        return optional
+    return (isinstance(x, numbers.Real) and not isinstance(x, bool) and math.isfinite(x)
+            and (low < x if open_low else low <= x) and x <= high)
+
+
 def check_drapes(drapes: dict) -> dict:
-    """``drapes`` with the defaults filled in; ``ValueError`` for a name that is not a setting, a missing ``coverage``
-    or a value out of range (a typo would otherwise silently change the geology)."""
+    """``drapes`` with the defaults filled in; ``ValueError`` for a name that is not a setting, a missing ``coverage``,
+    a value out of range or not a finite number, or both ``hole_range_m`` and ``hole_range_widths`` (a typo would
+    otherwise silently change the geology)."""
     if not isinstance(drapes, dict) or "coverage" not in drapes or set(drapes) - set(_DEFAULTS) - {"coverage"}:
         raise ValueError(f"drapes is a dict with 'coverage' and optionally {sorted(_DEFAULTS)}; got {drapes!r}")
     s = {**_DEFAULTS, **drapes}
-    bad = [name for name, ok in (
-        ("coverage", 0.0 <= s["coverage"] <= 1.0), ("margin_bias", -1.0 <= s["margin_bias"] <= 1.0),
-        ("thickness", s["thickness"] > 0.0), ("perm", s["perm"] is None or s["perm"] > 0.0),
-        ("hole_range_m", s["hole_range_m"] is None or s["hole_range_m"] > 0.0),
-        ("hole_range_widths", s["hole_range_widths"] is None or s["hole_range_widths"] > 0.0),
-        ("coverage_concentration", s["coverage_concentration"] is None or 0.0 < s["coverage_concentration"] < math.inf)
-    ) if not ok]
+    bad = [name for name in _BOUNDS if not _in_range(name, s[name])]
     if bad:
         raise ValueError(f"drapes: {', '.join(bad)} out of range in {drapes!r}")
     if s["hole_range_m"] is not None and s["hole_range_widths"] is not None:

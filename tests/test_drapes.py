@@ -12,8 +12,8 @@ import pytest
 from scipy.special import betainc
 
 from resmill.layers.channel import ChannelLayer
-from resmill.layers.drapes import (COVERAGE_BETA, COVERAGE_RANGE, HOLE_RANGE_WIDTHS, coverage_from_unit, draped_columns,
-                                   drape_faces, sample_drapes, storey_map)
+from resmill.layers.drapes import (COVERAGE_BETA, COVERAGE_RANGE, HOLE_RANGE_WIDTHS, check_drapes, coverage_from_unit,
+                                   draped_columns, drape_faces, sample_drapes, storey_map)
 
 
 # Barton et al. 2010, AAPG Memoir 92 Fig. 10: mean share of an element base covered by a drape, one value per outcrop
@@ -519,11 +519,19 @@ def test_the_margin_bias_moves_drapes_from_the_axis_to_the_margin_on_a_real_laye
 
 
 def test_unknown_or_bad_drape_settings_are_refused_before_any_geology_is_made():
-    """A typo in a setting name, a missing coverage or a value out of range would silently change the geology."""
-    for bad in (dict(coverge=0.5), dict(margin_bias=0.1), dict(coverage=1.2), dict(coverage=0.5, thickness=0.0),
-                dict(coverage=0.5, perm=-1.0), dict(coverage=0.5, hole_range_m=0.0), dict(coverage=-0.1)):
+    """A typo in a setting name, a missing coverage or a value out of range would silently change the geology; so would
+    a number that is not finite (an infinite hole range failed in a filter after the engine had run) or a bool."""
+    inf, nan = math.inf, math.nan
+    bad_settings = [dict(coverge=0.5), dict(margin_bias=0.1), dict(coverage=1.2), dict(coverage=-0.1), dict(coverage=True),
+                    dict(coverage=nan), dict(coverage="0.5"), dict(coverage=None)]
+    for name, values in dict(thickness=(0.0, -1.0, inf, nan, True), perm=(-1.0, 0.0, inf, nan), margin_bias=(1.5, -1.5, nan, True),
+                             hole_range_m=(0.0, -3.0, inf, nan), hole_range_widths=(0.0, -3.0, inf, nan),
+                             coverage_concentration=(0.0, -1.0, inf, nan, True)).items():
+        bad_settings += [dict(coverage=0.5, **{name: v}) for v in values]
+    for bad in bad_settings:
         with pytest.raises(ValueError):
             ChannelLayer(nx=4, ny=4, nz=4, x_len=40.0, y_len=40.0, z_len=4.0, top_depth=0.0).create_geology(drapes=bad)
+    check_drapes(dict(coverage=np.float32(0.5), thickness=np.int64(1), coverage_concentration=0.71, hole_range_widths=2))   # fine
 
 
 def test_the_hole_range_may_be_given_in_channel_widths():
