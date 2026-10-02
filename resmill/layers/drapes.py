@@ -2,9 +2,11 @@
 
 A channel element often lies on a thin mud drape (a few centimetres to a few metres of thin-bedded mudstone) that covers
 part of its base: a median 60 % of it, from under 5 % to over 90 % over 17 outcrops and 154 elements (Barton et al.
-2010). Where it covers the base, the element does not touch the older sand beneath it, and in Barton's sector model
-recovery falls from 0.60 without drapes to 0.53 at 60 % coverage and 0.20 at 90 % (Ruetten 2021 finds the same fall at
-breakthrough).
+2010). Where it covers the base, the element does not touch the older sand beneath it. In Barton's sector model (1000 mD
+channel fill, nothing else conducting, 65 % channels, random drapes, a waterflood to 99 % water cut) recovery falls from 0.60
+without drapes to 0.53 at 60 % coverage and 0.20 at 90 % (read off his Fig. 2). Ruetten (2021) finds a fall of the same shape
+and another size, at breakthrough: 0.16, 0.15 and 0.09 at 0, 60 and 90 % in a vertical stack, 0.41, 0.39 and 0.32 in his outcrop
+model, and no water at all from the producer of his offset stacks above 70 % (diagonal) or 40 % (lateral) coverage.
 
 A drape is far thinner than a cell (0.1-1.5 m in cells of 0.5-5 m), so painting mud cells would remove up to fifty times
 the sand the drape displaces and could not draw one thinner than a cell at all. It is put where it is, on the faces: the
@@ -16,10 +18,11 @@ of size ``h`` and permeability ``k1`` and ``k2`` across the face. In series, wit
     M = [1 + (t / h) (ks / kd - 1)]^-1        (t at most h; kept between 1e-12 and 1)
 
 Facies, porosity and permeability stay as they were; the writers turn the multipliers into MULTX, MULTY and MULTZ. A
-mud drape (``kd`` 4e-6 to 1e-3 mD) seals its face against sand of 400 mD (M below 2e-4, for any thickness from 0.1 m in
-cells up to 5 m); only silty drapes of 0.2-8 mD leave a leak that depends on thickness and cell size. The sector models
-of the literature do the same (Li 2008; Ruetten 2021) and Alpak & van der Vlugt (2014) lay the drape on the whole
-surface and cut holes in it.
+mud drape (``kd`` 4e-6 to 1e-3 mD) seals a vertical face against sand of 400 mD (M below 2e-4, for any thickness from 0.1 m
+in cells up to 5 m). Across a lateral face ``h`` is the cell's width, and a thin drape in a wide cell only chokes it: 0.1 m in
+a cell of 100 m gives M = 1.5e-4 for the anchor's FF mud (6e-5 mD) and 2.5e-3 for 1e-3 mD (still four hundred fold). Silty
+drapes of 0.2-8 mD leave a leak that depends on thickness and cell size. The sector models of the literature do the same
+(Li 2008; Ruetten 2021) and Alpak & van der Vlugt (2014) lay the drape on the whole surface and cut holes in it.
 
 Where, per storey (a level of the layer's aggradation):
 

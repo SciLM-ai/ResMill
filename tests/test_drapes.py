@@ -365,6 +365,20 @@ def test_the_multiplier_is_the_thin_barrier_between_the_two_cells_permeabilities
         assert np.allclose(drape_faces(f, s, draped, perms, SIZE, T, kd)[2][2:5, :, 2], 1.0, atol=1e-6)
 
 
+def test_the_sealing_statement_holds_for_vertical_faces_and_only_chokes_wide_lateral_ones():
+    """Against sand of 400 mD, a mud of 4e-6 to 1e-3 mD gives M below 2e-4 on a vertical face for any thickness from 0.1 m in
+    cells up to 5 m; across a lateral face of a 100 m cell a drape of 0.1 m gives 1.5e-4 for the anchor's FF mud (6e-5 mD) and
+    2.5e-3 for 1e-3 mD, a four hundred fold choke that is not a seal."""
+    f, s = _stack_cube()
+    draped = np.ones((2, 6, 4), dtype=bool)
+    for kd in (4e-6, 6e-5, 1e-3):
+        for t, h in ((0.1, 5.0), (0.1, 1.0), (1.5, 5.0), (0.5, 0.5)):
+            assert drape_faces(f, s, draped, _perms(f.shape, 400.0), (10.0, 10.0, h), t, kd)[2][2:5, :, 2].max() < 2e-4
+    for kd, expected in ((6e-5, 1.5e-4), (1e-3, 2.5e-3)):
+        mx = drape_faces(f, s, draped, _perms(f.shape, 400.0), (100.0, 100.0, 2.0), 0.1, kd)[0]
+        assert mx[1, :, 2] == pytest.approx(expected, rel=0.02)
+
+
 # --------------------------------------------------------------------------------------------------------------
 # On a channel layer
 # --------------------------------------------------------------------------------------------------------------
