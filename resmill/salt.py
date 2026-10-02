@@ -56,10 +56,12 @@ _THICKNESS_M = (302.0, 338.0, 515.0, 1006.0, 2118.0, 2438.0, 3353.0)
 MAX_THICKNESS = 4600.0    # m: the canopy's thickest, just above the 4,572 m it is "more than" in places [J]
 MIN_THICKNESS = 100.0     # m: below the thinnest sample (302 m) a log-normal tail has a weld, not a sheet [J]
 MAX_DIP = 85.0            # degrees: the largest upturn dip (the owner's choice over 75, 2026-10-01)
-MAX_LOBES = 0.3           # the largest outline irregularity, as a fraction of the radius (closure's warp reaches 0.35)
-MAX_ROUGH = 0.05          # the largest outline roughness, as a fraction of the radius: beyond it the warp folds
+MAX_LOBES = 0.3           # the largest outline irregularity, as a fraction of the radius (closure's warp reaches 0.35); at 0.3
+                          # the warp can fold a body (3 of 96 stocks had an island and 3 a hole): the contact follows them
+MAX_ROUGH = 0.05          # the largest outline roughness, as a fraction of the radius: the slope guard (_MAX_SLOPE) scales the
+                          # octaves down together where they would steepen past it, to 0.6-0.9 of rough at hurst 1 (rough_scale)
 MIN_RANGE = 150.0         # m: the finest octave of the outline's roughness, three cells of 50 m [J]
-_MAX_SLOPE = 0.9          # the steepest slope the roughness' displacement may have, so that its warp cannot fold
+_MAX_SLOPE = 0.9          # the steepest slope the roughness' displacement may have: a guard against the warp folding, not a proof
 _ABOVE = -1.0e5           # m: a depth above every cell, where the truncating surface cuts nothing
 _GRID = 80                # cells across the narrowest semi-axis of the grid the contact is contoured on
 _MIN_STEP = 6.0           # m: the finest such grid
@@ -107,10 +109,11 @@ class SaltBody:
         of octaves of :func:`resmill.structure.roughness`, ranges from the larger of the radius and half the long axis, halving
         down to :data:`MIN_RANGE`, each of sd ``rough x radius x (range / radius)^hurst``, drawn over a box round the body and
         resampled once on a grid of 30 m. Both are reduced by one factor ``scale`` (<= 1) where the steepest slope of either would
-        exceed :data:`_MAX_SLOPE`, so the realised ``rough`` is ``scale`` times the nominal one (``rough_scale``, 1 where no slope
-        is that steep; 0.6-0.9 at hurst 1 and rough 0.05, less below hurst 1); this keeps the warp from folding to a first approximation
-        only (the lobes' warp can fold too, and a folded body has islands or holes, which the contact and the mask both follow).
-        Returns ``(((fu, fv), half), scale, bound)``: two Structures over ``[0, 2 half]^2``, and the largest displacement (m)."""
+        exceed :data:`_MAX_SLOPE`, so the realised ``rough`` is ``scale`` times the nominal one (``rough_scale``: 1 where no
+        slope is that steep, 0.6-0.9 at hurst 1 and rough 0.05 on bodies of 0.8-3 km radius, 0.1-0.4 at hurst 0.5 or less on the
+        larger ones). That keeps the warp from folding to a first approximation only: the lobes' warp can fold too, and a folded
+        body has islands or holes, which the contact and the mask both follow. Returns ``(((fu, fv), half), scale, bound)``: two
+        Structures over ``[0, 2 half]^2``, the factor and the largest displacement (m)."""
         a0 = self.radius
         top = max(a0, 0.5 * max(self.axes))                           # a wall meanders over its length
         ranges = [a for a in (top / 2 ** i for i in range(24)) if a >= MIN_RANGE] or [a0]
@@ -241,10 +244,11 @@ def salt_body(center, axes, azimuth=0.0, z_ref=0.0, lean=(0.0, 0.0), flare=0.0, 
     radius)^hurst``, displacing the outline along its normal and moving with its lean (the Santos stock and the Sigsbee
     feeders show 4-6 % of the radius at wavelengths of 1-2 radii and 2-3 times less per octave: ``hurst`` about 1); ``seed``
     is required with it. A slope limit scales all the octaves down together where one would fold the outline: the roughness
-    realised is ``rough_scale`` (an attribute, 1 where nothing is that steep) times ``rough``. ``overhang`` = (lateral extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck)
-    from H above it upward, linearly between: an underside dipping ``atan(H / L)`` from horizontal, which a reservoir lifted
-    into it meets (East Texas stocks overhang by 0.15-2.6 km, P50 0.37 km, over 0.5-2.4 km of height, an underside of 35-68
-    degrees; the shoulders of Precaspian walls are 0.3-1.5 km wide at 15-30 degrees). Returns a :class:`SaltBody`.
+    realised is ``rough_scale`` (an attribute, 1 where nothing is that steep) times ``rough``. ``overhang`` = (lateral
+    extent L, height H) (m) makes the salt L wider than at ``z_ref`` (the neck) from H above it upward, linearly between: an
+    underside dipping ``atan(H / L)`` from horizontal, which a reservoir lifted into it meets (East Texas stocks overhang by
+    0.15-2.6 km, P50 0.37 km, over 0.5-2.4 km of height, an underside of 35-68 degrees; the shoulders of Precaspian walls
+    are 0.3-1.5 km wide at 15-30 degrees). Returns a :class:`SaltBody`.
     """
     return SaltBody(center, axes, azimuth, z_ref, lean, flare, lobes, shape, seed, rough, hurst, overhang)
 
@@ -345,8 +349,8 @@ def salt_sequence(salt, width, taper, cut, datum, power=2.0, z_ref=None):
     lift the unconformity removes (see :func:`salt_truncation`) and the truncation angle at the contact, which Giles & Rowan
     put over 70 degrees for a hook and under 30 for a wedge, is ``Sequence.angle`` = dip - atan((1 - cut) tan dip): not a
     function of ``cut`` alone (a cut of 0.85-1 gives 46-75 degrees at a dip of 75), so :func:`truncation_cut` gives the cut for
-    the angle wanted. A hook that pinches the reservoir out is cut at over 70 degrees (a cut of 0.97-1), one that keeps the
-    interval to the wall by a ``cut`` x ``relief`` under its thickness. ``Sequence.dip`` is the dip the grid has (capped).
+    the angle wanted. A hook that pinches the reservoir out is cut at over 70 degrees (a cut of 0.97-1); one that keeps the
+    interval to the wall has a ``cut`` x ``relief`` under the interval's thickness. ``Sequence.dip`` is the dip the grid has (capped).
     ``datum`` is the reservoir's top before the upturn (see :func:`salt_truncation`). Like :func:`salt_upturn` it registers
     ``width`` on the body: the grid must have cells of at most half of it, a hook's 50-200 m included."""
     if not 0.0 <= taper < 90.0:
