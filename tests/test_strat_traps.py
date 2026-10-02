@@ -1,11 +1,12 @@
 """Stratigraphic traps: the trap of a zone that pinches out, Berg's barrier columns, and the trap builder."""
 import numpy as np
 import pytest
+from scipy import ndimage
 
 from resmill import structure as st
 from resmill.export import _build_geometry
 from resmill.layers.base import Layer
-from resmill.strat_traps import (barrier_column, effective_grain_size, strat_trap, trap_report, zone_top,
+from resmill.strat_traps import (_traps, barrier_column, effective_grain_size, strat_trap, trap_report, zone_top,
                                  zone_trap)
 
 FT = 0.3048
@@ -29,6 +30,23 @@ def _layers(x_len, y_len, dx, thicknesses, top=2000.0, dz=2.0):
 def _length(area, aspect):
     """The research note's length along dip of an elliptical trap of ``area`` and ``aspect`` (strike over dip)."""
     return 2.0 * np.sqrt(area / (np.pi * aspect))
+
+
+def _fine_traps(built, top, x_len, y_len, n=401):
+    """The traps of the geometry a generator drew, on a fine analytic map of the top of its sand (n x n points): the
+    structure and the thickness factor or erosion surface it returned, and the flood of the cells' report. It reads
+    neither the corner-point grid nor which cells ACTNUM keeps, so it is what the cells' trap is checked against."""
+    kw, thick = built["kwargs"], built["meta"]["thickness"]
+    x, y = np.meshgrid(np.linspace(0.0, x_len, n), np.linspace(0.0, y_len, n), indexing="ij")
+    bed = top + kw["structure"](x, y)                              # the top of the beds
+    if "erode_above" in kw:                                        # truncation: the surface is the top, where it cuts
+        depth, present = kw["erode_above"](x, y), kw["erode_above"](x, y) < bed + thick - 1e-9
+    elif "erode_below" in kw:                                      # onlap: the layers follow the top, to the surface
+        depth, present = bed, kw["erode_below"](x, y) > bed + 1e-9
+    else:
+        depth, present = bed, kw["isochore"][0](x, y) > 0.0
+    return sorted(_traps(np.where(present, depth, np.inf), x_len / (n - 1), y_len / (n - 1)),
+                  key=lambda trap: -trap["height"])
 
 
 def _prototype():
@@ -72,7 +90,7 @@ def test_a_lens_of_sand_enclosed_by_absent_columns_is_sealed_and_fills_to_its_de
     _, _, zc, act = _build_geometry([layer], structure=st.ramp(1.0, azimuth=0.0), isochore=[lens])
     (trap,) = zone_trap(zc, act, dx, dx)
     assert trap["spill_depth"] is None and trap["spill_point"] is None and trap["limited_by"] == "sealed"
-    assert trap["height"] == pytest.approx(np.tan(np.radians(1.0)) * 2000.0, abs=np.tan(np.radians(1.0)) * dx)
+    assert trap["height"] == pytest.approx(np.tan(np.radians(1.0)) * 2000.0, abs=1.5 * np.tan(np.radians(1.0)) * dx)
     assert trap["limit_depth"] == pytest.approx(trap["crest_depth"] + trap["height"])
     assert trap["area"] == pytest.approx(np.pi * (1000.0 + 0.5 * dx) ** 2, rel=0.05)   # the columns the disc touches
     assert np.array_equal(trap["mask"], act.any(axis=2))              # the whole lens, its deepest columns included
@@ -229,37 +247,44 @@ def test_a_pinch_out_tongue_closes_by_the_dip_times_its_length_and_has_the_area_
 
 
 @pytest.mark.parametrize("azimuth", [30.0, 90.0, 135.0, 250.0, 315.0])
-@pytest.mark.parametrize("kind", ["pinchout", "lens"])
-def test_a_trap_on_a_dip_in_any_direction_closes_by_the_same_dip_times_its_length(kind, azimuth):
+@pytest.mark.parametrize("kind,mound", [("pinchout", False), ("lens", False), ("lens", True)])
+def test_a_trap_on_a_dip_in_any_direction_closes_by_the_same_dip_times_its_length(kind, mound, azimuth):
     """The model is a rectangle and the dip may point anywhere: the shape is placed along the dip direction through
-    the centre of the model, whatever its azimuth (the P50 trap: 27 m of closure, to the rise of a cell and a half,
-    and its area to 5 % below and 15 % above)."""
+    the centre of the model, whatever its azimuth (the P50 trap: 27 m of closure for a pinch-out or a lens hung from
+    a flat top, to the rise of a cell and a half and 2 %, and its area to 5 % below and 15 % above). A mound's top
+    bulges up by the thickness it has, so its closure is what its own geometry gives, found on the fine map."""
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
     built = strat_trap(kind, x_len, y_len, 2000.0, [10.0], seed=1, dip=1.1, taper_angle=0.5, area=3.4e6, aspect=2.2,
-                       warp=0.0, azimuth=azimuth)
+                       warp=0.0, azimuth=azimuth, mound=mound)
     (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
     cell = 1.5 * np.tan(np.radians(1.1)) * dx
-    assert trap["height"] == pytest.approx(built["meta"]["closure_expected"], abs=cell + 0.02 * 27.0)
-    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=cell)
+    fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
+    expected = fine["height"] if mound else built["meta"]["closure_expected"]
+    assert trap["height"] == pytest.approx(expected, abs=cell + 0.02 * 27.0)
+    assert fine["height"] == pytest.approx(built["meta"]["closure_expected"], abs=0.5 + (4.0 if mound else 0.0))
+    assert trap["crest_depth"] == pytest.approx(fine["crest_depth"] if mound else built["meta"]["crest_expected"],
+                                                abs=cell)
     assert 3.4e6 * 0.95 < trap["area"] < 3.4e6 * 1.15
 
 
 @pytest.mark.parametrize("kind", ["pinchout", "facies_change", "lens", "truncation", "onlap"])
 def test_lobes_warped_by_a_quarter_close_by_the_dip_times_the_length_of_the_shape_that_was_made(kind):
     """The warp of the lobes (a quarter of their width) moves their ends away from the ellipse they were drawn as, so
-    the closure follows the length along dip that the footprint really has (``closure_footprint``), not the nominal
-    one: over 8 seeds the measured closure is within 1.5 cells' rise and 8 % of it (the sheet's edge wanders 40 m)."""
+    the closure follows the length along dip that the footprint really has (the fine map of the geometry), not the
+    nominal one: over 8 seeds the measured closure is within 1.5 cells' rise and 8 % of it (the edge is rough, 40 m
+    rms)."""
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
     thick = [10.0, 6.0] if kind == "facies_change" else [10.0]
     errors = []
     for seed in range(8):
         try:
             built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=seed, barrier=kind == "facies_change", dip=1.2,
-                               taper_angle=0.6, area=3.0e6, aspect=2.0, warp=0.25, wander=40.0, range_m=1000.0)
+                               taper_angle=0.6, area=3.0e6, aspect=2.0, warp=0.25, wander=40.0, range_m=1000.0,
+                               floor_m=100.0)
         except ValueError:
             continue
         (trap,) = trap_report(_layers(x_len, y_len, dx, thick), built)[:1]
-        expected = built["meta"]["closure_footprint"]
+        expected = _fine_traps(built, 2000.0, x_len, y_len)[0]["height"]
         errors.append(abs(trap["height"] - expected) - (1.5 * np.tan(np.radians(1.2)) * dx + 0.08 * expected))
         assert built["meta"]["closure_expected"] == pytest.approx(np.tan(np.radians(1.2)) * _length(3.0e6, 2.0))
     assert len(errors) >= 5 and max(errors) <= 0.0
@@ -273,18 +298,29 @@ def test_a_straight_pinch_out_line_on_a_plane_monocline_has_no_closure():
     assert built["meta"]["closure_expected"] == 0.0
 
 
+@pytest.mark.parametrize("mound", [False, True], ids=["flat top", "mound"])
 @pytest.mark.parametrize("dip,area,aspect,model,closure", EXAMPLES[1:], ids=["P50", "P90"])
-def test_an_enclosed_lens_is_sealed_and_holds_the_dip_times_its_whole_length(dip, area, aspect, model, closure):
+def test_an_enclosed_lens_is_sealed_and_holds_the_dip_times_its_whole_length(dip, area, aspect, model, closure, mound):
+    """A lens hung from a flat top holds the tangent of the dip times its length along dip. A mound (the base the plane
+    of the beds, the top convex up) holds what its own geometry gives, found on the fine map: for a parabolic cap of
+    thickness T and length L along dip the top lies T (s / R)^2 below the plane of the base at s from its middle,
+    R = L / 2, and the closure is T (1 + tan(dip) L / (4 T))^2 where that is more than tan(dip) L (a gentle dip, the
+    mound's own thickness raising the crest) and tan(dip) L where it is not (the crest at the updip rim)."""
     x_len, y_len, dx = model
     built = strat_trap("lens", x_len, y_len, 2000.0, [10.0], seed=2, dip=dip, taper_angle=0.5, area=area,
-                       aspect=aspect, warp=0.0)
+                       aspect=aspect, warp=0.0, mound=mound)
     (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
     assert trap["limited_by"] == "sealed" and trap["spill_depth"] is None
     expected = np.tan(np.radians(dip)) * _length(area, aspect)
     assert built["meta"]["closure_expected"] == pytest.approx(expected)
     cell = np.tan(np.radians(dip)) * dx
-    assert trap["height"] == pytest.approx(expected, abs=cell + 0.02 * expected)
-    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=cell)
+    fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
+    assert fine["limited_by"] == "sealed"
+    if mound:
+        cap = 10.0 * (1.0 + expected / 40.0) ** 2
+        assert 0.97 * expected < fine["height"] < max(expected, cap) + 2.0
+    assert trap["height"] == pytest.approx(fine["height"], abs=1.5 * cell + 0.02 * expected)
+    assert trap["crest_depth"] == pytest.approx(fine["crest_depth"], abs=cell)
     assert area * 0.97 < trap["area"] < area * 1.10
 
 
@@ -365,38 +401,42 @@ def test_the_subcrop_strip_of_a_truncation_is_as_wide_as_the_thickness_over_the_
                                                                                                            width):
     """Beds of 3.5 degrees dip cut by an erosion surface that dips less: for a 10 m sand the beds are cut away from
     the top over a strip of T / tan(discordance), the research note's 2.29 km at 0.25 degrees, 573 m at 1 and 191 m at
-    3. The discordance is measured on the exported grid, as the angle between the slope of the top where the beds
-    survive whole and where they are cut; the top follows the bed top there and the erosion surface in the strip."""
+    3, measured on the exported grid as the strip where the top lies below the bed top. The discordance averaged over
+    the strip is atan(T / width) = the drawn angle; the surface leaves the beds tangentially (T (1 - u)^2 below the
+    bed top, u the share of the strip), so that there is no hinge, and cuts the base of the sand at twice the angle."""
     layers = _layers(4000.0, 6000.0, 25.0, [10.0], dz=1.0)
     built = strat_trap("truncation", 4000.0, 6000.0, 2000.0, [10.0], seed=1, dip=3.5, taper_angle=angle, area=None)
     count, top, _, dy = _profile(layers, built)
-    nz = 10
-    plane = 2000.0 + ((np.arange(len(top)) + 0.5) * dy - 3000.0) * np.tan(np.radians(3.5))   # the bed top
-    strip = np.nan_to_num(top - plane) > 1e-3                              # the top is the erosion surface
+    nz, line = 10, built["meta"]["line"]
+    rows = (np.arange(len(top)) + 0.5) * dy
+    plane = 2000.0 + (rows - 3000.0) * np.tan(np.radians(3.5))   # the bed top
+    below = np.nan_to_num(top - plane)                              # how far the top lies under the bed top
+    strip = below > 1e-3
     assert strip.sum() * dy == pytest.approx(width, rel=0.05, abs=2 * dy)
-    slope = np.diff(top) / dy
-    whole = count[:-1] == nz
-    inside = (count >= 2) & (count <= nz - 2)                               # columns well inside the strip
-    cut = inside[:-1] & inside[1:]
+    assert np.degrees(np.arctan(10.0 / (strip.sum() * dy))) == pytest.approx(angle, rel=0.06)
     assert np.allclose(top[count == nz][~strip[count == nz]], plane[count == nz][~strip[count == nz]], atol=1e-6)
-    measured = np.degrees(np.arctan(np.median(slope[whole & ~strip[:-1]])) - np.arctan(np.median(slope[cut])))
-    assert measured == pytest.approx(angle, rel=0.03)
-    assert strip.sum() * dy == pytest.approx(10.0 / np.tan(np.radians(measured)), rel=0.05, abs=2 * dy)
+    u = (rows - line) / built["meta"]["taper_m"]
+    inside = (u > 0.0) & (u < 1.0) & (count > 0)
+    assert np.allclose(below[inside], 10.0 * (1.0 - u[inside]) ** 2, atol=0.05 * 10.0 + dy * np.tan(np.radians(3.5)))
+    slope = np.gradient(below, dy)                                # the surface's slope against the beds
+    last = inside & (u > 0.85)
+    assert np.abs(slope[last]).max() < 0.4 * np.tan(np.radians(angle)) + 1e-9
 
 
 @pytest.mark.parametrize("kind", ["truncation", "onlap"])
 def test_layers_end_against_the_surface_over_the_thickness_over_the_tangent_of_the_angle(kind):
-    """With n layers of a stack of thickness T the strip is T / tan(angle) long and layer k (top-down) is first
-    present a share k / n of the way along it where the older surface cuts the layers from below (onlap: the top layer
-    first, the oldest last), (n - k - 1) / n where the erosion surface cuts them from above (truncation: the oldest
-    layer reaches farthest updip), each to a column and a half."""
+    """With n layers of a stack of thickness T the strip is T / tan(angle) long and the thickness is T u (2 - u), u the
+    share of the strip, so layer k (top-down) is first present a share 1 - sqrt(1 - k / n) of the way along it where
+    the older surface cuts the layers from below (onlap: the top layer first, the oldest last), 1 - sqrt((k + 1) / n)
+    where the erosion surface cuts them from above (truncation: the oldest layer reaches farthest updip), each to a
+    column and a half."""
     layers = _layers(4000.0, 6000.0, 25.0, [10.0], dz=1.0)
     built = strat_trap(kind, 4000.0, 6000.0, 2000.0, [10.0], seed=1, dip=3.5, taper_angle=1.0, area=None)
     count, top, starts, dy = _profile(layers, built)
     line, strip = built["meta"]["line"], 10.0 / np.tan(np.radians(1.0))
     assert strip == pytest.approx(573.0, abs=1.0) and built["meta"]["taper_m"] == pytest.approx(strip)
     for k, row in enumerate(starts):
-        share = k / 10.0 if kind == "onlap" else 1.0 - (k + 1) / 10.0
+        share = 1.0 - np.sqrt(1.0 - k / 10.0) if kind == "onlap" else 1.0 - np.sqrt((k + 1) / 10.0)
         assert (row + 0.5) * dy == pytest.approx(line + share * strip, abs=1.5 * dy)
     assert np.all(np.diff(count[count > 0]) >= 0) and count.max() == 10     # layers only join as the strip deepens
     if kind == "onlap":                                                     # the younger layers keep the bed top
@@ -421,9 +461,8 @@ def test_a_tongue_closes_by_the_dip_times_its_length_whichever_surface_cuts_the_
     assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=cell)
     assert trap["spill_depth"] == pytest.approx(built["meta"]["spill_expected"], abs=cell)
     assert built["meta"]["spill_expected"] == pytest.approx(1980.9 + (10.0 if kind == "truncation" else 0.0), abs=0.1)
-    length = _length(3.4e6, 2.2)
-    shoulder = 10.0 / np.tan(np.radians(1.1)) / length if kind == "truncation" else 0.1
-    assert 3.4e6 * 0.97 < trap["area"] < 3.4e6 * (1.0 + shoulder)
+    fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
+    assert trap["area"] == pytest.approx(fine["area"], rel=0.06) and 3.4e6 * 0.97 < trap["area"]
     assert (trap["area"] > 3.4e6 * 1.1) == (kind == "truncation")
 
 
@@ -500,3 +539,284 @@ def test_lobes_that_warp_out_of_the_model_are_refused_and_the_rest_leave_a_trap_
         trap = trap_report(_layers(x_len, y_len, dx, [10.0], dz=5.0), built)[0]
         assert not (trap["mask"] & edge).any()
     assert refused >= 3 and accepted >= 3
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Irregular edges, several tongues, mounds, smooth tapers and relief (the owner's review of 2026-10-01)
+
+def _sand(kind, built, nz=6, x_len=8000.0, y_len=6000.0, dx=25.0, thick=6.0, top=2000.0):
+    """The exported geometry of a single sand layer: the columns that are sand, their centres and the interfaces."""
+    layer = Layer(int(round(x_len / dx)), int(round(y_len / dx)), nz, x_len, y_len, thick, top)
+    Xc, Yc, zc, act = _build_geometry([layer], **built["kwargs"])
+    xc, yc = np.meshgrid((np.arange(layer.nx) + 0.5) * dx, (np.arange(layer.ny) + 0.5) * dx, indexing="ij")
+    return act.any(axis=2), xc, yc, zc, layer
+
+
+TONGUES = [(1.6e6, 1.0), (0.9e6, 0.5), (0.6e6, 0.4), (0.8e6, 0.45), (0.5e6, 0.35)]
+
+
+@pytest.mark.parametrize("kind", ["pinchout", "truncation", "onlap"])
+@pytest.mark.parametrize("n", [1, 3, 5])
+def test_the_tongues_are_as_many_as_drawn_and_each_has_the_length_and_width_it_was_drawn_with(kind, n):
+    """Every tongue is a separate lobe of sand updip of the line: counted on the exported grid (the connected bodies of
+    active columns more than two cells updip of the line, azimuth 0) there are as many as were drawn (the main one and
+    the ``tongues`` of the caller), they stand along the line in the order of their offsets, each reaches updip of the
+    line by its drawn length (two cells and 6 %) and is as wide at its root as aspect times that."""
+    x_len, y_len, dx = 8000.0, 6000.0, 25.0
+    built = strat_trap(kind, x_len, y_len, 2000.0, [6.0], seed=4, dip=1.5, taper_angle=0.5, area=TONGUES[0][0],
+                       aspect=TONGUES[0][1], tongues=TONGUES[1:n], warp=0.0)
+    sand, xc, yc, _, _ = _sand(kind, built)
+    line, drawn = built["meta"]["line"], built["meta"]["tongues"]
+    labels, count = ndimage.label(sand & (yc < line - 2.0 * dx))
+    assert len(drawn) == n and count == n
+    found = sorted(range(1, n + 1), key=lambda c: xc[labels == c].mean())
+    for tongue, c in zip(sorted(drawn, key=lambda d: d["offset"]), found):
+        body = labels == c
+        length = line - yc[body].min() + 0.5 * dx
+        assert length == pytest.approx(tongue["length"], abs=2 * dx + 0.06 * tongue["length"])
+        row = body[:, np.argmin(abs(yc[0] - (line - 3.0 * dx)))]                 # the row three cells updip
+        width = row.sum() * dx
+        assert width == pytest.approx(tongue["aspect"] * tongue["length"], rel=0.12, abs=2 * dx)
+        assert xc[body].mean() == pytest.approx(0.5 * x_len + tongue["offset"], abs=0.12 * width + 2 * dx)
+
+
+def test_tongues_that_do_not_fit_are_refused_and_a_lens_a_nose_or_a_straight_edge_take_none():
+    args = (8000.0, 6000.0, 2000.0, [10.0], 1)
+    with pytest.raises(ValueError, match="fit"):
+        strat_trap("pinchout", *args, area=3.4e6, aspect=2.2, tongues=[(3.4e6, 2.2)] * 4)
+    for kind, kw in (("lens", {}), ("pinchout", dict(area=None)), ("pinchout_nose", dict(area=None, nose=NOSE))):
+        with pytest.raises(ValueError, match="tongue"):
+            strat_trap(kind, *args, tongues=[(1.0e6, 1.0)], **kw)
+
+
+@pytest.mark.parametrize("hurst", [0.2, 0.4, 0.6])
+def test_the_edge_wanders_as_rough_as_the_hurst_exponent_drawn(hurst):
+    """With no tongue the edge is the line moved by a ``relief`` surface, so the first active row of each column of the
+    exported grid is a profile of that surface along the line: its structure function S(lag) = mean (y(x + lag) -
+    y(x))^2 rises as lag^(2 hurst) over 100-1,200 m (the exponent within 0.4 of 2 hurst, over 6 seeds: the cells and
+    the Gaussian covariance of the octaves flatten it at the high end) and its rms is the ``wander`` asked for (to
+    35 %). With no wander the edge is straight."""
+    x_len, y_len, dx = 8000.0, 6000.0, 25.0
+    lags, slopes, rms = np.array([4, 6, 8, 12, 16, 24, 32, 48]), [], []
+    for seed in range(6):
+        built = strat_trap("pinchout", x_len, y_len, 2000.0, [4.0], seed=seed, dip=1.0, taper_angle=0.5, area=None,
+                           wander=200.0, range_m=3000.0, hurst=hurst, floor_m=dx)
+        sand, _, yc, _, _ = _sand("pinchout", built, nz=1, thick=4.0)
+        edge = yc[0][sand.argmax(axis=1)]
+        s = [np.mean((edge[lag:] - edge[:-lag]) ** 2) for lag in lags]
+        slopes.append(np.polyfit(np.log(lags * dx), np.log(s), 1)[0])
+        rms.append(edge.std())
+    assert np.mean(slopes) == pytest.approx(2.0 * hurst, abs=0.4)
+    assert np.mean(rms) == pytest.approx(200.0, rel=0.35)
+    flat = strat_trap("pinchout", x_len, y_len, 2000.0, [4.0], seed=0, dip=1.0, taper_angle=0.5, area=None)
+    sand, _, yc, _, _ = _sand("pinchout", flat, nz=1, thick=4.0)
+    assert np.ptp(sand.argmax(axis=1)) == 0
+
+
+def test_a_rougher_hurst_exponent_gives_a_rougher_edge_whatever_the_seed():
+    """Over 6 seeds the structure function slope of the edge rises with the drawn Hurst exponent: 0.2 < 0.4 < 0.6 <
+    0.8, each step."""
+    x_len, y_len, dx = 8000.0, 6000.0, 25.0
+    lags, mean = np.array([4, 8, 16, 32]), []
+    for hurst in (0.2, 0.4, 0.6, 0.8):
+        slopes = []
+        for seed in range(6):
+            built = strat_trap("pinchout", x_len, y_len, 2000.0, [4.0], seed=seed, dip=1.0, taper_angle=0.5, area=None,
+                               wander=200.0, range_m=3000.0, hurst=hurst, floor_m=dx)
+            sand, _, yc, _, _ = _sand("pinchout", built, nz=1, thick=4.0)
+            edge = yc[0][sand.argmax(axis=1)]
+            s = [np.mean((edge[lag:] - edge[:-lag]) ** 2) for lag in lags]
+            slopes.append(np.polyfit(np.log(lags * dx), np.log(s), 1)[0])
+        mean.append(np.mean(slopes))
+    assert np.all(np.diff(mean) > 0.05)
+
+
+def test_a_lens_is_a_mound_on_a_flat_base_and_the_fill_of_a_channel_hangs_from_a_flat_top():
+    """By default the base of the sand is the plane of the beds, at every column of the exported grid (the cells of
+    absent sand collapse on it), and the top is a mound: as thick as the sand in the middle (10 m, to 2 %) and concave
+    down along the dip axis where it is thick. With ``mound=False`` the top is the plane and the base sags below it as
+    a bowl, the lens hanging from a flat top as the fill of a channel does."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    layers = _layers(x_len, y_len, dx, [10.0], dz=1.0)
+    for mound in (True, False):
+        built = strat_trap("lens", x_len, y_len, 2000.0, [10.0], seed=2, dip=1.1, taper_angle=0.3, area=3.4e6,
+                           aspect=2.2, warp=0.0, mound=mound)
+        assert built["meta"]["mound"] is mound
+        Xc, Yc, zc, act = _build_geometry(layers, **built["kwargs"])
+        plane = 2000.0 + (Yc - 3000.0) * np.tan(np.radians(1.1))
+        thick = zc[:, :, -1] - zc[:, :, 0]
+        centre = thick[len(thick) // 2, 0::2]                            # along dip through the middle, at nodes
+        inner = (centre[1:-1] > 0.3 * 10.0) & (centre[:-2] > 0.3 * 10.0) & (centre[2:] > 0.3 * 10.0)
+        if mound:
+            assert np.allclose(zc[:, :, -1], plane + 10.0, atol=1e-6)
+            assert thick.max() == pytest.approx(10.0, rel=0.02)
+            assert (np.diff(centre, 2)[inner] < 1e-9).all() and inner.sum() > 5
+        else:
+            assert np.allclose(zc[:, :, 0], plane, atol=1e-6)
+            assert 0.0 < thick.max() < 10.0 and (np.diff(centre, 2)[inner] < 1e-9).all()
+            assert np.allclose(zc[:, :, -1] - plane, thick, atol=1e-6)         # the bowl is what the sand fills
+
+
+def test_a_barrier_zone_under_a_mound_stays_a_flat_slab_and_under_a_hung_lens_takes_the_sand_s_thickness():
+    """The barrier is the last zone: with a mound it keeps its thickness (8 m) under every column and its base is the
+    plane of the beds, 8 m under the mound's base; with the lens hung from a flat top it takes what the sand loses,
+    so that the interval keeps its 10 + 8 m."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    layers = _layers(x_len, y_len, dx, [10.0, 8.0], dz=2.0)
+    for mound in (True, False):
+        built = strat_trap("lens", x_len, y_len, 2000.0, [10.0, 8.0], seed=2, dip=1.1, taper_angle=0.3, area=3.4e6,
+                           aspect=2.2, warp=0.0, barrier=True, mound=mound)
+        Xc, Yc, zc, act = _build_geometry(layers, **built["kwargs"])
+        plane = 2000.0 + (Yc - 3000.0) * np.tan(np.radians(1.1))
+        assert act[:, :, 5:].all()
+        if mound:
+            assert np.allclose(zc[:, :, -1] - zc[:, :, 5], 8.0, atol=1e-6)
+            assert np.allclose(zc[:, :, -1], plane + 18.0, atol=1e-6)
+        else:
+            assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6)
+
+
+def test_the_taper_thins_without_a_step_or_a_hinge_to_the_edge():
+    """Across a straight edge the sand's thickness along dip, read at the nodes of the exported grid, rises from 0 to
+    its full 10 m over T / tan(angle) = 1,146 m (the wedge's width, to a node), its mean slope the drawn angle; it
+    leaves full thickness with no slope (under 10 % of the mean there, where a linear ramp has all of it) and ends at
+    the edge at twice the mean."""
+    x_len, y_len, dx = 4000.0, 6000.0, 25.0
+    angle = 0.5
+    built = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=1, dip=1.0, taper_angle=angle, area=None)
+    _, _, _, zc, _ = _sand("pinchout", built, nz=10, x_len=x_len, y_len=y_len, thick=10.0)
+    h = (zc[:, :, -1] - zc[:, :, 0])[len(zc) // 4, 0::2]                     # along dip, one column, at the nodes
+    y, line, mean = np.arange(len(h)) * dx, built["meta"]["line"], np.tan(np.radians(angle))
+    taper = (h > 1e-9) & (h < 10.0 - 1e-6)
+    assert taper.sum() * dx == pytest.approx(10.0 / mean, abs=2 * dx)
+    slope = np.diff(h) / dx
+    first, last = np.nonzero(taper)[0][[0, -1]]
+    assert slope[first] == pytest.approx(2.0 * mean, rel=0.1)
+    assert slope[last] < 0.1 * mean and np.all(np.diff(slope[first:last + 1]) <= 1e-12)
+    assert (h[last + 1] - h[first - 1]) / ((last + 2 - first) * dx) == pytest.approx(mean, rel=0.05)
+
+
+def test_relief_makes_the_top_and_the_base_of_the_zone_uneven_together_and_none_leaves_them_planes():
+    """``relief_sd`` is the rms of the relief of the zone's top, 2 m here (to 40 %: one surface of a few correlation
+    lengths), and the base follows it, the full sand being 10 m thick still; with none the top is exactly the plane."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    flat = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=3, dip=1.0, taper_angle=0.5, area=None)
+    rough = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=3, dip=1.0, taper_angle=0.5, area=None,
+                       relief_sd=2.0, relief_range=2000.0)
+    layers = _layers(x_len, y_len, dx, [10.0], dz=1.0)
+    Xc, Yc, zc0, _ = _build_geometry(layers, **flat["kwargs"])
+    _, _, zc, act = _build_geometry(layers, **rough["kwargs"])
+    plane = 2000.0 + (Yc - 3000.0) * np.tan(np.radians(1.0))
+    sheet = Yc > 4200.0                                                    # full sand, far from the line
+    top, base = zc[:, :, 0][sheet] - plane[sheet], zc[:, :, -1][sheet] - plane[sheet] - 10.0
+    assert np.allclose(zc0[:, :, 0][sheet], plane[sheet], atol=1e-9)
+    assert top.std() == pytest.approx(2.0, rel=0.4) and top.std() > 0.5
+    assert np.allclose(base, top, atol=1e-9)                              # the zone keeps its thickness
+    assert np.allclose(zc[:, :, -1][sheet] - zc[:, :, 0][sheet], 10.0, atol=1e-9)
+
+
+def _same_fields(a, b):
+    """Two builds that hold the same fields: the structure, the surfaces and every isochore agree on a grid."""
+    x, y = np.meshgrid(np.linspace(0.0, 8000.0, 41), np.linspace(0.0, 6000.0, 31), indexing="ij")
+    keys = [k for k in a["kwargs"] if k != "isochore"]
+    return a["meta"] == b["meta"] and all(np.array_equal(a["kwargs"][k](x, y), b["kwargs"][k](x, y)) for k in keys) \
+        and all(np.array_equal(f(x, y), g(x, y)) for f, g in zip(a["kwargs"].get("isochore", []),
+                                                                  b["kwargs"].get("isochore", [])))
+
+
+@pytest.mark.parametrize("kind", ["pinchout", "facies_change", "lens", "truncation", "onlap"])
+def test_everything_drawn_follows_the_seed(kind):
+    """The same seed gives the same tongues, edge and relief, to the bit, and another seed another one."""
+    thick, barrier = ([10.0, 6.0], True) if kind == "facies_change" else ([10.0], False)
+    kw = dict(barrier=barrier, dip=1.4, taper_angle=0.4, area=2.0e6, aspect=1.5, warp=0.2, wander=120.0, range_m=1200.0,
+              hurst=0.5, floor_m=60.0, relief_sd=1.5, **({} if kind == "lens" else dict(tongues=[(0.8e6, 0.5)])))
+    a, b = (strat_trap(kind, 8000.0, 6000.0, 2000.0, thick, seed=11, **kw) for _ in range(2))
+    assert _same_fields(a, b)
+    for seed in range(12, 40):                                             # the first seed whose lobes fit
+        try:
+            c = strat_trap(kind, 8000.0, 6000.0, 2000.0, thick, seed=seed, **kw)
+            break
+        except ValueError:
+            continue
+    assert not _same_fields(a, c)
+
+
+def test_a_facies_change_with_tongues_a_rough_edge_and_relief_keeps_the_thickness_of_its_interval():
+    """The barrier zone is the complement of the sand under every column whatever the edge: the interval is 10 + 8 m
+    thick everywhere, its cells active, and the sand has gone where the barrier alone is."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    built = strat_trap("facies_change", x_len, y_len, 2000.0, [10.0, 8.0], seed=5, barrier=True, dip=1.1,
+                       taper_angle=0.5, area=2.0e6, aspect=1.5, tongues=[(0.8e6, 0.5)], warp=0.2, wander=150.0,
+                       range_m=1200.0, hurst=0.5, floor_m=100.0, relief_sd=1.5)
+    layers = _layers(x_len, y_len, dx, [10.0, 8.0])
+    _, _, zc, act = _build_geometry(layers, **built["kwargs"])
+    assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6)
+    assert act[:, :, 5:].all() and not act[:, :, :5].all() and act[:, :, :5].any()
+    assert built["meta"]["net_layers"] == 1 and len(built["meta"]["tongues"]) == 2
+
+
+def test_the_erosion_surface_of_a_truncation_has_the_relief_the_wander_maps_to():
+    """A truncation's edge is where the beds meet an erosion surface with a relief of its own: the lateral wander of
+    the edge R is the vertical relief tan(discordance) R of the surface (``erosion_relief_m``: 0.9 m for a wander of
+    300 m at 0.3 degrees), so that the surface moves from the smooth one by that much in the strip (twice it at the
+    edge, nothing where it meets the beds: the rms over the strip is within a factor 2 of it), and the sand reaches
+    updip in the valleys and is cut back on the ridges by R."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    kw = dict(dip=1.2, taper_angle=0.3, area=None, range_m=1500.0, hurst=0.5, floor_m=100.0)
+    smooth = strat_trap("truncation", x_len, y_len, 2000.0, [10.0], seed=7, **kw)
+    rough = strat_trap("truncation", x_len, y_len, 2000.0, [10.0], seed=7, wander=300.0, **kw)
+    assert smooth["meta"]["erosion_relief_m"] == 0.0
+    assert rough["meta"]["erosion_relief_m"] == pytest.approx(300.0 * np.tan(np.radians(0.3)))
+    x, y = np.meshgrid((np.arange(160) + 0.5) * dx, (np.arange(120) + 0.5) * dx, indexing="ij")
+    e0, e1 = smooth["kwargs"]["erode_above"](x, y), rough["kwargs"]["erode_above"](x, y)
+    bed = 2000.0 + rough["kwargs"]["structure"](x, y)
+    strip = (e1 > bed + 1e-3) & (e1 < bed + 10.0 - 1e-3)
+    assert strip.sum() > 1000
+    assert np.std((e1 - e0)[strip]) == pytest.approx(rough["meta"]["erosion_relief_m"], rel=1.0)
+    relief = rough["meta"]["erosion_relief_m"]
+    assert (e1 - e0).max() > relief and (e1 - e0).min() < -relief
+    first = [np.argmax(e1[i] < bed[i] + 10.0 - 1e-3) for i in range(160)]      # the edge, row by row
+    assert np.ptp(first) * dx > 300.0                                       # it wanders by hundreds of metres
+
+
+@pytest.mark.parametrize("kind", ["pinchout", "truncation", "onlap"])
+def test_rough_edges_with_tongues_close_as_the_fine_map_of_their_geometry_says(kind):
+    """With tongues, a rough edge and relief the closure is whatever the geometry has, so it is checked against the
+    fine analytic map of the top (no cells, no ACTNUM): over 6 seeds the closure of the cells is within 20 % of it
+    in the median, and the largest trap of the fine map is never more than 40 m off (the cells' own thread of
+    columns can join or split bodies that the fine map keeps apart). Edges to the cell's own scale are not asked of
+    it: ``floor_m`` is two cells."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    layers = _layers(x_len, y_len, dx, [10.0], dz=2.0)
+    errors = []
+    for seed in range(20, 60):
+        try:
+            built = strat_trap(kind, x_len, y_len, 2000.0, [10.0], seed=seed, dip=1.2, taper_angle=0.3, area=2.0e6,
+                               aspect=1.2, tongues=[(1.0e6, 0.5), (0.7e6, 0.4)], warp=0.15, wander=120.0,
+                               range_m=1200.0, hurst=0.6, floor_m=2 * dx, relief_sd=1.0)
+        except ValueError:
+            continue
+        trap = trap_report(layers, built)[0]
+        fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
+        errors.append((abs(trap["height"] - fine["height"]), fine["height"]))
+        if len(errors) == 6:
+            break
+    assert len(errors) == 6
+    assert np.median([e / h for e, h in errors]) < 0.2 and max(e for e, _ in errors) < 40.0
+
+
+def test_the_report_gives_the_trap_with_the_most_closure_first():
+    """Two lenses of sand with no sand between them: the report lists the larger closure first (2,400 m of lens along
+    dip against 800 m: 42 m against 14), though the other's crest is shallower; the cells' own report keeps the
+    order of the crests."""
+    nx, ny, dx = 60, 60, 100.0
+    layer = Layer(nx, ny, 2, nx * dx, ny * dx, 10.0, 1500.0)
+    big = st.taper(None, 200.0, outline=_disc(3000.0, 3600.0, 1200.0), x_len=nx * dx, y_len=ny * dx)
+    small = st.taper(None, 100.0, outline=_disc(4500.0, 1200.0, 400.0), x_len=nx * dx, y_len=ny * dx)
+    built = dict(kwargs=dict(structure=st.ramp(1.0, azimuth=0.0), isochore=[big + small]),
+                 meta=dict(net_layers=1, barrier=False))
+    first, second = trap_report([layer], built)
+    assert first["height"] == pytest.approx(42.0, abs=2.5) and second["height"] == pytest.approx(14.0, abs=2.5)
+    assert first["crest_depth"] > second["crest_depth"]
+    _, _, zc, act = _build_geometry([layer], **built["kwargs"])
+    assert [trap["crest_depth"] for trap in zone_trap(zc, act, dx, dx)] == [second["crest_depth"], first["crest_depth"]]

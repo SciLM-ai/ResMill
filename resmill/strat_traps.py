@@ -63,26 +63,11 @@ def zone_top(zc, act, k=None):
     return np.where(act.any(axis=2), first, np.inf)
 
 
-def zone_trap(zc, act, dx, dy, k=None, column=None):
-    """The traps of the top of the active cells of a zone, absent columns being walls and the map's edge the only exit.
-
-    ``zc`` (2nx, 2ny, nk + 1) is the interface stack and ``act`` (nx, ny, nk) the active cells, both k top-down as
-    :func:`resmill.export._build_geometry` returns them; ``k`` (a slice of the layers, default all) picks the zone
-    that is net reservoir, so that a barrier zone of active cells under or beside it is not part of the surface
-    (:func:`zone_top`). ``column`` (m) is the oil column the updip seal holds if that is capillary; a trap holds no more
-    than that below its crest.
-
-    Returns one dict per body of connected columns that has any, the shallowest crest first: ``crest`` (i, j),
-    ``crest_depth``, ``spill_depth`` (the deepest top on the best way out, None when nothing reaches the body:
-    sealed all round), ``spill_point`` (the column beside the trap the oil leaves into, None when sealed),
-    ``limit_depth`` (the deepest contact the trap holds: the spill, the deepest top of a sealed body, or ``column``
-    below the crest, whichever is shallowest), ``limited_by`` ("spill", "sealed" or "barrier"), ``height``
-    (``limit_depth`` - ``crest_depth``), and the ``area`` (m2) and ``mask`` of the columns shallower than the limit
-    that join the crest (all of a sealed body: it fills to its deepest point). A body with no closure has height 0.
-    """
+def _traps(depth, dx, dy, column=None):
+    """The traps of a map of depths (nx, ny), infinite where the zone is absent (:func:`zone_trap`, whose result it is,
+    on any such map: the top of a zone's cells, or an analytic surface)."""
     if column is not None and column < 0.0:
         raise ValueError(f"column must not be negative, not {column}")
-    depth = zone_top(zc, act, k)
     alive = np.isfinite(depth)
     spill = _spill_levels(depth)
     bodies, count = ndimage.label(alive)
@@ -110,8 +95,42 @@ def zone_trap(zc, act, dx, dy, k=None, column=None):
     return sorted(traps, key=lambda trap: trap["crest_depth"])
 
 
+def zone_trap(zc, act, dx, dy, k=None, column=None):
+    """The traps of the top of the active cells of a zone, absent columns being walls and the map's edge the only exit.
+
+    ``zc`` (2nx, 2ny, nk + 1) is the interface stack and ``act`` (nx, ny, nk) the active cells, both k top-down as
+    :func:`resmill.export._build_geometry` returns them; ``k`` (a slice of the layers, default all) picks the zone
+    that is net reservoir, so that a barrier zone of active cells under or beside it is not part of the surface
+    (:func:`zone_top`). ``column`` (m) is the oil column the updip seal holds if that is capillary; a trap holds no more
+    than that below its crest.
+
+    Returns one dict per body of connected columns that has any, the shallowest crest first: ``crest`` (i, j),
+    ``crest_depth``, ``spill_depth`` (the deepest top on the best way out, None when nothing reaches the body:
+    sealed all round), ``spill_point`` (the column beside the trap the oil leaves into, None when sealed),
+    ``limit_depth`` (the deepest contact the trap holds: the spill, the deepest top of a sealed body, or ``column``
+    below the crest, whichever is shallowest), ``limited_by`` ("spill", "sealed" or "barrier"), ``height``
+    (``limit_depth`` - ``crest_depth``), and the ``area`` (m2) and ``mask`` of the columns shallower than the limit
+    that join the crest (all of a sealed body: it fills to its deepest point). A body with no closure has height 0.
+    """
+    return _traps(zone_top(zc, act, k), dx, dy, column)
+
+
+def _packed(widths, rng):
+    """Offsets (m) along strike that set bodies of the given full ``widths`` side by side in a random order with gaps
+    of 10-50 % of their mean width, the row centred on 0."""
+    widths = np.asarray(widths, dtype=float)
+    order = rng.permutation(len(widths))
+    w = widths[order]
+    start = np.concatenate([[0.0], np.cumsum(w[:-1] + rng.uniform(0.1, 0.5, len(w) - 1) * w.mean())])
+    centres = start + 0.5 * w
+    offsets = np.empty(len(w))
+    offsets[order] = centres - 0.5 * (start[-1] + w[-1])
+    return offsets
+
+
 def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.0, azimuth=0.0, taper_angle=0.3,
-               area=3.4e6, aspect=2.2, warp=0.3, wander=0.0, range_m=1000.0, nose=None):
+               area=3.4e6, aspect=2.2, warp=0.3, tongues=(), wander=0.0, range_m=1000.0, hurst=0.75, floor_m=None,
+               relief_sd=0.0, relief_range=2000.0, mound=True, nose=None):
     """Build one stratigraphic trap on a plane monocline: the arguments for :func:`resmill.export.to_grdecl`
     (``**result["kwargs"]``) and what was drawn and expected (``result["meta"]``). ``kind`` is one of :data:`KINDS`:
 
@@ -120,41 +139,54 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     * ``"facies_change"``: the same, with a barrier zone, the last of ``thicknesses``, whose isochore is the
       complement of the sand's so that the interval keeps its thickness. The barrier's cells stay active and are the
       seal, by their capillary entry pressure (:func:`barrier_column`).
-    * ``"lens"``: a lens of sand enclosed all round (by walls, or with ``barrier=True`` by a barrier zone).
+    * ``"lens"``: a lens of sand enclosed all round (by walls, or with ``barrier=True`` by a barrier zone). By
+      default (``mound``) a convex-up mound on a flat base, the base being the plane of the beds: the structure sinks
+      by T (1 - f) where the sand thins, and a barrier zone below stays a flat slab; ``mound=False`` hangs the lens
+      from a flat top, convex down, as the fill of a channel is, the barrier taking the thickness the sand loses.
     * ``"truncation"``: beds cut from above by an erosion surface that dips the same way less steeply, the older beds
       reaching farthest updip (``erode_above``: the top of the sand is the erosion surface in the subcrop strip, the
       sand's base is the bed's). ``taper_angle`` is the discordance, so it may not exceed ``dip``.
     * ``"onlap"``: layers that follow the top and end against an older surface that dips more steeply
       (``erode_below``), the younger layers reaching farthest updip.
-    * ``"pinchout_nose"``, ``"truncation_nose"``: the same edges, a straight line, across the crest of a nose
+    * ``"pinchout_nose"``, ``"truncation_nose"``: the same edges, a line, across the crest of a nose
       (a combination trap).
 
     ``x_len``, ``y_len`` (m) is the model, ``top`` the depth (m) of its stack's top at its centre, ``thicknesses`` the
     layers' thicknesses (m, top to bottom: the model's ``z_len``), ``dip`` the plane's dip (degrees) deepening along
-    ``azimuth``'s normal (as :func:`resmill.structure.ramp`) and ``seed`` fixes the lobes and the wander. The sand's
-    thickness ``T`` tapers to nothing over ``T / tan(taper_angle)`` m (a wedge 10 m thick at 0.3 degrees thins over
-    1.9 km: outcrop and field slopes of 0.006-0.6 degrees, step 6 research P9-P12); that is also the width of the
-    subcrop strip of a truncation (discordance) and the length over which layers onlap (onlap angle).
+    ``azimuth``'s normal (as :func:`resmill.structure.ramp`) and ``seed`` fixes the lobes, their places and the
+    roughness. The sand's thickness ``T`` tapers to nothing over ``T / tan(taper_angle)`` m, as the wedge of
+    :func:`resmill.structure.taper` (a wedge 10 m thick at 0.3 degrees thins over 1.9 km: outcrop and field slopes of
+    0.006-0.6 degrees, step 6 research P9-P12);
+    that is also the width of the subcrop strip of a truncation (discordance) and the length over which layers onlap
+    (onlap angle), and the half-width of a mound at most.
 
     A straight updip line has no closure, so the line has a tongue of sand ``area`` (m2) and ``aspect`` (strike over
-    dip length) protruding updip from it, a lobate half-ellipse (``warp``, :func:`resmill.structure.closure`), the
-    line wandering ``wander`` m rms with correlation ``range_m`` (``area=None``: a straight line, no closure). The
-    tongue's length along dip is L = 2 sqrt(area / (pi aspect)) and the closure is tan(dip) L, derived, not drawn
-    (``meta["closure_expected"]``): the oil spills over the sheet's updip edge, ``meta["spill_expected"]``. The warp
-    moves the ends of the lobes from the ellipse they were drawn as, so ``meta["closure_footprint"]`` gives tan(dip)
-    times the length along dip their footprint really has, which the measured closure follows (to a cell and 8 %). A
-    lens has that area and aspect as a whole ellipse in the middle of the model and closes by tan(dip) times its length
-    along dip, filling to its deepest point. A truncation's trap is larger than its tongue: where the sand is whole
-    across the tongue's base its top is the bed top, above the erosion surface at the tongue's edge.
+    dip length) protruding updip from it, a lobate half-ellipse (``warp``, :func:`resmill.structure.closure`): its
+    length along dip is L = 2 sqrt(area / (pi aspect)) and the closure is tan(dip) L, derived, not drawn
+    (``meta["closure_expected"]``): the oil spills over the sheet's updip edge, ``meta["spill_expected"]``.
+    ``area=None`` gives a straight line, no closure. ``tongues`` are further tongues, a sequence of (area, aspect) the caller draws
+    (digitate ones have an aspect under 1), set side by side along the line in an order and with gaps drawn from
+    ``seed``; a set that does not fit within 80 % of the model raises a ValueError. A lens has the area and aspect as
+    a whole ellipse in the middle of the model.
+
+    The sand limit is irregular at every scale from ``floor_m`` up to ``range_m``: ``wander`` (m) is the rms
+    displacement of the edge and of every tongue's outline, a :func:`resmill.structure.relief` surface of Hurst
+    exponent ``hurst`` (its box-counting dimension is 1.5 - hurst / 2 where it dominates: coasts 1.02-1.25, Mandelbrot
+    1967; the thickness contour of the Berea Sandstone about 1.3, USGS PP 259; ``floor_m`` is 1/32 of ``range_m`` unless
+    given). In a truncation or an onlap that is the relief of the erosion surface, tan(taper_angle) times ``wander``
+    (``meta["erosion_relief_m"]``): a valley of that depth preserves sand farther updip by its depth over the
+    discordance. ``relief_sd`` (m) is the low-amplitude relief of the zone's top and base together, a relief surface
+    of range ``relief_range``; it is part of the geometry the closure comes from.
 
     A combination trap takes its lateral closure from a ``nose``, the keywords of :func:`resmill.structure.closure`
     (``area``, ``height`` and ``aspect`` are required, ``height`` at most :data:`MAX_NOSE`; give no ``tilt``: the
     plane is the dip) centred where the line passes through its crest, so the trap closes by the nose's ``height``.
 
-    The shape sits on the dip direction through the middle of the model, as far updip as its rim fits within 80 % of
+    The shapes sit on the dip direction through the middle of the model, as far updip as their rims fit within 80 % of
     the model's size (a lens in the middle); a shape that does not fit, or lobes that the warp pushes within 2 % of the
     edge, raise a ValueError for the caller to draw again. ``meta["net_layers"]`` counts the layers that are sand, for
-    :func:`trap_report`.
+    :func:`trap_report`. The closure expected is that of the drawn main tongue with a smooth edge; with a rough one
+    (and ``tongues``, and ``relief_sd``) it is whatever the geometry has, read by :func:`trap_report` from the cells.
     """
     nosed, lens = kind in NOSED, kind == "lens"
     if kind not in KINDS:
@@ -174,6 +206,9 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     if kind.startswith("truncation") and taper_angle > dip:
         raise ValueError(f"the erosion surface must dip the same way as the beds, less steeply: the discordance "
                          f"taper_angle ({taper_angle}) cannot exceed the bed dip ({dip})")
+    if len(tongues) and (nosed or lens or area is None):
+        raise ValueError(f"tongues are further lobes on the edge of a pinch-out, truncation or onlap with an area, "
+                         f"not on a {kind}{' without one' if area is None else ''}")
     thicknesses = [float(t) for t in thicknesses]
     n_net = len(thicknesses) - bool(barrier)
     if n_net < 1:
@@ -185,75 +220,97 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     centre = np.array([0.5 * x_len, 0.5 * y_len])
     with np.errstate(divide="ignore"):                       # the model's half-length along dip, through its centre
         half = float(min(0.5 * x_len / abs(dip_dir[0]), 0.5 * y_len / abs(dip_dir[1])))
-    # how far the shape reaches updip and downdip of its line (of its middle, for a lens) and across it
+    ss = np.random.SeedSequence(seed).spawn(5)
+    # the shapes: how far each reaches updip and downdip of its line (of its middle, for a lens), half across it, and
+    # where along the line it sits
     if nosed:
         reach = np.sqrt(nose["area"] / (np.pi * nose["aspect"]))             # the nose's half-length along dip
-        up, down, wide, length = reach, reach, nose["aspect"] * reach, 0.0
+        sizes = [(reach, reach, nose["aspect"] * reach)]
+        lengths = [0.0]
+    elif area is None:
+        sizes, lengths = [(0.0, 0.0, 0.0)], [0.0]                            # a straight line: a point to fit
     else:
-        length = 0.0 if area is None else 2.0 * np.sqrt(area / (np.pi * aspect))     # the trap's length along dip
-        up, down, wide = (0.5 * length, 0.5 * length, 0.5 * aspect * length) if lens else \
-            (length, 0.0, 0.5 * aspect * length)
-    t = np.linspace(0.0, 2.0 * np.pi, 73)                                      # the rim of the shape, its base too
-    rim_along, rim_across = np.where(np.cos(t) < 0.0, up, down) * np.cos(t), wide * np.sin(t)
+        parts = [(float(area), float(aspect))] + [(float(a), float(r)) for a, r in tongues]
+        lengths = [2.0 * np.sqrt(a / (np.pi * r)) for a, r in parts]         # each trap's length along dip
+        sizes = [(0.5 * n, 0.5 * n, 0.5 * r * n) if lens else (n, 0.0, 0.5 * r * n)
+                 for n, (_, r) in zip(lengths, parts)]
+    offsets = _packed([2.0 * s[2] for s in sizes], np.random.default_rng(ss[0]))
+    length = lengths[0]
+    t = np.linspace(0.0, 2.0 * np.pi, 73)                                      # the rim of a shape, its base too
 
-    def fits(shift):                                   # the rim, the line ``shift`` m from the centre along dip
-        rim = (shift + rim_along)[:, None] * dip_dir + rim_across[:, None] * strike
-        return bool((np.abs(rim) <= 0.4 * np.array([x_len, y_len])).all())     # within 80 % of the model
+    def fits(shift):                                   # the rims, the line ``shift`` m from the centre along dip
+        for (up, down, wide), v in zip(sizes, offsets):
+            rim = (shift + np.where(np.cos(t) < 0.0, up, down) * np.cos(t))[:, None] * dip_dir \
+                + (v + wide * np.sin(t))[:, None] * strike
+            if not (np.abs(rim) <= 0.4 * np.array([x_len, y_len])).all():
+                return False
+        return True
 
-    grid = np.linspace(-half, half, 401)               # the line goes as far updip as the shape fits (a lens: centred)
+    grid = np.linspace(-half, half, 401)               # the line goes as far updip as the shapes fit (a lens: centred)
     first = [0] if lens else [k for k, shift in enumerate(grid) if fits(shift)][:1]
     if not first or (lens and not fits(0.0)):
-        raise ValueError(f"the trap ({up + down:.0f} m along dip, {2 * wide:.0f} m along strike) does not fit the "
-                         f"model: make the model larger or the area smaller")
+        raise ValueError(f"the trap ({sum(max(u + d, 2 * w) for u, d, w in sizes[:1]):.0f} m across, with "
+                         f"{max(len(sizes) - 1, 0)} more tongues) does not fit the model: make the model larger or "
+                         f"the area smaller")
     shift = 0.0
     if not lens:
         lo, shift = grid[max(first[0] - 1, 0)], grid[first[0]]
         for _ in range(40):                            # the fitting shifts are an interval: bisect to its updip end
             mid = 0.5 * (lo + shift)
             lo, shift = (lo, mid) if fits(mid) else (mid, shift)
-    seeds = [int(v) for v in np.random.default_rng(seed).integers(2 ** 31, size=3)]
     at = centre + shift * dip_dir
     ramp = st.ramp(dip, azimuth, center=tuple(centre))
     outline, line, structure = None, None, ramp
     if nosed:
-        fold = st.closure(azimuth=azimuth, center=tuple(at), seed=seeds[2], **nose)
+        fold = st.closure(azimuth=azimuth, center=tuple(at), seed=ss[3], **nose)
         structure, line = ramp + fold, float((at + fold.crest_offset) @ dip_dir)
     elif area is not None:
-        outline = st.closure(area if lens else 2.0 * area, 1.0, aspect=aspect if lens else 0.5 * aspect,
-                             azimuth=azimuth, center=tuple(at), warp=warp, seed=seeds[0])
-    if not (lens or nosed):
-        line = float(at @ dip_dir)
-    foot, reach = fold if nosed else outline, None
+        outlines = [st.closure(a if lens else 2.0 * a, 1.0, aspect=r if lens else 0.5 * r, azimuth=azimuth,
+                               center=tuple(at + v * strike), warp=warp, seed=k)
+                    for (a, r), v, k in zip(parts, offsets, ss[4].spawn(len(parts)))]
+        outline = outlines[0] if len(outlines) == 1 else st.Structure(
+            lambda x, y: np.minimum.reduce([o(x, y) for o in outlines]))
+    if not lens:
+        line = float(at @ dip_dir) if line is None else line
+    gx, gy = np.meshgrid(np.linspace(0.0, x_len, 301), np.linspace(0.0, y_len, 301), indexing="ij")
+    foot = fold if nosed else outline
     if foot is not None:
-        gx, gy = np.meshgrid(np.linspace(0.0, x_len, 301), np.linspace(0.0, y_len, 301), indexing="ij")
         inside, along_dip = foot(gx, gy) < 0.0, gx * dip_dir[0] + gy * dip_dir[1]
         edge = (np.minimum(gx, x_len - gx) < 0.02 * x_len) | (np.minimum(gy, y_len - gy) < 0.02 * y_len)
         watched = edge if lens else edge & (along_dip > line if nosed else along_dip < line)   # where the trap is
         if (watched & inside).any():
             raise ValueError("the lobes of the trap come within 2 % of the model's edge, over which it would leak: use "
                              "another seed, a smaller warp or a larger model")
-        if not nosed:                                   # the length along dip that the lobes really have
-            reach = float(np.ptp(along_dip[inside]) if lens else line - along_dip[inside].min())
-    f = st.taper(line, taper_m, azimuth, wander=0.0 if lens else wander, range_m=range_m, seed=seeds[1],
-                 outline=outline, x_len=x_len, y_len=y_len)
+    if relief_sd:
+        structure = structure + st.relief(relief_sd, relief_range, x_len, y_len, hurst, floor_m, seed=ss[2])
+    rough = st.relief(wander, range_m, x_len, y_len, hurst, floor_m, seed=ss[1]) if wander else None
+    if lens:
+        taper_m = min(taper_m, 0.5 * lengths[0] * min(1.0, aspect)) if mound else taper_m   # a whole mound
+    f = st.taper(line, taper_m, azimuth, outline=outline, x_len=x_len, y_len=y_len, edge=rough)
+    sink = st.Structure(lambda x, y: t_sand * (1.0 - f(x, y)))        # what the top lies below the base's plane
+    if lens and mound:
+        structure = structure + sink                                 # the base stays flat: the top is the mound's
     kwargs = dict(structure=structure)
     if kind.startswith("truncation"):                                  # the sand cut from above: the top is the surface
-        kwargs["erode_above"] = st.Structure(lambda x, y: top + structure(x, y) + t_sand * (1.0 - f(x, y)))
+        kwargs["erode_above"] = st.Structure(lambda x, y: top + structure(x, y) + sink(x, y))
     elif kind == "onlap":                                              # the layers cut from below: the base is
         kwargs["erode_below"] = st.Structure(lambda x, y: top + structure(x, y) + t_sand * f(x, y))
     else:
         ratio = t_sand / thicknesses[-1]                               # the barrier takes what the sand loses
-        complement = st.Structure(lambda x, y: 1.0 + ratio * (1.0 - f(x, y)))
+        complement = None if lens and mound else st.Structure(lambda x, y: 1.0 + ratio * (1.0 - f(x, y)))
         kwargs["isochore"] = [f] * n_net + ([complement] if barrier else [])
     tan_dip, along = np.tan(np.radians(dip)), float(centre @ dip_dir)
     cut = t_sand if kind.startswith("truncation") else 0.0              # a truncation's top is its sand's base
     level = top + tan_dip * ((along if lens else line) - along) + cut   # the depth of the line (of the middle)
     meta = dict(kind=kind, dip=dip, azimuth=azimuth, taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
                 area=None if nosed else area, aspect=None if nosed else aspect, warp=warp, wander=wander,
-                range_m=range_m, length=length, line=line,
-                nose=nose, barrier=bool(barrier), net_layers=n_net, seed=seed, spill_expected=None if lens else level,
+                range_m=range_m, hurst=hurst, floor_m=floor_m, relief_sd=relief_sd, mound=bool(lens and mound),
+                tongues=[dict(area=a, aspect=r, length=n, offset=float(v)) for (a, r), n, v in
+                         zip(parts, lengths, offsets)] if area is not None and not nosed else [],
+                length=length, line=line, nose=nose, barrier=bool(barrier), net_layers=n_net, seed=seed,
+                erosion_relief_m=np.tan(np.radians(taper_angle)) * wander,
+                spill_expected=None if lens else level,
                 closure_expected=nose["height"] if nosed else tan_dip * length,
-                closure_footprint=nose["height"] if nosed else tan_dip * reach if reach is not None else 0.0,
                 crest_expected=level - (nose["height"] if nosed else tan_dip * (length if not lens else 0.5 * length)))
     return dict(kwargs=kwargs, meta=meta)
 
@@ -270,4 +327,4 @@ def trap_report(model, built, column=None):
     cells = sum(layer.nz for layer in layers[:built["meta"]["net_layers"]])
     traps = zone_trap(zc, act, layers[0].dx, layers[0].dy, k=slice(0, cells), column=column)
     top = float(zone_top(zc, act, slice(cells, None)).min()) if built["meta"]["barrier"] else None
-    return [dict(trap, barrier_top=top) for trap in traps]
+    return [dict(trap, barrier_top=top) for trap in sorted(traps, key=lambda trap: -trap["height"])]

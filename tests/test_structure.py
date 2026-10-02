@@ -266,6 +266,12 @@ def test_the_spill_flood_ends_on_columns_of_infinite_depth():
     assert np.all(spill[ring <= 2] == np.inf) and np.all(spill[ring > 2] == 10.0)
 
 
+def _wedge(u):
+    """The profile of the thickness factor: u (2 - u) on [0, 1], flat where it reaches full thickness."""
+    u = np.clip(u, 0.0, 1.0)
+    return u * (2.0 - u)
+
+
 def test_relief_has_the_sd_it_was_given_and_a_structure_function_that_rises_as_lag_to_the_two_hurst():
     """Octaves of ``roughness`` whose ranges halve from ``range_m`` to ``floor_m`` and whose SDs fall as range^H, so
     that the surface is self-affine between them: the SD is the one asked for (to 8 %: the octaves are independent
@@ -299,49 +305,56 @@ def test_relief_refuses_what_has_no_octaves(kw, message):
         st.relief(10.0, 1500.0, 6000.0, 4000.0, **kw)
 
 
-def test_taper_is_a_linear_ramp_across_the_pinch_out_line():
-    """The factor is 0 at and beyond the line, 1 once ``taper_m`` in from it, and linear between: with the line at
-    1,000 m along the dip direction (+y, azimuth 0) and 400 m of taper, 0.25 / 0.5 / 1 at 1,100 / 1,200 / 1,400 m,
-    whatever x is."""
+def test_taper_is_a_wedge_that_reaches_full_thickness_without_a_hinge():
+    """The factor is 0 at and beyond the line and 1 once ``taper_m`` in from it, with u (2 - u) between (u the share
+    of the taper): 0.4375 / 0.75 / 1 at 100 / 200 / 400 m for a line at 1,000 m along the dip direction (+y, azimuth 0)
+    and 400 m of taper, whatever x is. Its slope is 0 where it reaches full thickness: a linear ramp would still
+    be rising there at 2.5e-3 per m."""
     f = st.taper(position=1000.0, taper_m=400.0)
     y = np.array([0.0, 999.0, 1000.0, 1100.0, 1200.0, 1399.0, 1400.0, 5000.0])
-    expected = [0.0, 0.0, 0.0, 0.25, 0.5, 399.0 / 400.0, 1.0, 1.0]
+    expected = _wedge((y - 1000.0) / 400.0)
+    assert expected[3] == pytest.approx(0.4375) and expected[4] == 0.75
     for x in (0.0, 123.4, 7000.0):
         assert f(x + 0.0 * y, y) == pytest.approx(expected)
+    ys = np.array([1399.99, 1400.0])
+    assert np.diff(f(0.0 * ys, ys))[0] / 0.01 < 1e-6
 
 
 def test_taper_follows_the_azimuth_normal():
     """The line lies across the azimuth normal ``(sin az, cos az)``, the dip direction of ``ramp``: at azimuth 90 the
-    factor depends on x alone, and at 30 degrees it is (x sin 30 + y cos 30 - position) / taper_m."""
+    factor depends on x alone, and at 30 degrees it is the profile of (x sin 30 + y cos 30 - position) / taper_m."""
     f = st.taper(position=200.0, taper_m=1000.0, azimuth=90.0)
-    assert f(700.0, 0.0) == pytest.approx(0.5) and f(700.0, 4321.0) == pytest.approx(0.5)
+    assert f(700.0, 0.0) == pytest.approx(0.75) and f(700.0, 4321.0) == pytest.approx(0.75)
     g = st.taper(position=200.0, taper_m=1000.0, azimuth=30.0)
     x, y = 500.0, 600.0
-    assert g(x, y) == pytest.approx((x * 0.5 + y * np.sqrt(3.0) / 2.0 - 200.0) / 1000.0) == pytest.approx(0.5696, abs=1e-4)
+    assert g(x, y) == pytest.approx(_wedge((x * 0.5 + y * np.sqrt(3.0) / 2.0 - 200.0) / 1000.0))
+    assert g(x, y) == pytest.approx(0.8148, abs=1e-3)
 
 
-def test_taper_gradient_is_the_drawn_angle():
-    """Thickness T times the factor changes by tan(angle) per metre across the taper: its steepest slope on a map is
-    T / taper_m, 10 m over 573 m for 1 degree, and the factor never decreases downdip."""
+def test_taper_gradient_averages_the_drawn_angle_and_is_steepest_at_the_tip():
+    """Thickness T times the factor rises by T over the taper, so its mean slope is the drawn angle (tan, 10 m over
+    573 m for 1 degree) and its steepest, at the pinch-out, twice that; it never decreases downdip."""
     t_m, angle = 10.0, 1.0
     f = st.taper(position=1500.0, taper_m=t_m / np.tan(np.radians(angle)))
     y = np.linspace(0.0, 4000.0, 8001)
     thickness = t_m * f(0.0 * y, y)
-    assert np.max(np.diff(thickness) / np.diff(y)) == pytest.approx(np.tan(np.radians(angle)), rel=1e-9)
+    slope = np.diff(thickness) / np.diff(y)
+    assert slope.max() == pytest.approx(2.0 * np.tan(np.radians(angle)), rel=1e-3)
+    assert thickness.max() / (y[thickness >= thickness.max()][0] - y[thickness > 0][0]) == pytest.approx(
+        np.tan(np.radians(angle)), rel=0.02)
     assert np.all(np.diff(thickness) >= 0.0) and thickness.min() == 0.0 and thickness.max() == t_m
 
 
-def test_taper_line_wanders_as_roughness_does():
-    """The line lies at ``position`` plus a ``roughness`` surface of SD ``wander`` and range ``range_m`` (the same
-    seed gives the same surface), so the factor is the straight-line one with that surface subtracted from the
-    distance in from the line."""
+def test_taper_edge_moves_the_limit_by_the_relief_it_is_given():
+    """``edge`` (a Structure, metres) is added to the distance in from the line: where it is +R the sand reaches R m
+    farther updip, so the factor is the profile of (y - position + R) / taper_m."""
     kw = dict(position=1500.0, taper_m=500.0)
-    f = st.taper(**kw, wander=60.0, range_m=1200.0, x_len=6000.0, y_len=4000.0, seed=5)
     rough = st.roughness(60.0, 1200.0, 6000.0, 4000.0, seed=5)
+    f = st.taper(**kw, edge=rough)
     X, Y = np.meshgrid(np.linspace(0.0, 6000.0, 61), np.linspace(0.0, 4000.0, 41), indexing="ij")
-    assert np.array_equal(f(X, Y), np.clip((Y - 1500.0 - rough(X, Y)) / 500.0, 0.0, 1.0))
-    edge = (f(X, Y) > 0.0).argmax(axis=1)                                 # the first row of sand in each column
-    assert edge.max() > edge.min()                                        # the line really is not straight
+    assert np.allclose(f(X, Y), _wedge((Y - 1500.0 + rough(X, Y)) / 500.0), atol=1e-12)
+    first = (f(X, Y) > 0.0).argmax(axis=1)                                # the first row of sand in each column
+    assert first.max() > first.min()                                      # the limit really is not straight
 
 
 def _disc(cx, cy, radius):
@@ -350,31 +363,31 @@ def _disc(cx, cy, radius):
 
 
 def test_taper_outline_tapers_from_the_footprint_edge():
-    """With an ``outline`` the sand is its footprint (where the outline is below ``level``) and the factor rises with
-    the distance in from its edge: a disc of radius 1,000 m with 400 m of taper has f = (1000 - r) / 400 up to 1 and
-    is 0 outside it, to within the raster step (about 8 m here)."""
+    """With an ``outline`` the sand is its footprint (where the outline is below ``level``) and the factor is the
+    profile of the distance in from its edge over ``taper_m``: a disc of radius 1,000 m with 400 m of taper has
+    (1000 - r) / 400 up to 1 and is 0 outside it, to within the raster step (about 8 m here)."""
     f = st.taper(None, 400.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0)
     r = np.array([0.0, 300.0, 599.0, 700.0, 900.0, 990.0, 1010.0, 1500.0])
-    assert f(3000.0 + r, 2000.0 + 0.0 * r) == pytest.approx(np.clip((1000.0 - r) / 400.0, 0.0, 1.0), abs=0.03)
+    assert f(3000.0 + r, 2000.0 + 0.0 * r) == pytest.approx(_wedge((1000.0 - r) / 400.0), abs=0.03)
     assert f(3000.0, 2000.0 + r[0]) == 1.0 and f(0.0, 0.0) == 0.0 and f(5500.0, 3900.0) == 0.0
 
 
 def test_taper_outline_unites_with_the_line():
     """A line and an outline together are the sand of both: a disc centred on the line is a tongue protruding updip
-    from the sheet (downdip of the line the sheet's ramp, updip of it the disc's)."""
+    from the sheet (downdip of the line the sheet's ramp, updip of it the disc's), the distance measured from the
+    edge of the union, so the taper is as long round the tongue's base as along the sheet."""
     f = st.taper(2000.0, 400.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0)
-    assert f(500.0, 2100.0) == pytest.approx(0.25)                          # the sheet, 100 m down from the line
+    assert f(500.0, 2100.0) == pytest.approx(_wedge(0.25), abs=0.02)       # the sheet, 100 m down from the line
     assert f(500.0, 1900.0) == 0.0                                          # updip of the line, outside the disc
-    assert f(3000.0, 1000.0) == pytest.approx(0.0, abs=0.03)                # the disc's tip, 1,000 m updip of its centre
-    assert f(3000.0, 1200.0) == pytest.approx(0.5, abs=0.03)                # 200 m in from it
+    assert f(3000.0, 1000.0) == pytest.approx(0.0, abs=0.03)                # the disc's tip, 1,000 m updip
+    assert f(3000.0, 1200.0) == pytest.approx(_wedge(0.5), abs=0.03)       # 200 m in from it
     assert f(3000.0, 1500.0) == pytest.approx(1.0, abs=0.03)                # 500 m in from it: full thickness
+    assert f(3000.0, 2600.0) == 1.0                                         # downdip of the line, inside both
 
 
 @pytest.mark.parametrize("kw,message", [
     (dict(position=1000.0, taper_m=0.0), "taper_m"),
     (dict(position=None, taper_m=100.0), "position"),
-    (dict(position=1000.0, taper_m=100.0, wander=10.0, range_m=500.0), "x_len"),
-    (dict(position=1000.0, taper_m=100.0, wander=10.0, x_len=4000.0, y_len=4000.0), "range_m"),
     (dict(position=None, taper_m=100.0, outline=_disc(0.0, 0.0, 5.0)), "x_len"),
 ])
 def test_taper_refuses_what_it_cannot_draw(kw, message):
