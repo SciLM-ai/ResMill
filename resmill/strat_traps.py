@@ -152,7 +152,7 @@ def _packed(widths, rng):
     return offsets
 
 
-def _check(kind, barrier, column, dip, taper_angle, area, tongues, thicknesses, stagger, nose):
+def _check(kind, barrier, column, mound, dip, taper_angle, area, tongues, thicknesses, stagger, nose):
     """Refuse what :func:`strat_trap` cannot build; returns the number of sand layers (the thicknesses less the
     barrier's)."""
     nosed, lens = kind in NOSED, kind == "lens"
@@ -165,6 +165,8 @@ def _check(kind, barrier, column, dip, taper_angle, area, tongues, thicknesses, 
     if bool(barrier) != (column is not None):
         raise ValueError("a barrier zone needs the oil column it holds (column, m: Berg's barrier_column) and only a "
                          "barrier zone has one")
+    if mound and kind not in ("lens", "pinchout", "facies_change"):
+        raise ValueError(f"a convex-up top is the shape of a lens, a pinch-out tongue or a facies change, not of a {kind}")
     if lens and area is None:
         raise ValueError("a lens needs an area")
     if nosed != (nose is not None):
@@ -357,20 +359,26 @@ def _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_
 
 def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.0, azimuth=0.0, taper_angle=0.3,
                area=3.4e6, aspect=2.2, warp=0.3, tongues=(), stagger=0.0, wander=0.0, range_m=1000.0, hurst=0.75,
-               floor_m=None, cell=None, relief_sd=0.0, relief_range=2000.0, mound=True, nose=None, column=None):
+               floor_m=None, cell=None, relief_sd=0.0, relief_range=2000.0, mound=None, nose=None, column=None):
     """Build one stratigraphic trap on a plane monocline: the arguments for :func:`resmill.export.to_grdecl`
     (``**result["kwargs"]``) and what was drawn and expected (``result["meta"]``). ``kind`` is one of :data:`KINDS`:
 
     * ``"pinchout"``: a sand wedge that thins to nothing updip. Every layer thins together (the thickness factor of
       :func:`resmill.structure.taper` as ``isochore``) and the columns where the sand has gone are inactive: walls.
+      Its tongues hang from the bedding plane (the top is the plane, the base a bowl) or, with ``mound=True``, have a
+      convex-up top on a flat base as a lens does: the top sinks toward the tongue's edge by T (1 - f), deepest (by the
+      sand's thickness) at the tip. The closure is then that of the flat top to 2 m, the crest and the spill 2-10 m
+      deeper (measured over dips of 0.5-1.1 degrees and tapers of 0.3-1.2): the sampler draws half of the tongues
+      each way [J] (the owner, 2026-10-02: Sussex ridges have convex tops, Berea tongues are bedded).
     * ``"facies_change"``: the same, with a barrier zone, the last of ``thicknesses``, whose isochore is the
       complement of the sand's so that the interval keeps its thickness. The barrier's cells are the seal, by their
       capillary entry pressure (:func:`barrier_column`), under the sand and in a rim round it (see ``column``).
     * ``"lens"``: a lens of sand enclosed all round (by walls, or with ``barrier=True`` by a barrier zone). By
-      default (``mound``) a convex-up mound on a flat base, the base being the plane of the beds: the structure sinks
-      by T (1 - f) where the sand thins, and a barrier zone below stays a flat slab (in its rim); ``mound=False`` hangs
-      the lens from a flat top, convex down, as the fill of a channel is, the barrier taking the thickness the sand
-      loses.
+      default (``mound``: None means True for a lens, False for the others) a convex-up mound on a flat base, the base
+      being the plane of the beds: the structure sinks by T (1 - f) where the sand thins, and a barrier zone below
+      stays a flat slab (in its rim); ``mound=False`` hangs the lens from a flat top, convex down, as the fill of a
+      channel is, the barrier taking the thickness the sand loses. A truncation, an onlap and the nosed kinds have no
+      such top (``mound=True`` is refused).
     * ``"truncation"``: beds cut from above by an erosion surface that dips the same way less steeply, the older beds
       reaching farthest updip (``erode_above``: the top of the sand is the erosion surface in the subcrop strip, the
       sand's base is the bed's). ``taper_angle`` is the discordance, so it may not exceed ``dip``.
@@ -441,7 +449,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     thicknesses = [float(t) for t in thicknesses]
     _check_numbers(dip=dip, area=area, aspect=aspect, warp=warp, stagger=stagger, wander=wander, range_m=range_m,
                    floor_m=floor_m, cell=cell, relief_sd=relief_sd, relief_range=relief_range, column=column)
-    n_net = _check(kind, barrier, column, dip, taper_angle, area, tongues, thicknesses, stagger, nose)
+    mound = lens if mound is None else bool(mound)        # a lens is a mound unless it is the fill of a channel
+    n_net = _check(kind, barrier, column, mound, dip, taper_angle, area, tongues, thicknesses, stagger, nose)
     t_sand = sum(thicknesses[:n_net])
     taper_m = t_sand / np.tan(np.radians(taper_angle))
     az = np.radians(azimuth)
@@ -464,11 +473,11 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     if relief_sd:
         structure = structure + st.relief(relief_sd, relief_range, x_len, y_len, hurst, floors[1], seed=ss[2])
     rough = st.relief(wander, range_m, x_len, y_len, hurst, floors[0], seed=ss[1]) if wander else None
-    if lens:
-        taper_m = min(taper_m, 0.5 * lengths[0] * min(1.0, aspect)) if mound else taper_m   # a whole mound
+    if lens and mound:
+        taper_m = min(taper_m, 0.5 * lengths[0] * min(1.0, aspect))                       # a whole mound
     f, layers_f = _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_net)
     sink = st.Structure(lambda x, y: t_sand * (1.0 - f(x, y)))        # what the top lies below the base's plane
-    if lens and mound:
+    if mound:
         structure = structure + sink                                 # the base stays flat: the top is the mound's
     rim_m = RIM_SHARE * column / np.tan(np.radians(dip)) if barrier else None
     kwargs = dict(structure=structure)
@@ -477,7 +486,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     elif kind == "onlap":                                              # the layers cut from below: the base is
         kwargs["erode_below"] = st.Structure(lambda x, y: top + structure(x, y) + t_sand * f(x, y))
     else:
-        kwargs["isochore"] = layers_f + ([_barrier(thicknesses, layers_f, lens and mound, rim_m, line, outline,
+        kwargs["isochore"] = layers_f + ([_barrier(thicknesses, layers_f, mound, rim_m, line, outline,
                                                    azimuth, x_len, y_len, rough)] if barrier else [])
     nominal = nose["height"] if nosed else np.tan(np.radians(dip)) * length
     if wander or relief_sd:                                            # the roughness may have destroyed the trap
@@ -492,7 +501,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                 taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
                 area=None if nosed else area, aspect=None if nosed else aspect, warp=warp, stagger=stagger,
                 wander=wander, range_m=range_m, hurst=hurst, floor_m=floors[0], cell=cell, relief_sd=relief_sd,
-                mound=bool(lens and mound),
+                mound=mound,
                 tongues=[dict(area=a, aspect=r, length=n, offset=float(v)) for (a, r), n, v in
                          zip(parts, lengths, offsets)] if area is not None and not nosed else [],
                 length=length, line=line, nose=nose, barrier=bool(barrier), column=column, rim_m=rim_m, net_layers=n_net, seed=seed,

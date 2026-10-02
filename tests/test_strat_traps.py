@@ -1105,7 +1105,7 @@ def _barrier_model(kind="facies_change", mound=None, dx=50.0, thick=(10.0, 8.0),
     return built, layers, zc, act
 
 
-@pytest.mark.parametrize("kind,mound", [("facies_change", None), ("lens", True), ("lens", False)])
+@pytest.mark.parametrize("kind,mound", [("facies_change", None), ("facies_change", True), ("lens", True), ("lens", False)])
 def test_the_barrier_is_a_rim_a_quarter_of_its_column_over_the_dip_wide_round_the_sand_and_walls_beyond(kind, mound):
     """The barrier zone lies under every column of sand and out to ``rim`` beyond its edge, a quarter [J] of the most
     that leaves the oil a column: column / tan(dip) is 687 m for 12 m at 1 degree, so the rim is 172 m, to a cell. Beyond
@@ -1140,7 +1140,7 @@ def _shallowest(zc, act, k):
     return tops[:, :, k][act[:, :, k] > 0].min()
 
 
-@pytest.mark.parametrize("kind,mound", [("facies_change", None), ("lens", True), ("lens", False)])
+@pytest.mark.parametrize("kind,mound", [("facies_change", None), ("facies_change", True), ("lens", True), ("lens", False)])
 def test_the_report_gives_a_limit_that_keeps_the_barrier_dry_and_the_rim_leaves_most_of_the_column(kind, mound):
     """The limit is the smaller of the spill and the shallowest top of the barrier plus its column (below the crest's
     own reach if the barrier's top is shallower than the crest), so that a contact (the sand's oil-water contact) at the
@@ -1171,3 +1171,78 @@ def test_a_barrier_needs_the_column_it_holds_and_a_column_needs_a_barrier():
         strat_trap("pinchout", thicknesses=[10.0], column=10.0, **args)
     with pytest.raises(ValueError, match="column"):
         strat_trap("facies_change", thicknesses=[10.0, 8.0], barrier=True, column=0.0, **args)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The top of a tongue: convex up on a flat base or hung from the bedding plane (the owner's ruling of 2026-10-02)
+
+@pytest.mark.parametrize("kind", ["pinchout", "facies_change"])
+def test_a_tongue_has_a_convex_up_top_on_a_flat_base_when_asked_and_hangs_from_the_bedding_plane_by_default(kind):
+    """The geometry of the lens's mound, for the tongues of a pinch-out or a facies change: with ``mound=True`` the base of
+    the sand is the plane of the beds 10 m down at every column, and the top sinks by T (1 - f) toward the edge (the
+    thickness factor f), so it is deepest at the tip; by default, and with ``mound=False``, the top is the plane of the
+    beds and the base is a bowl. With a barrier zone the interval keeps its 10 + 8 m under the bowl and the barrier is
+    a flat slab of 8 m under the mound."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    thick, barrier = ([10.0, 8.0], True) if kind == "facies_change" else ([10.0], False)
+    layers = _layers(x_len, y_len, dx, thick, dz=1.0)
+    for mound in (None, False, True):
+        built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=2, barrier=barrier, column=12.0 if barrier else None,
+                           dip=1.1, taper_angle=0.4, area=3.4e6, aspect=2.2, warp=0.0, mound=mound)
+        assert built["meta"]["mound"] is bool(mound)
+        Xc, Yc, zc, act = _build_geometry(layers, **built["kwargs"])
+        plane = 2000.0 + (Yc - 3000.0) * np.tan(np.radians(1.1))
+        f = built["kwargs"]["isochore"][0](Xc, Yc)
+        top, base = zc[:, :, 0], zc[:, :, 10]                              # the sand's top and base (10 layers of 1 m)
+        if mound:
+            assert np.allclose(top, plane + 10.0 * (1.0 - f), atol=1e-6) and np.allclose(base, plane + 10.0, atol=1e-6)
+            assert (f == 0.0).any() and np.allclose((top - plane)[f == 0.0], 10.0)      # sunk by T where the sand has gone
+            if barrier:
+                inside = np.repeat(np.repeat(ndimage.binary_erosion(act[:, :, :10].any(axis=2), iterations=4), 2, axis=0),
+                                   2, axis=1)
+                assert np.allclose((zc[:, :, -1] - base)[inside], 8.0, atol=1e-6)
+        else:
+            assert np.allclose(top, plane, atol=1e-6) and np.allclose(base - plane, 10.0 * f, atol=1e-6)
+            if barrier:
+                inside = np.repeat(np.repeat(ndimage.binary_erosion(act[:, :, :10].any(axis=2), iterations=4), 2, axis=0),
+                                   2, axis=1)
+                assert np.allclose((zc[:, :, -1] - zc[:, :, 0])[inside], 18.0, atol=1e-6)
+
+
+@pytest.mark.parametrize("kind", ["pinchout", "facies_change"])
+@pytest.mark.parametrize("dip,taper,shift", [(1.1, 0.4, 10.0), (0.5, 1.2, 3.3)], ids=["no ridge", "ridge along the edge"])
+def test_the_trap_measure_is_right_for_both_tops_and_the_convex_top_sinks_the_crest_and_not_the_closure(kind, dip, taper,
+                                                                                                        shift):
+    """Flat or convex, the cells' closure is that of the fine analytic map (1.5 cells' rise and 8 %). The convex top
+    puts crest and spill down together, by up to the sand's thickness (10 m: the tip's top lies T below the plane), so
+    that the closure stays that of the flat top, to 2 m; where the taper is steeper than the dip (2 tan(taper) >
+    tan(dip)) the top of the edge is a ridge along it, and the spill (the ridge's low point) moves less (3 m)."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    thick, barrier = ([10.0, 8.0], True) if kind == "facies_change" else ([10.0], False)
+    layers = _layers(x_len, y_len, dx, thick, dz=2.0)
+    traps = {}
+    for mound in (False, True):
+        built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=2, barrier=barrier, column=12.0 if barrier else None,
+                           dip=dip, taper_angle=taper, area=3.4e6, aspect=2.2, warp=0.2, wander=60.0, range_m=1000.0,
+                           relief_sd=0.5, cell=dx, mound=mound)
+        (trap,) = trap_report(layers, built)
+        fine = _fine_traps(built, 2000.0, x_len, y_len)[0]
+        assert trap["closure"] == pytest.approx(fine["height"], abs=1.5 * np.tan(np.radians(dip)) * dx + 0.08 * fine[
+            "height"])
+        traps[mound] = trap
+    flat, convex = traps[False], traps[True]
+    assert convex["closure"] == pytest.approx(flat["closure"], abs=2.0)
+    assert 1.0 < convex["crest_depth"] - flat["crest_depth"] <= 10.0 + 1.0
+    assert convex["spill_depth"] - flat["spill_depth"] == pytest.approx(shift, abs=1.0)
+    if barrier:                       # the barrier logic keeps both dry; the mound's flat slab never reaches above its crest
+        assert convex["limited_by"] == flat["limited_by"] == "barrier"
+        assert flat["height"] - 1.5 <= convex["height"] <= 12.0 + 1e-9 and 0.5 * 12.0 < flat["height"] <= 12.0
+
+
+@pytest.mark.parametrize("kind,extra", [("truncation", dict(taper_angle=0.3)), ("onlap", {}),
+                                        ("pinchout_nose", dict(nose=NOSE, area=None)),
+                                        ("truncation_nose", dict(nose=NOSE, area=None))])
+def test_a_convex_up_top_is_not_for_an_erosion_surface_or_a_nose(kind, extra):
+    with pytest.raises(ValueError, match="convex"):
+        strat_trap(kind, 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.0, mound=True, **extra)
+    strat_trap(kind, 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.0, mound=False, **extra)
