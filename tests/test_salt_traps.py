@@ -218,6 +218,8 @@ def test_a_taper_that_leaves_a_flatter_dip_than_the_angle_is_refused():
     (dict(taper=60.0, loss=0.2), "dip"),                                  # a sequence takes no dip of its own
     (dict(loss=0.2), "taper"),                                            # a plain upturn takes no truncation
     (dict(wall_at=0.0), "wall_at"),
+    (dict(wall_at=1.0), "wall_at"),                                       # the contact cannot pass the closure's far edge
+    (dict(wall_at=1.5), "wall_at"),
     (dict(body=dict(axes=(1000.0,))), "axes"),
 ])
 def test_arguments_that_do_not_say_one_thing_are_refused(override, message):
@@ -329,6 +331,21 @@ def test_the_outline_can_be_cut_from_the_structure_with_the_upturn_and_is_otherw
     assert shares["default"] > 0.4 and shares["upturned"] < 0.01
 
 
+def test_an_overhang_on_a_sequence_hangs_from_the_beds_as_the_unconformity_leaves_them():
+    """The overhang's reference depth is ``neck`` of its height H below the lifted beds' top at the contact, and on a
+    sequence the lift is what the unconformity leaves: ``relief (1 - cut)``. A hook cut by 0.5 (loss 0.2 of 60 m) over
+    a 346 m lift hangs its overhang 173 m lower than one that ignored the cut would."""
+    built = flank(width=200.0, taper=60.0, angle=None, loss=0.9, dip=None,
+                  body=dict(axes=(1000.0, 1000.0), overhang=(300.0, 200.0)), neck=0.6)
+    meta = built["meta"]
+    assert 0.05 < meta["cut"] < 1.0
+    fold = fold_of()
+    z_top = TOP + float(fold(np.array([meta["contact"][0]]), np.array([meta["contact"][1]]))[0])
+    lifted = z_top - meta["relief_m"] * (1.0 - meta["cut"])
+    assert meta["z_ref"] == pytest.approx(lifted + 0.6 * 200.0, abs=0.01)
+    assert abs(meta["z_ref"] - (z_top - meta["relief_m"] + 0.6 * 200.0)) > 0.05 * meta["relief_m"]
+
+
 def test_the_labels_say_what_was_built():
     meta = flank(faults=dict(density=1.0, seed=5))["meta"]
     assert meta["closure_area_km2"] == pytest.approx(math.pi * RADIUS ** 2 / 1e6, rel=0.08)
@@ -376,6 +393,25 @@ def test_a_truncated_base_cuts_the_trap_by_its_share_of_the_relief_at_the_crest(
     assert float(base(np.array([at[0]]), np.array([at[1]]))[0]) == pytest.approx(expected, abs=0.01)
     assert built["meta"]["depth_base_at_crest"] == pytest.approx(expected, abs=0.01)
     assert built["meta"]["closure_height_m"] == pytest.approx(trap["height"]) and built["meta"]["crest_depth_m"] == pytest.approx(depth[crest])
+
+
+def test_the_crest_depth_is_that_of_the_crest_column_not_the_maps_shallowest():
+    """On a low relief with rough horizon the map's shallowest column (a micro-high far from the trap) is not the crest
+    column of the trap: the label's ``crest_depth_m`` is the depth of the column ``crest`` names, and the base is placed
+    on that. The first seed of 1-40 whose map minimum lies over a metre above it is used."""
+    low = dict(CLOSURE, height=20.0)
+    x, y = np.meshgrid((np.arange(NX) + 0.5) * DX, (np.arange(NY) + 0.5) * DX, indexing="ij")
+    for seed in range(1, 41):
+        rough = dict(sd=6.0, range_m=800.0, seed=seed)
+        depth = TOP + fold_of(low)(x, y) + st.roughness(x_len=X_LEN, y_len=Y_LEN, **rough)(x, y)
+        built = subsalt(closure=low, roughness=rough, cut=0.5)
+        at = built["meta"]["crest"]
+        cell = (int(at[0] // DX), int(at[1] // DX))
+        if depth.min() < depth[cell] - 1.0:
+            assert built["meta"]["crest_depth_m"] == pytest.approx(float(depth[cell]), abs=1e-6)
+            assert built["meta"]["crest_depth_m"] > depth.min() + 1.0
+            return
+    pytest.fail("no rough low relief of seeds 1-40 has a shallower column than its trap's crest")
 
 
 def test_the_trap_is_read_on_the_rough_surface_at_the_shallowest_column_near_the_crest():
