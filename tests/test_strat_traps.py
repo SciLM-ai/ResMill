@@ -224,6 +224,22 @@ def test_a_pinch_out_tongue_closes_by_the_dip_times_its_length_and_has_the_area_
     assert area * 0.97 < trap["area"] < area * 1.10
 
 
+@pytest.mark.parametrize("azimuth", [30.0, 90.0, 135.0, 250.0, 315.0])
+@pytest.mark.parametrize("kind", ["pinchout", "lens"])
+def test_a_trap_on_a_dip_in_any_direction_closes_by_the_same_dip_times_its_length(kind, azimuth):
+    """The model is a rectangle and the dip may point anywhere: the shape is placed along the dip direction through
+    the centre of the model, whatever its azimuth (the P50 trap: 27 m of closure, to the rise of a cell and a half,
+    and its area to 5 % below and 15 % above)."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    built = strat_trap(kind, x_len, y_len, 2000.0, [10.0], seed=1, dip=1.1, taper_angle=0.5, area=3.4e6, aspect=2.2,
+                       warp=0.0, azimuth=azimuth)
+    (trap,) = trap_report(_layers(x_len, y_len, dx, [10.0]), built)
+    cell = 1.5 * np.tan(np.radians(1.1)) * dx
+    assert trap["height"] == pytest.approx(built["meta"]["closure_expected"], abs=cell + 0.02 * 27.0)
+    assert trap["crest_depth"] == pytest.approx(built["meta"]["crest_expected"], abs=cell)
+    assert 3.4e6 * 0.95 < trap["area"] < 3.4e6 * 1.15
+
+
 def test_a_straight_pinch_out_line_on_a_plane_monocline_has_no_closure():
     """Every point of the line lies at one depth, so the oil spills along it: the trap has no height or area."""
     built = strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.0, taper_angle=0.5, area=None)
@@ -419,6 +435,7 @@ def test_an_updip_edge_across_a_nose_closes_by_the_height_of_the_nose(kind):
     (dict(kind="pinchout_nose", nose=dict(NOSE, height=400.0)), "335"),
     (dict(kind="truncation_nose", nose=NOSE, dip=0.4, taper_angle=0.5), "dip"),
     (dict(kind="pinchout_nose", nose=dict(NOSE, area=90.0e6)), "fit"),
+    (dict(kind="pinchout_nose", nose=dict(NOSE, tilt=0.2)), "tilt"),
     (dict(kind="pinchout", nose=NOSE), "nose"),
 ])
 def test_a_nose_belongs_to_the_combination_kinds_and_is_capped_at_the_largest_closure_found(kw, message):

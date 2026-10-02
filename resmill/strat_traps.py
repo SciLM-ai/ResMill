@@ -161,6 +161,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
         raise ValueError(f"a nose (its area, height and aspect) is what {', '.join(NOSED)} need, not a {kind}")
     if nosed and not 0.0 < nose["height"] <= MAX_NOSE:
         raise ValueError(f"the nose's height must lie between 0 and {MAX_NOSE:.0f} m, the closure of Kuparuk")
+    if nosed and nose.get("tilt", 0.0):
+        raise ValueError("a nose takes no tilt: the plane is the dip")
     if kind.startswith("truncation") and taper_angle > dip:
         raise ValueError(f"the erosion surface must dip the same way as the beds, less steeply: the discordance "
                          f"taper_angle ({taper_angle}) cannot exceed the bed dip ({dip})")
@@ -173,8 +175,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     az = np.radians(azimuth)
     dip_dir, strike = np.array([np.sin(az), np.cos(az)]), np.array([np.cos(az), -np.sin(az)])
     centre = np.array([0.5 * x_len, 0.5 * y_len])
-    half = 0.5 * float(np.abs(np.array([x_len, y_len]) * dip_dir).sum())      # half the model's extent along dip
-    half_strike = 0.5 * float(np.abs(np.array([x_len, y_len]) * strike).sum())
+    with np.errstate(divide="ignore"):                       # the model's half-length along dip, through its centre
+        half = float(min(0.5 * x_len / abs(dip_dir[0]), 0.5 * y_len / abs(dip_dir[1])))
     # how far the shape reaches updip and downdip of its line (of its middle, for a lens) and across it
     if nosed:
         reach = np.sqrt(nose["area"] / (np.pi * nose["aspect"]))             # the nose's half-length along dip
@@ -183,10 +185,24 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
         length = 0.0 if area is None else 2.0 * np.sqrt(area / (np.pi * aspect))     # the trap's length along dip
         up, down, wide = (0.5 * length, 0.5 * length, 0.5 * aspect * length) if lens else \
             (length, 0.0, 0.5 * aspect * length)
-    shift = 0.0 if lens else up - 0.8 * half                                   # the line, from the centre along dip
-    if wide > 0.95 * half_strike or shift + down > 0.9 * half or shift - up < -0.9 * half:
+    t = np.linspace(0.0, 2.0 * np.pi, 73)                                      # the rim of the shape, its base too
+    rim_along, rim_across = np.where(np.cos(t) < 0.0, up, down) * np.cos(t), wide * np.sin(t)
+
+    def fits(shift):                                   # the rim, the line ``shift`` m from the centre along dip
+        rim = (shift + rim_along)[:, None] * dip_dir + rim_across[:, None] * strike
+        return bool((np.abs(rim) <= 0.4 * np.array([x_len, y_len])).all())     # within 80 % of the model
+
+    grid = np.linspace(-half, half, 401)               # the line goes as far updip as the shape fits (a lens: centred)
+    first = [0] if lens else [k for k, shift in enumerate(grid) if fits(shift)][:1]
+    if not first or (lens and not fits(0.0)):
         raise ValueError(f"the trap ({up + down:.0f} m along dip, {2 * wide:.0f} m along strike) does not fit the "
                          f"model: make the model larger or the area smaller")
+    shift = 0.0
+    if not lens:
+        lo, shift = grid[max(first[0] - 1, 0)], grid[first[0]]
+        for _ in range(40):                            # the fitting shifts are an interval: bisect to its updip end
+            mid = 0.5 * (lo + shift)
+            lo, shift = (lo, mid) if fits(mid) else (mid, shift)
     seeds = [int(v) for v in np.random.default_rng(seed).integers(2 ** 31, size=3)]
     at = centre + shift * dip_dir
     ramp = st.ramp(dip, azimuth, center=tuple(centre))
@@ -224,7 +240,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     cut = t_sand if kind.startswith("truncation") else 0.0              # a truncation's top is its sand's base
     level = top + tan_dip * ((along if lens else line) - along) + cut   # the depth of the line (of the middle)
     meta = dict(kind=kind, dip=dip, azimuth=azimuth, taper_angle=taper_angle, taper_m=taper_m, thickness=t_sand,
-                area=area, aspect=aspect, warp=warp, wander=wander, range_m=range_m, length=length, line=line,
+                area=None if nosed else area, aspect=None if nosed else aspect, warp=warp, wander=wander,
+                range_m=range_m, length=length, line=line,
                 nose=nose, barrier=bool(barrier), net_layers=n_net, seed=seed, spill_expected=None if lens else level,
                 closure_expected=nose["height"] if nosed else tan_dip * length,
                 crest_expected=level - (nose["height"] if nosed else tan_dip * (length if not lens else 0.5 * length)))
