@@ -280,12 +280,12 @@ def test_lobes_warped_by_a_quarter_close_by_the_dip_times_the_length_of_the_shap
         try:
             built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=seed, barrier=kind == "facies_change", dip=1.2,
                                taper_angle=0.6, area=3.0e6, aspect=2.0, warp=0.25, wander=40.0, range_m=1000.0,
-                               floor_m=100.0)
+                               floor_m=100.0, column=30.0 if kind == "facies_change" else None)
         except ValueError:
             continue
         (trap,) = trap_report(_layers(x_len, y_len, dx, thick), built)[:1]
         expected = _fine_traps(built, 2000.0, x_len, y_len)[0]["height"]
-        errors.append(abs(trap["height"] - expected) - (1.5 * np.tan(np.radians(1.2)) * dx + 0.08 * expected))
+        errors.append(abs(trap["closure"] - expected) - (1.5 * np.tan(np.radians(1.2)) * dx + 0.08 * expected))
         assert built["meta"]["closure_expected"] == pytest.approx(np.tan(np.radians(1.2)) * _length(3.0e6, 2.0))
     assert len(errors) >= 5 and max(errors) <= 0.0
 
@@ -325,27 +325,27 @@ def test_an_enclosed_lens_is_sealed_and_holds_the_dip_times_its_whole_length(dip
 
 
 def test_a_facies_change_is_the_same_trap_with_a_barrier_zone_taking_the_sand_s_thickness():
-    """The barrier zone thickens as the sand thins, so the interval keeps its thickness, the barrier's cells are active
-    under every column, and the sand's trap is that of the pinch-out of the same sand."""
+    """The barrier zone thickens as the sand thins, so the interval keeps its thickness where the sand is, and the sand's
+    trap is that of the pinch-out of the same sand; the barrier is under all of it and a rim beyond (200 m in from the
+    rough edge the interval is whole)."""
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
     kw = dict(seed=5, dip=1.1, taper_angle=0.5, area=3.4e6, aspect=2.2, warp=0.3, wander=40.0, range_m=800.0, cell=dx)
     sand_only = strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], **kw)
-    both = strat_trap("facies_change", x_len, y_len, 2000.0, [10.0, 8.0], barrier=True, **kw)
+    both = strat_trap("facies_change", x_len, y_len, 2000.0, [10.0, 8.0], barrier=True, column=12.0, **kw)
     layers = _layers(x_len, y_len, dx, [10.0, 8.0])
     _, _, zc, act = _build_geometry(layers, **both["kwargs"])
-    assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6)         # the interval keeps its 10 + 8 m
-    assert act[:, :, 5:].all() and not act[:, :, :5].all()                  # barrier everywhere, sand not
+    sand = ndimage.binary_erosion(act[:, :, :5].any(axis=2), iterations=4)   # 200 m in from the sand's rough edge
+    thick = zc[:, :, -1] - zc[:, :, 0]
+    assert np.allclose(thick[np.repeat(np.repeat(sand, 2, axis=0), 2, axis=1)], 18.0, atol=1e-6)
+    assert act[:, :, 5:].any(axis=2)[act[:, :, :5].any(axis=2)].all()      # barrier under the sand
     (net,) = trap_report(layers, both)
     (alone,) = trap_report(layers[:1], sand_only)
     assert net["crest"] == alone["crest"] and net["spill_point"] == alone["spill_point"]
-    for key in ("crest_depth", "spill_depth", "area", "height"):
+    for key in ("crest_depth", "spill_depth", "closure"):
         assert net[key] == pytest.approx(alone[key])
-    assert both["meta"]["net_layers"] == 1 and both["meta"]["barrier"] is True
-    # an initialisation by contacts puts oil in any barrier cell above its entry pressure, joined to the trap or not, so
-    # the barrier holds its column only below the top of its shallowest cell: here the top of the first row of columns
-    row = 0.5 * 50.0
-    assert net["barrier_top"] == pytest.approx(2000.0 + (row - 3000.0) * np.tan(np.radians(1.1)), abs=1e-6)
-    assert net["barrier_top"] < net["crest_depth"] and alone["barrier_top"] is None
+    assert both["meta"]["net_layers"] == 1 and both["meta"]["barrier"] is True and alone["barrier_top"] is None
+    assert net["barrier_top"] < net["crest_depth"] and net["limited_by"] == "barrier"
+    assert net["height"] == pytest.approx(net["barrier_top"] + 12.0 - net["crest_depth"])
 
 
 def test_the_same_seed_builds_the_same_trap_and_another_builds_another():
@@ -658,22 +658,25 @@ def test_a_lens_is_a_mound_on_a_flat_base_and_the_fill_of_a_channel_hangs_from_a
 
 
 def test_a_barrier_zone_under_a_mound_stays_a_flat_slab_and_under_a_hung_lens_takes_the_sand_s_thickness():
-    """The barrier is the last zone: with a mound it keeps its thickness (8 m) under every column and its base is the
-    plane of the beds, 8 m under the mound's base; with the lens hung from a flat top it takes what the sand loses,
-    so that the interval keeps its 10 + 8 m."""
+    """The barrier is the last zone: under a mound it keeps its thickness (8 m) and its base is the plane of the beds, 8 m
+    under the mound's base; with the lens hung from a flat top it takes what the sand loses, so that the interval keeps
+    its 10 + 8 m: both where the sand is (two cells in from its edge: the barrier is a rim round it, thinning to nothing
+    beyond)."""
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
     layers = _layers(x_len, y_len, dx, [10.0, 8.0], dz=2.0)
     for mound in (True, False):
         built = strat_trap("lens", x_len, y_len, 2000.0, [10.0, 8.0], seed=2, dip=1.1, taper_angle=0.3, area=3.4e6,
-                           aspect=2.2, warp=0.0, barrier=True, mound=mound)
+                           aspect=2.2, warp=0.0, barrier=True, column=12.0, mound=mound)
         Xc, Yc, zc, act = _build_geometry(layers, **built["kwargs"])
         plane = 2000.0 + (Yc - 3000.0) * np.tan(np.radians(1.1))
-        assert act[:, :, 5:].all()
+        sand = act[:, :, :5].any(axis=2)
+        assert act[:, :, 5:].any(axis=2)[sand].all() and (act[:, :, 5:].any(axis=2) & ~sand).any()
+        inside = np.repeat(np.repeat(ndimage.binary_erosion(sand, iterations=2), 2, axis=0), 2, axis=1)
         if mound:
-            assert np.allclose(zc[:, :, -1] - zc[:, :, 5], 8.0, atol=1e-6)
-            assert np.allclose(zc[:, :, -1], plane + 18.0, atol=1e-6)
+            assert np.allclose((zc[:, :, -1] - zc[:, :, 5])[inside], 8.0, atol=1e-6)
+            assert np.allclose((zc[:, :, -1] - plane)[inside], 18.0, atol=1e-6)
         else:
-            assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6)
+            assert np.allclose((zc[:, :, -1] - zc[:, :, 0])[inside], 18.0, atol=1e-6)
 
 
 def test_the_taper_thins_without_a_step_or_a_hinge_to_the_edge():
@@ -729,8 +732,9 @@ def test_everything_drawn_follows_the_seed(kind):
     """The same seed gives the same tongues, edge and relief, to the bit, and another seed another one (the seeds whose
     lobes fit and whose edge leaves a trap)."""
     thick, barrier = ([10.0, 6.0], True) if kind == "facies_change" else ([10.0], False)
-    kw = dict(barrier=barrier, dip=1.4, taper_angle=0.4, area=2.0e6, aspect=1.5, warp=0.2, wander=120.0, range_m=1200.0,
-              hurst=0.5, floor_m=60.0, relief_sd=1.5, **({} if kind == "lens" else dict(tongues=[(0.8e6, 0.5)])))
+    kw = dict(barrier=barrier, column=15.0 if barrier else None, dip=1.4, taper_angle=0.4, area=2.0e6, aspect=1.5,
+              warp=0.2, wander=120.0, range_m=1200.0, hurst=0.5, floor_m=60.0, relief_sd=1.5,
+              **({} if kind == "lens" else dict(tongues=[(0.8e6, 0.5)])))
     builds = []
     for seed in range(11, 60):
         try:
@@ -744,17 +748,19 @@ def test_everything_drawn_follows_the_seed(kind):
     assert _same_fields(a, b) and not _same_fields(a, c)
 
 
-def test_a_facies_change_with_tongues_a_rough_edge_and_relief_keeps_the_thickness_of_its_interval():
-    """The barrier zone is the complement of the sand under every column whatever the edge: the interval is 10 + 8 m
-    thick everywhere, its cells active, and the sand has gone where the barrier alone is."""
+def test_a_facies_change_with_tongues_a_rough_edge_and_relief_keeps_the_thickness_of_its_interval_where_the_sand_is():
+    """The barrier zone is the complement of the sand wherever the sand is, whatever the edge: the interval is 10 + 8 m
+    thick there, the barrier active under it and a rim beyond, and the sand has gone where the barrier alone is."""
     x_len, y_len, dx = 8000.0, 6000.0, 50.0
-    built = strat_trap("facies_change", x_len, y_len, 2000.0, [10.0, 8.0], seed=5, barrier=True, dip=1.1,
+    built = strat_trap("facies_change", x_len, y_len, 2000.0, [10.0, 8.0], seed=5, barrier=True, column=15.0, dip=1.1,
                        taper_angle=0.5, area=2.0e6, aspect=1.5, tongues=[(0.8e6, 0.5)], warp=0.2, wander=150.0,
                        range_m=1200.0, hurst=0.5, floor_m=100.0, relief_sd=1.5)
     layers = _layers(x_len, y_len, dx, [10.0, 8.0])
     _, _, zc, act = _build_geometry(layers, **built["kwargs"])
-    assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6)
-    assert act[:, :, 5:].all() and not act[:, :, :5].all() and act[:, :, :5].any()
+    sand = act[:, :, :5].any(axis=2)
+    inside = np.repeat(np.repeat(ndimage.binary_erosion(sand, iterations=10), 2, axis=0), 2, axis=1)   # 500 m in
+    assert np.allclose((zc[:, :, -1] - zc[:, :, 0])[inside], 18.0, atol=1e-6) and inside.any()
+    assert act[:, :, 5:].any(axis=2)[sand].all() and (act[:, :, 5:].any(axis=2) & ~sand).any() and sand.any()
     assert built["meta"]["net_layers"] == 1 and len(built["meta"]["tongues"]) == 2
 
 
@@ -819,7 +825,8 @@ def test_the_report_gives_the_trap_with_the_most_closure_first():
     big = st.taper(None, 200.0, outline=_disc(3000.0, 3600.0, 1200.0), x_len=nx * dx, y_len=ny * dx)
     small = st.taper(None, 100.0, outline=_disc(4500.0, 1200.0, 400.0), x_len=nx * dx, y_len=ny * dx)
     built = dict(kwargs=dict(structure=st.ramp(1.0, azimuth=0.0), isochore=[big + small]),
-                 meta=dict(net_layers=1, barrier=False, x_len=nx * dx, y_len=ny * dx, top=1500.0, thicknesses=[10.0]))
+                 meta=dict(net_layers=1, barrier=False, column=None, x_len=nx * dx, y_len=ny * dx, top=1500.0,
+                           thicknesses=[10.0]))
     first, second = trap_report([layer], built)
     assert first["height"] == pytest.approx(42.0, abs=2.5) and second["height"] == pytest.approx(14.0, abs=2.5)
     assert first["crest_depth"] > second["crest_depth"]
@@ -832,7 +839,7 @@ def test_staggered_layers_end_each_farther_downdip_by_the_stagger_and_the_interv
     """Sand layers that end at different places make the pinch-out interfinger in section: with three layers of 4 m and
     a stagger of 300 m the second layer first appears 300 m farther downdip than the first, and the third 600 m (to a
     cell and a half), along the line and on every tongue; with a barrier zone under them (a facies change) the
-    interval is still 12 + 6 m thick under every column, the barrier taking what the three layers lose. No stagger
+    interval is still 12 + 6 m thick where the sand is, the barrier taking what the three layers lose. No stagger
     leaves the layers ending together."""
     x_len, y_len, dx = 8000.0, 6000.0, 25.0
     barrier = kind == "facies_change"
@@ -840,8 +847,9 @@ def test_staggered_layers_end_each_farther_downdip_by_the_stagger_and_the_interv
     layers = _layers(x_len, y_len, dx, thick, dz=1.0)
     first = {}
     for stagger in (0.0, 300.0):
-        built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=2, barrier=barrier, dip=1.5, taper_angle=0.5,
-                           area=1.5e6, aspect=1.0, warp=0.0, azimuth=azimuth, stagger=stagger)
+        built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=2, barrier=barrier, column=12.0 if barrier else None,
+                           dip=1.5, taper_angle=0.5, area=1.5e6, aspect=1.0, warp=0.0, azimuth=azimuth,
+                           stagger=stagger)
         _, _, zc, act = _build_geometry(layers, **built["kwargs"])
         # along dip the first active row of each layer in the middle column of the tongue (azimuth 0), or the middle row
         if azimuth == 0.0:
@@ -851,7 +859,10 @@ def test_staggered_layers_end_each_farther_downdip_by_the_stagger_and_the_interv
             row = act[:, int(round(0.5 * y_len / dx)) - int(round(built["meta"]["tongues"][0]["offset"] / dx))]
             first[stagger] = [int(np.argmax(row[:, 4 * k:4 * k + 4].any(axis=1))) * dx for k in range(3)]
         if barrier:
-            assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6) and act[:, :, 12:].all()
+            sand = act[:, :, :12].any(axis=2)
+            inside = np.repeat(np.repeat(ndimage.binary_erosion(sand, iterations=2), 2, axis=0), 2, axis=1)
+            assert np.allclose((zc[:, :, -1] - zc[:, :, 0])[inside], 18.0, atol=1e-6)
+            assert act[:, :, 12:].any(axis=2)[sand].all()
     assert np.ptp(first[0.0]) <= 1.5 * dx
     assert np.diff(first[300.0]) == pytest.approx([300.0, 300.0], abs=1.5 * dx)
 
@@ -1055,9 +1066,9 @@ def test_strat_trap_refuses_inputs_that_are_not_a_trap(kw, message):
     """A negative or zero dip, thickness, area or aspect, a negative wander, relief or stagger, a nose without its
     height: ValueError before anything is drawn (a dip of -1 degree returned a closure of -24 m and no trap)."""
     args = dict(kind="facies_change", x_len=8000.0, y_len=6000.0, top=2000.0, thicknesses=[10.0, 8.0], seed=1,
-                barrier=True, dip=1.0, taper_angle=0.3, area=3.4e6, aspect=2.2)
+                barrier=True, column=12.0, dip=1.0, taper_angle=0.3, area=3.4e6, aspect=2.2)
     if kw.get("kind", "").endswith("_nose"):
-        args["barrier"], args["thicknesses"] = False, [10.0]
+        args["barrier"], args["column"], args["thicknesses"] = False, None, [10.0]
     with pytest.raises(ValueError, match=message):
         strat_trap(**{**args, **kw})
 
@@ -1073,3 +1084,90 @@ def test_a_report_of_layers_that_are_not_the_ones_the_trap_was_built_for_is_refu
                    _layers(7000.0, 6000.0, 50.0, [10.0]), _layers(8000.0, 6000.0, 50.0, [5.0, 5.0])):
         with pytest.raises(ValueError, match="built for"):
             trap_report(layers, built)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The barrier is a rim round the sand, and the limit the report gives keeps it dry (review F1)
+
+COLUMN = 12.0                                     # m: the oil column the barrier holds (Berg), a typical 8-20 m
+
+
+def _barrier_model(kind="facies_change", mound=None, dx=50.0, thick=(10.0, 8.0), **kw):
+    """A facies change (or a lens in a barrier zone) of the P50 trap on 8 x 6 km: the built geometry and its layers."""
+    x_len, y_len = 8000.0, 6000.0
+    args = dict(seed=5, barrier=True, column=COLUMN, dip=1.0, taper_angle=0.5, area=3.4e6, aspect=2.2, warp=0.0)
+    args.update(kw)
+    if mound is not None:
+        args["mound"] = mound
+    built = strat_trap(kind, x_len, y_len, 2000.0, list(thick), **args)
+    layers = _layers(x_len, y_len, dx, list(thick))
+    _, _, zc, act = _build_geometry(layers, **built["kwargs"])
+    return built, layers, zc, act
+
+
+@pytest.mark.parametrize("kind,mound", [("facies_change", None), ("lens", True), ("lens", False)])
+def test_the_barrier_is_a_rim_a_quarter_of_its_column_over_the_dip_wide_round_the_sand_and_walls_beyond(kind, mound):
+    """The barrier zone lies under every column of sand and out to ``rim`` beyond its edge, a quarter [J] of the most
+    that leaves the oil a column: column / tan(dip) is 687 m for 12 m at 1 degree, so the rim is 172 m, to a cell. Beyond
+    it the zone has thinned to nothing: columns with no active cell, walls. Before, it was a slab under the whole
+    model, updip of the trap too, and an initialisation by contacts put 84-100 % of the oil in it."""
+    dx = 50.0
+    built, layers, zc, act = _barrier_model(kind, mound, dx=dx)
+    rim = 0.25 * COLUMN / np.tan(np.radians(1.0))
+    assert built["meta"]["rim_m"] == pytest.approx(rim) and built["meta"]["column"] == COLUMN
+    n_sand = layers[0].nz
+    sand, barrier = act[:, :, :n_sand].any(axis=2), act[:, :, n_sand:].any(axis=2)
+    assert (barrier | ~sand).all() and sand.any()                          # the barrier is under all the sand
+    away = ndimage.distance_transform_edt(~sand) * dx                       # m from the sand, over the barrier's columns
+    assert away[barrier].max() == pytest.approx(rim, abs=2.0 * dx) and away[barrier & ~sand].min() > 0.0
+    assert (~act.any(axis=2)).sum() > 0.1 * sand.size and not barrier[away > rim + 2.0 * dx].any()   # walls beyond
+
+
+def test_a_barrier_of_a_facies_change_takes_the_thickness_the_sand_loses_inside_the_rim():
+    """The interval keeps its 10 + 8 m where the sand is (two cells in from its edge, where the rim's factor is 1); the
+    rim thins to nothing over its width, and beyond it the interval has no thickness at all."""
+    built, layers, zc, act = _barrier_model()
+    thick = zc[:, :, -1] - zc[:, :, 0]
+    sand = ndimage.binary_erosion(act[:, :, :5].any(axis=2), iterations=2)
+    inside = np.repeat(np.repeat(sand, 2, axis=0), 2, axis=1)                # the doubled corner grid
+    assert np.allclose(thick[inside], 18.0, atol=1e-6) and thick[~inside].max() <= 18.0 + 1e-6
+    assert (thick[~inside] > 0.0).any() and (thick[~inside] == 0.0).any() and (thick[~inside] < 17.0).any()
+
+
+def _shallowest(zc, act, k):
+    """The top of the shallowest active cell of layers ``k`` (the mean of its four corners), from the geometry alone."""
+    tops = 0.25 * (zc[0::2, 0::2, :-1] + zc[1::2, 0::2, :-1] + zc[0::2, 1::2, :-1] + zc[1::2, 1::2, :-1])
+    return tops[:, :, k][act[:, :, k] > 0].min()
+
+
+@pytest.mark.parametrize("kind,mound", [("facies_change", None), ("lens", True), ("lens", False)])
+def test_the_report_gives_a_limit_that_keeps_the_barrier_dry_and_the_rim_leaves_most_of_the_column(kind, mound):
+    """The limit is the smaller of the spill and the shallowest top of the barrier plus its column (below the crest's
+    own reach if the barrier's top is shallower than the crest), so that a contact (the sand's oil-water contact) at the
+    limit puts oil in no barrier cell: the barrier's cells lie at or below contact - column, to its shallowest top,
+    which the test finds from the geometry alone. The crest is no more than a quarter of the column (and a cell's rise)
+    below the barrier's top: three quarters of the column are left."""
+    dx = 50.0
+    built, layers, zc, act = _barrier_model(kind, mound, dx=dx)
+    (trap,) = trap_report(layers, built)
+    n_sand = layers[0].nz
+    top = _shallowest(zc, act, slice(n_sand, None))
+    assert trap["barrier_top"] == pytest.approx(top)
+    reach = min(trap["crest_depth"], top)
+    assert trap["limit_depth"] == pytest.approx(min(reach + COLUMN, trap["spill_depth"] or np.inf)
+                                                if trap["spill_depth"] is not None else reach + COLUMN)
+    assert trap["limited_by"] == "barrier" and trap["height"] > 0.5 * COLUMN
+    cell = np.tan(np.radians(1.0)) * dx
+    assert trap["crest_depth"] - top <= 0.25 * COLUMN + 2.0 * cell
+    wet = lambda contact: (_shallowest(zc, act, slice(n_sand, None)) < contact - COLUMN)   # the shallowest barrier cell
+    assert not wet(trap["limit_depth"] - 1e-6) and wet(trap["limit_depth"] + 1.0)
+
+
+def test_a_barrier_needs_the_column_it_holds_and_a_column_needs_a_barrier():
+    args = dict(x_len=8000.0, y_len=6000.0, top=2000.0, seed=1, dip=1.0, taper_angle=0.5)
+    with pytest.raises(ValueError, match="column"):
+        strat_trap("facies_change", thicknesses=[10.0, 8.0], barrier=True, **args)
+    with pytest.raises(ValueError, match="column"):
+        strat_trap("pinchout", thicknesses=[10.0], column=10.0, **args)
+    with pytest.raises(ValueError, match="column"):
+        strat_trap("facies_change", thicknesses=[10.0, 8.0], barrier=True, column=0.0, **args)

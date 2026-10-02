@@ -40,6 +40,8 @@ WANDER_TONGUE, WANDER_TAPER = 0.2, 0.25     # the most an edge may wander, of th
 #                                             the taper (an erosion surface, or across a nose): more breaks the sand into
 #                                             pieces that hold no trap (the owner's range, 2026-10-02, judgement [J])
 
+RIM_SHARE = 0.25                    # of column / tan(dip), the widest rim that leaves the oil a column: the rim's width [J]
+
 GRAVITY = 9.81                      # m/s2
 # Berg's packing of the grains as uniform spheres, rhombohedral (porosity 26 %; Graton and Fraser 1935): the pores
 # between them are 0.414 of a grain diameter across, the throats connecting them 0.154.
@@ -79,9 +81,11 @@ def zone_top(zc, act, k=None):
     return np.where(act.any(axis=2), first, np.inf)
 
 
-def _traps(depth, dx, dy, column=None):
+def _traps(depth, dx, dy, column=None, barrier_top=None):
     """The traps of a map of depths (nx, ny), infinite where the zone is absent (:func:`zone_trap`, whose result it is,
-    on any such map: the top of a zone's cells, or an analytic surface)."""
+    on any such map: the top of a zone's cells, or an analytic surface). A barrier holds its ``column`` below the
+    shallower of the crest and ``barrier_top``, the shallowest top of its cells (an initialisation by contacts puts oil
+    in any cell above its entry pressure, joined to the trap or not)."""
     if column is not None and column < 0.0:
         raise ValueError(f"column must not be negative, not {column}")
     alive = np.isfinite(depth)
@@ -93,7 +97,8 @@ def _traps(depth, dx, dy, column=None):
         crest = np.unravel_index(int(np.argmin(np.where(body, depth, np.inf))), depth.shape)
         sealed = not np.isfinite(spill[crest])
         deepest = float(depth[body].max() if sealed else spill[crest])
-        limit = deepest if column is None else min(deepest, float(depth[crest]) + float(column))
+        reach = float(depth[crest]) if barrier_top is None else min(float(depth[crest]), barrier_top)
+        limit = deepest if column is None else max(min(deepest, reach + float(column)), float(depth[crest]))
 
         def trapped(level):
             joined, _ = ndimage.label(body & (depth < level))
@@ -107,18 +112,20 @@ def _traps(depth, dx, dy, column=None):
             spill_depth=None if sealed else deepest,
             spill_point=tuple(int(c) for c in leaves[0]) if len(leaves) else None,
             limit_depth=limit, limited_by="barrier" if limit < deepest else "sealed" if sealed else "spill",
-            height=limit - float(depth[crest]), area=float(mask.sum()) * dx * dy, mask=mask))
+            closure=deepest - float(depth[crest]), height=limit - float(depth[crest]), area=float(mask.sum()) * dx * dy,
+            mask=mask, barrier_top=barrier_top))
     return sorted(traps, key=lambda trap: trap["crest_depth"])
 
 
-def zone_trap(zc, act, dx, dy, k=None, column=None):
+def zone_trap(zc, act, dx, dy, k=None, column=None, barrier=None):
     """The traps of the top of the active cells of a zone, absent columns being walls and the map's edge the only exit.
 
     ``zc`` (2nx, 2ny, nk + 1) is the interface stack and ``act`` (nx, ny, nk) the active cells, both k top-down as
     :func:`resmill.export._build_geometry` returns them; ``k`` (a slice of the layers, default all) picks the zone
     that is net reservoir, so that a barrier zone of active cells under or beside it is not part of the surface
     (:func:`zone_top`). ``column`` (m) is the oil column the updip seal holds if that is capillary; a trap holds no more
-    than that below its crest.
+    than that below its crest, or below the shallowest top of the barrier's cells, ``barrier`` (a slice of the layers),
+    if they reach updip of it (``barrier_top`` in each trap, None without a barrier).
 
     Returns one dict per body of connected columns that has any, the shallowest crest first: ``crest`` (i, j),
     ``crest_depth``, ``spill_depth`` (the deepest top on the best way out, None when nothing reaches the body:
@@ -128,7 +135,8 @@ def zone_trap(zc, act, dx, dy, k=None, column=None):
     (``limit_depth`` - ``crest_depth``), and the ``area`` (m2) and ``mask`` of the columns shallower than the limit
     that join the crest (all of a sealed body: it fills to its deepest point). A body with no closure has height 0.
     """
-    return _traps(zone_top(zc, act, k), dx, dy, column)
+    top = None if barrier is None else float(zone_top(zc, act, barrier).min())
+    return _traps(zone_top(zc, act, k), dx, dy, column, top)
 
 
 def _packed(widths, rng):
@@ -144,7 +152,7 @@ def _packed(widths, rng):
     return offsets
 
 
-def _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger, nose):
+def _check(kind, barrier, column, dip, taper_angle, area, tongues, thicknesses, stagger, nose):
     """Refuse what :func:`strat_trap` cannot build; returns the number of sand layers (the thicknesses less the
     barrier's)."""
     nosed, lens = kind in NOSED, kind == "lens"
@@ -154,6 +162,9 @@ def _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger,
         raise ValueError(f"taper_angle must lie between 0 and 90 degrees, not {taper_angle}")
     if bool(barrier) != (kind == "facies_change") and not (lens and barrier):
         raise ValueError(f"a barrier zone is what a facies change needs and a lens may have, not a {kind}")
+    if bool(barrier) != (column is not None):
+        raise ValueError("a barrier zone needs the oil column it holds (column, m: Berg's barrier_column) and only a "
+                         "barrier zone has one")
     if lens and area is None:
         raise ValueError("a lens needs an area")
     if nosed != (nose is not None):
@@ -317,6 +328,18 @@ def _refuse_collapse(present, depth, nominal, plan, margin):
                          f"against {nominal:.1f} m nominal: use another seed or a smaller wander")
 
 
+def _barrier(thicknesses, layers_f, flat, rim_m, line, outline, azimuth, x_len, y_len, rough):
+    """The thickness factor of the barrier zone: under the sand and a rim of ``rim_m`` m beyond its edge, thinning to
+    nothing over the rim (walls beyond it), so that no barrier cell lies updip of the trap, where an initialisation by
+    contacts would fill it with oil. It takes the thickness the sand loses (``layers_f``, the factors of the sand's
+    layers) unless it is a ``flat`` slab under a mound."""
+    rim = st.taper(line, rim_m, azimuth, outline=outline, x_len=x_len, y_len=y_len, edge=rough, grow=rim_m)
+    if flat:
+        return rim
+    return st.Structure(lambda x, y: rim(x, y) * (1.0 + sum(t * (1.0 - g(x, y)) for t, g in zip(thicknesses, layers_f))
+                                                  / thicknesses[-1]))
+
+
 def _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_net):
     """The thickness factor of each sand layer: ``factor(shift)`` is that of a layer ending ``shift`` m downdip of the
     first (the line and every tongue's outline moved), and the list has one per sand layer."""
@@ -334,19 +357,20 @@ def _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_
 
 def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.0, azimuth=0.0, taper_angle=0.3,
                area=3.4e6, aspect=2.2, warp=0.3, tongues=(), stagger=0.0, wander=0.0, range_m=1000.0, hurst=0.75,
-               floor_m=None, cell=None, relief_sd=0.0, relief_range=2000.0, mound=True, nose=None):
+               floor_m=None, cell=None, relief_sd=0.0, relief_range=2000.0, mound=True, nose=None, column=None):
     """Build one stratigraphic trap on a plane monocline: the arguments for :func:`resmill.export.to_grdecl`
     (``**result["kwargs"]``) and what was drawn and expected (``result["meta"]``). ``kind`` is one of :data:`KINDS`:
 
     * ``"pinchout"``: a sand wedge that thins to nothing updip. Every layer thins together (the thickness factor of
       :func:`resmill.structure.taper` as ``isochore``) and the columns where the sand has gone are inactive: walls.
     * ``"facies_change"``: the same, with a barrier zone, the last of ``thicknesses``, whose isochore is the
-      complement of the sand's so that the interval keeps its thickness. The barrier's cells stay active and are the
-      seal, by their capillary entry pressure (:func:`barrier_column`).
+      complement of the sand's so that the interval keeps its thickness. The barrier's cells are the seal, by their
+      capillary entry pressure (:func:`barrier_column`), under the sand and in a rim round it (see ``column``).
     * ``"lens"``: a lens of sand enclosed all round (by walls, or with ``barrier=True`` by a barrier zone). By
       default (``mound``) a convex-up mound on a flat base, the base being the plane of the beds: the structure sinks
-      by T (1 - f) where the sand thins, and a barrier zone below stays a flat slab; ``mound=False`` hangs the lens
-      from a flat top, convex down, as the fill of a channel is, the barrier taking the thickness the sand loses.
+      by T (1 - f) where the sand thins, and a barrier zone below stays a flat slab (in its rim); ``mound=False`` hangs
+      the lens from a flat top, convex down, as the fill of a channel is, the barrier taking the thickness the sand
+      loses.
     * ``"truncation"``: beds cut from above by an erosion surface that dips the same way less steeply, the older beds
       reaching farthest updip (``erode_above``: the top of the sand is the erosion surface in the subcrop strip, the
       sand's base is the bed's). ``taper_angle`` is the discordance, so it may not exceed ``dip``.
@@ -394,6 +418,15 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     octaves cost memory that nothing sees (6 GB for the plan's largest model). A relief without ``cell`` or
     ``floor_m`` is refused.
 
+    A barrier zone needs ``column`` (m), the oil column it holds (:func:`barrier_column`): it lies under the sand and in
+    a rim beyond its edge, ``meta["rim_m"]`` = :data:`RIM_SHARE` x column / tan(dip) wide, where it thins to nothing,
+    and the columns beyond have no active cell, walls. A slab under the whole model, updip of the trap too, would be
+    filled with oil by an initialisation by contacts (EQUIL puts oil in every cell above its entry pressure, joined to
+    the trap or not): 84-100 % of the oil sat in it at the limit, and the shallowest barrier cell lay above the crest by
+    more than the column in 37 of 40 draws, so that no contact kept it dry. With the rim the crest lies a quarter of the
+    column, a cell's rise and the relief below the barrier's shallowest top, and :func:`trap_report` gives the contact
+    that keeps the barrier dry.
+
     A combination trap takes its lateral closure from a ``nose``, the keywords of :func:`resmill.structure.closure`
     (``area``, ``height`` and ``aspect`` are required, ``height`` at most :data:`MAX_NOSE`; give no ``tilt``: the
     plane is the dip) centred where the line passes through its crest, so the trap closes by the nose's ``height``.
@@ -407,8 +440,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     nosed, lens = kind in NOSED, kind == "lens"
     thicknesses = [float(t) for t in thicknesses]
     _check_numbers(dip=dip, area=area, aspect=aspect, warp=warp, stagger=stagger, wander=wander, range_m=range_m,
-                   floor_m=floor_m, cell=cell, relief_sd=relief_sd, relief_range=relief_range)
-    n_net = _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger, nose)
+                   floor_m=floor_m, cell=cell, relief_sd=relief_sd, relief_range=relief_range, column=column)
+    n_net = _check(kind, barrier, column, dip, taper_angle, area, tongues, thicknesses, stagger, nose)
     t_sand = sum(thicknesses[:n_net])
     taper_m = t_sand / np.tan(np.radians(taper_angle))
     az = np.radians(azimuth)
@@ -437,15 +470,15 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     sink = st.Structure(lambda x, y: t_sand * (1.0 - f(x, y)))        # what the top lies below the base's plane
     if lens and mound:
         structure = structure + sink                                 # the base stays flat: the top is the mound's
+    rim_m = RIM_SHARE * column / np.tan(np.radians(dip)) if barrier else None
     kwargs = dict(structure=structure)
     if kind.startswith("truncation"):                                  # the sand cut from above: the top is the surface
         kwargs["erode_above"] = st.Structure(lambda x, y: top + structure(x, y) + sink(x, y))
     elif kind == "onlap":                                              # the layers cut from below: the base is
         kwargs["erode_below"] = st.Structure(lambda x, y: top + structure(x, y) + t_sand * f(x, y))
     else:
-        complement = None if lens and mound else st.Structure(      # the barrier takes what the sand loses
-            lambda x, y: 1.0 + sum(t * (1.0 - g(x, y)) for t, g in zip(thicknesses, layers_f)) / thicknesses[-1])
-        kwargs["isochore"] = layers_f + ([complement] if barrier else [])
+        kwargs["isochore"] = layers_f + ([_barrier(thicknesses, layers_f, lens and mound, rim_m, line, outline,
+                                                   azimuth, x_len, y_len, rough)] if barrier else [])
     nominal = nose["height"] if nosed else np.tan(np.radians(dip)) * length
     if wander or relief_sd:                                            # the roughness may have destroyed the trap
         gx, gy = plan
@@ -462,7 +495,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                 mound=bool(lens and mound),
                 tongues=[dict(area=a, aspect=r, length=n, offset=float(v)) for (a, r), n, v in
                          zip(parts, lengths, offsets)] if area is not None and not nosed else [],
-                length=length, line=line, nose=nose, barrier=bool(barrier), net_layers=n_net, seed=seed,
+                length=length, line=line, nose=nose, barrier=bool(barrier), column=column, rim_m=rim_m, net_layers=n_net, seed=seed,
                 erosion_relief_m=np.tan(np.radians(taper_angle)) * wander if kind in ("truncation", "onlap",
                                                                                       "truncation_nose") else None,
                 spill_expected=None if lens else level,
@@ -471,15 +504,13 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     return dict(kwargs=kwargs, meta=meta)
 
 
-def trap_report(model, built, column=None):
+def trap_report(model, built):
     """The traps of the sand of ``model`` (a layer, a reservoir or a list of layers) as :func:`strat_trap` shaped it
     (:func:`zone_trap`, the surface being the top of the sand's cells: a barrier zone is no part of it), the one with
     the most closure first: a rough edge leaves pieces of sand that hold small traps of their own, some of them
-    shallower than the main one. With a barrier zone each trap also has ``barrier_top``, the depth of the top of the
-    barrier's shallowest cell (None otherwise): an initialisation by contacts (EQUIL) puts oil in every cell above the
-    contact whose capillary pressure exceeds its entry pressure, joined to the trap or not, so a barrier holds its
-    ``column`` below that top, not below the crest, if it reaches updip of it; cut the model's outline there, or keep
-    the contact above ``barrier_top + column``."""
+    shallower than the main one. With a barrier zone the limit is the admissible one: the barrier holds ``column`` (what
+    ``built`` was given) below the shallower of the crest and the top of its own shallowest cell, ``barrier_top``, so
+    that a contact at ``limit_depth`` puts oil in no barrier cell."""
     layers = list(model) if isinstance(model, (list, tuple)) else list(getattr(model, "layers", [model]))
     meta = built["meta"]
     made = [meta["x_len"], meta["y_len"], meta["top"], *meta["thicknesses"]]
@@ -489,7 +520,7 @@ def trap_report(model, built, column=None):
                          f"ones the trap was built for ({made[:2]}, {made[2]}, {made[3:]}): a model's own dip or "
                          f"thickness changes the trap")
     _, _, zc, act = _build_geometry(layers, **built["kwargs"])
-    cells = sum(layer.nz for layer in layers[:built["meta"]["net_layers"]])
-    traps = zone_trap(zc, act, layers[0].dx, layers[0].dy, k=slice(0, cells), column=column)
-    top = float(zone_top(zc, act, slice(cells, None)).min()) if built["meta"]["barrier"] else None
-    return [dict(trap, barrier_top=top) for trap in sorted(traps, key=lambda trap: -trap["height"])]
+    cells = sum(layer.nz for layer in layers[:meta["net_layers"]])
+    traps = zone_trap(zc, act, layers[0].dx, layers[0].dy, k=slice(0, cells), column=meta["column"],
+                      barrier=slice(cells, None) if meta["barrier"] else None)
+    return sorted(traps, key=lambda trap: -trap["height"])

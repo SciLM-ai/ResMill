@@ -430,3 +430,19 @@ def test_taper_with_isochore_gives_thickness_times_factor_and_collapses_where_it
     layer_thick = (thick / nz).reshape(nx, 2, ny, 2).max(axis=(1, 3))
     assert np.array_equal(act.any(axis=2), layer_thick > 5e-3)
     assert not act[:, :10].any() and act[:, 12:].all()
+
+
+def test_taper_grow_widens_the_sand_all_round_before_the_taper_is_measured():
+    """``grow`` (m) moves the edge of the sand out by that much: a line grown by 300 m is the line 300 m farther out, and
+    a disc of radius 1,000 m grown by 300 m with 300 m of taper is 1 within 1,000 m of its centre and the wedge of
+    (1,300 - r) / 300 beyond it, 0 from 1,300 m: the rim of a barrier that must be there wherever the sand is, and a
+    little beyond."""
+    f = st.taper(position=1000.0, taper_m=300.0, grow=300.0)
+    g = st.taper(position=700.0, taper_m=300.0)
+    y = np.linspace(500.0, 1500.0, 21)
+    assert np.allclose(f(0.0 * y, y), g(0.0 * y, y)) and f(0.0, 400.0) == 0.0 and f(0.0, 1000.0) == 1.0
+    h = st.taper(None, 300.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=6000.0, y_len=4000.0, grow=300.0)
+    r = np.array([0.0, 800.0, 1000.0, 1100.0, 1200.0, 1290.0, 1310.0, 1600.0])
+    assert h(3000.0 + r, 2000.0 + 0.0 * r) == pytest.approx(_wedge((1300.0 - r) / 300.0), abs=0.03)
+    assert st.taper(position=1000.0, taper_m=300.0)(0.0, 1100.0) == st.taper(position=1000.0, taper_m=300.0, grow=0.0)(
+        0.0, 1100.0)

@@ -423,7 +423,8 @@ def _signed_distance(solid, x_len, y_len, step):
     return surface(np.where(inside, distance(inside) - half, half - distance(~inside)), x_len, y_len)
 
 
-def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, level=0.0, step=None, edge=None):
+def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, level=0.0, step=None, edge=None,
+          grow=0.0):
     """A thickness factor for ``to_grdecl(isochore=[...])``: 0 where the sand is absent, rising to 1 over ``taper_m``
     metres in from the edge of the sand as u (2 - u), u the share of the taper: a wedge whose slope is zero where it
     reaches full thickness, so there is no hinge or step there, and which ends at the edge at twice the mean slope, a
@@ -442,7 +443,9 @@ def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, 
     where it is +R the sand's limit reaches R m farther out and the contour of the factor at a share u of the taper
     (1 - u) R, so the thick part of the sand is smooth and its edge is rough. All zones of an interval take the same
     factor to thin together; the thin cells of the outer ``T f`` below 5 mm collapse (ACTNUM 0), so the factor is 0
-    exactly where the sand is absent.
+    exactly where the sand is absent. ``grow`` (m) widens the sand all round by that much before the distance is
+    measured, so that a factor of ``grow`` as the taper is 1 wherever the sand is and thins to 0 over the ``grow``
+    beyond it: a rim.
     """
     if not taper_m > 0.0:
         raise ValueError(f"taper_m must be positive, not {taper_m}")
@@ -463,7 +466,7 @@ def taper(position, taper_m, azimuth=0.0, outline=None, x_len=None, y_len=None, 
 
     def fn(x, y):
         x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
-        d = signed(x, y)
+        d = signed(x, y) + grow
         if edge is not None:
             d = d + edge(x, y) * np.clip(1.0 - d / taper_m, 0.0, 1.0)
         u = np.clip(d / taper_m, 0.0, 1.0)
