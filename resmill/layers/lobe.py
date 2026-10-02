@@ -92,7 +92,7 @@ def _effective_perm(sand, k_sand, k_mud):
     (Bruggeman), ``(b + sqrt(b^2 + 4 k_sand k_mud)) / 2`` with ``b = (2 sand - 1)(k_sand - k_mud)``. The sand percolates
     from half of the cell: below it the cell is tight (``sqrt(k_sand k_mud)`` at exactly half), above it
     ``(2 sand - 1) k_sand`` and more, so a cell is net (above 1 mD) where its sand is the majority. The arithmetic mean, right for
-    layers that run through the whole cell, would leave every cell with a sixth of sand above 80 mD."""
+    layers that run through the whole cell, would leave a cell with a tenth of 300 mD sand at 30 mD, net though 90 % mud."""
     b = (2.0 * sand - 1.0) * (k_sand - k_mud)
     return 0.5 * (b + np.sqrt(b * b + 4.0 * k_sand * k_mud))
 
