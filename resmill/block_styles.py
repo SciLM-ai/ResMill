@@ -14,27 +14,32 @@ to the exporter as it is, one layer per zone for a rollover's ``zones``::
 :func:`tilted_blocks`: a domino system, N parallel planar faults dipping 25-35 degrees whose hanging walls lie on the up-dip
 side of beds tilted 3-20 degrees (10 % of cases up to 30). Each block is a rigid plate: the structure is a tilt, and each fault
 displaces the whole of one side (``hw_share`` 0.5, no drag) by the column offset ``tan(tilt) x`` (fault spacing), so that the
-horizon is a sawtooth with no net dip: blocks ``width`` wide at the horizon, a throw (cutoff to cutoff along the plane) of
-``width tan(tilt)``, a heave of throw / tan(dip), a pitch over the blocks' horizontal width of 1 + tan(tilt) / tan(dip)
-(``pitch_over_width``) and the extension of their lengths along the beds beta = sin(alpha + theta) / sin(theta) (``beta``; Fossen &
-Hesthammer 1998, eq. 9; T6, T9). Tilt and throw taper
-along the strike like the faults' tip ellipse, so the blocks plunge toward the fault tips and each footwall crest closes
-laterally. ``kind="horst_graben"``: alternating hanging walls, dips 55-70 degrees, a tilt under 5 degrees (T11). Transfer
-faults (0-2) cross the blocks; the faults inside the trap are drawn by :func:`resmill.fault_patterns.fold_faults`.
+horizon is a sawtooth with no net dip: blocks ``width`` wide at the horizon (nominal: the faults' positions jitter by 10 % of the
+pitch [J], so a block's width on the grid is 0.85-1.2 times it), a throw (cutoff to cutoff along the plane) of ``width tan(tilt)``,
+a heave of throw / tan(dip), a pitch over the blocks' horizontal width of 1 + tan(tilt) / tan(dip) (``pitch_over_width``) and
+the extension of their lengths along the beds beta = sin(alpha + theta) / sin(theta) (``beta``; Fossen & Hesthammer 1998, eq. 9;
+T6, T9). The throws are those of the draws: 160 / 414 / 1,147 m at P10 / P50 / P90 over 14,000 parameter draws, 41 % above 500 m and
+4.5 % at the 1.5 km cap, where Gullfaks' 50-500 m (T8) holds for its own 15 degrees and 2 km (536 m); the heavy tail is that of the
+width and tilt priors, which are not correlated. Tilt and throw taper along the strike like the faults' tip ellipse, so the blocks
+plunge toward the fault tips and each footwall crest closes laterally. ``kind="horst_graben"``: alternating hanging walls, dips
+55-70 degrees, a tilt under 5 degrees (T11). Transfer faults (0-2) cross the blocks; the faults inside the trap are drawn by
+:func:`resmill.fault_patterns.fold_faults`.
 
 :func:`rollover`: a growth fault whose hanging wall rolls over toward it. ``kind="frio"`` (60 % [J]): one sinuous listric
 master fault (a ramp dipping 50-75 degrees, then tan(dip) falling by 1/e every 1.2-5 km of depth,
 :attr:`resmill.faults.Fault.flatten`: the shapes of six published faults, whose fits give 0.6-3.1 km), the ramp ending 0-2 km
 above the reservoir (the published bends lie 1.0-2.7 km down, so the cutoff is on the curved part and the roll starts at it),
 maximum displacement (at the tip ellipse's centre, as ``fold_faults`` draws a fault's) from the clastic displacement-length law, a
-regional dip toward the basin; ``kind="wilcox"`` (40 % [J]): two or three
-nearly straight, closely spaced planar faults with little rollover and a higher expansion (Ewing et al. 1986). The strata laid
-down while the faults moved thicken into their hanging walls by an expansion index of 1.1-2.5
-(:func:`resmill.structure.growth`). The faults inside the trap, with the keystone graben half the time and 40-70 % antithetic,
-come from ``fold_faults``. The vertical shear that rolls the hanging wall over a listric fault (one heave for the whole block, so
-that no zone changes thickness and the growth strata are the isochore's alone) drags it down by the throw at the fault and lets it
-rise as the plane flattens, toward the regional dip: the crest, where the roll's dip falls to the regional dip, lies a few km from
-the fault (the throw and the regional dip set it, the flattening length hardly), and a draw whose masters leave no trap of 1 km2
+regional dip toward the basin; ``kind="wilcox"`` (40 % [J]): two or three nearly straight, closely spaced planar faults with little
+rollover and a higher expansion (Ewing et al. 1986). The strata laid down while the faults moved thicken into their hanging walls
+by an expansion index of 1.1-2.5 (:func:`resmill.structure.growth`: a step over the whole hanging wall, not a wedge thinning away
+from the fault). A Wilcox bundle shares its index among its faults as the count-th root, 1.09-1.36 per fault of a bundle of three
+and 1.14-1.58 of two, for a total of 1.3-2.5 (5 % of cases to 5), where T18 has 1.3-1.6 for each Katy fault and 1.7 to over 2.5 at
+Fulshear and Clodine (``labels["expansion_per_fault"]``). The faults inside the trap, with the keystone graben half the time and 40-70 %
+antithetic, come from ``fold_faults``. The vertical shear that rolls the hanging wall over a listric fault (one heave for the whole
+block, so that no zone changes thickness and the growth strata are the isochore's alone) drags it down by the throw at the fault and
+lets it rise as the plane flattens, toward the regional dip: the crest, where the roll's dip falls to the regional dip, lies a few km
+from the fault (the throw and the regional dip set it, the flattening length hardly), and a draw whose masters leave no trap of 1 km2
 (the P10 of the Gulf's rollover traps) is drawn again (:func:`rollover`).
 """
 import math
@@ -112,6 +117,8 @@ def _measure(x_len, y_len, dx, top, structure, faults):
     map's edge that crosses no fault: :func:`resmill.structure._spill_levels`); a trap is a connected set of such cells.
     Returns ``area`` (m2), ``height`` (m, the relief at the crest), ``crest`` (i, j) and its ``crest_xy`` (m),
     ``crest_depth``, ``spill_depth``, ``mask``, the cell size ``cell`` and the ``depth`` map (infinite where a cell holds no rock).
+    :func:`resmill.structure.closure_stats` measures the trap of one given crest with no walls and no cell without rock, and
+    ``fault_seal.fault_blocks`` the fault blocks; this is the best of a map's traps by volume, bounded by both.
     """
     nx, ny = max(int(round(x_len / dx)), 3), max(int(round(y_len / dx)), 3)
     cell = (x_len / nx, y_len / ny)
@@ -161,9 +168,10 @@ def _population(style, trap, x_len, y_len, dx, top, thickness, density, seed, re
 
     The fold has the measured trap's area, relief, aspect and axis and its crest at the trap's real depth, so that the faults
     are drawn on a closure that frames it. The fold is smooth and flat around the trap, while the real top has the tilt, the roll
-    or the steps of the model's own faults, so each fault's tip ellipse is then carried by the difference between the real top's depth
-    at its centre (the planning map; over a cut-out, the nearest cell with rock) and the fold's, which puts it where it was drawn against the reservoir
-    (only 66 % of a tilted-block model's faults and 72 % of a rollover's reached the 5 m the density counts at the real top before).
+    or the steps of the model's own faults, so each fault's tip ellipse is then carried by the difference between the real top's
+    depth at its centre (the planning map; over a cut-out, the nearest cell with rock) and the fold's, which puts it where it was
+    drawn against the reservoir (before, only 73 % of a tilted-block model's faults and 86 % of a rollover's reached at the real
+    top the 5 m the density counts).
     """
     if trap is None:
         return []
@@ -206,7 +214,7 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
     added to the tilt. Drawn unless pinned: ``kind`` ("domino" 70 %, "horst_graben" 30 % [J]); ``azimuth`` of the beds'
     dip direction (degrees clockwise from +x; any [J]); ``tilt`` (degrees: log-uniform 3-20, 10 % of cases 20-30, T3, T4;
     horst-graben 0.5-5, T11); ``dip`` of the faults (25-35, T5; horst-graben 55-70, T11); ``width`` of a block at the
-    horizon (m, log-uniform 1,500-5,000, T1; capped so that the throw stays under 1.5 km); ``density`` of the faults inside
+    horizon (m, nominal, log-uniform 1,500-5,000, T1; capped so that the throw stays under 1.5 km); ``density`` of the faults inside
     the trap with a throw of 5 m or more (per km2: log-normal, median 1.7, 1-3, T28). ``scatter``: log10 sd of the faults'
     throws about ``width tan(tilt)`` (0.1 [J]; 0 for exact blocks).
     """
@@ -236,7 +244,7 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
     pitch_ratio = 1.0 + tan_t / tan_d if domino else 1.0                  # a fault's pitch over its block's horizontal width: W + heave over W
     pitch = width * pitch_ratio                                           # the fault spacing at the horizon
     count = int(np.clip(round(extent_n / pitch), 1, 6))
-    place = (np.arange(count) - 0.5 * (count - 1)) * pitch + rng.uniform(-0.1, 0.1, count) * pitch
+    place = (np.arange(count) - 0.5 * (count - 1)) * pitch + rng.uniform(-0.1, 0.1, count) * pitch      # jitter of 10 % of the pitch [J]
     gaps = np.diff(place, prepend=place[0] - pitch)
     wobble = 10.0 ** rng.normal(0.0, scatter, count) if scatter > 0.0 else np.ones(count)
     if domino:
@@ -247,10 +255,10 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
     length = max(1.2 * diagonal, float(cutoff.max()) / sin_d / D_OVER_L)  # from displacement / length at most 0.1
     lx = 0.5 * length
     zspan = 0.5 * extent_n * tan_t + thickness + float(offset.max())
-    aspect = lx * sin_d * 0.03 / zspan          # tall tip ellipse: the throw does not change with the horizon's depth (< 0.3 %)
+    aspect = lx * sin_d * 0.03 / zspan          # a tall tip ellipse, 33 times the depth the faults span [J]: the same throw at every depth (< 0.3 %)
     mid = np.array([0.5 * x_len, 0.5 * y_len])
     faults, shift = [], 0.0
-    for k in range(count):
+    for k in range(count):          # [J]: a strike scatter of 1 degree and a trace wander of 0.4-1 % of the length
         hw = -1 if domino or k % 2 == 0 else 1
         faults.append(Fault(
             center=tuple(float(v) for v in mid + place[k] * n), strike=azimuth + float(rng.normal(0.0, 1.0)), length=length,
@@ -263,7 +271,8 @@ def tilted_blocks(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=Non
         * ((np.asarray(x, float) - mid[0]) * n[0] + (np.asarray(y, float) - mid[1]) * n[1]))
     structure = tilt_field if fold is None else tilt_field + fold
     median = float(np.median(offset))
-    for _ in range(int(rng.integers(0, 3))):                              # transfer faults across the blocks (T12)
+    for _ in range(int(rng.integers(0, 3))):                              # transfer faults across the blocks (T12: their count and throw)
+        # [J]: 0.4-1.0 of the extent long, centres within 0.3 of it, strike scatter 8 degrees, dips 80-90, wander 0.4-1 % of the length
         across = _log_uniform(rng, 0.4, 1.0) * extent_n
         centre = mid + rng.uniform(-0.3, 0.3) * extent_n * n + rng.uniform(-0.3, 0.3) * extent_t * t
         faults.append(Fault(center=(float(centre[0]), float(centre[1])), strike=azimuth + 90.0 + float(rng.normal(0.0, 8.0)),
@@ -303,9 +312,10 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
     plane's dip there (:attr:`resmill.faults.Fault.throw`, as ``fold_faults`` draws it); the throw in the reservoir follows from
     the fault, 0.56-0.86 of it for a Wilcox fault (the tip line's profile) and, for a Frio master, from its plane (one heave for
     the whole hanging wall), usually more, as the plane is steeper higher up (``labels["masters"]``). A pinned throw is the one
-    in the reservoir and the throw at the centre follows from it. ``regional_dip`` toward the basin (degrees, 0.5-3 [J]); ``expansion`` index of the fault zone (downthrown over upthrown
-    thickness, log-uniform 1.1-2.5, 5 % of cases 2.5-5, T18; Wilcox 1.3-2.5), shared among its faults as the count-th root;
-    ``density`` of the faults inside the trap with 5 m of throw or more (per km2: log-normal, median 1, 0.5-2, T28).
+    in the reservoir and the throw at the centre follows from it. ``regional_dip`` toward the basin (degrees, 0.5-3 [J]);
+    ``expansion`` index of the fault zone (downthrown over upthrown thickness, log-uniform 1.1-2.5, 5 % of cases 2.5-5, T18;
+    Wilcox 1.3-2.5), shared among its faults as the count-th root; ``density`` of the faults inside the trap with 5 m of throw or
+    more (per km2: log-normal, median 1, 0.5-2, T28).
 
     The faults inside a trap are drawn on a closure that frames it, and a drag that never turns the regional dip leaves
     the master faults none: drawn values that leave the masters and the regional dip no trap of at least 1 km2 (and nine
@@ -339,8 +349,8 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
         sin_d = math.sin(math.radians(steep))
         bend = (FLATTEN[0] * (FLATTEN[1] / FLATTEN[0]) ** u["flat"] if flatten is None else float(flatten)) if frio else None
         count = 1 if frio else int(rng.integers(2, 4))
-        spacing = float(rng.uniform(1500.0, 3000.0))
-        first = (0.12 + 0.13 * u["where"] - 0.5) * extent_n                   # landward of the middle: room for the roll
+        spacing = float(rng.uniform(1500.0, 3000.0))                      # a Wilcox bundle's spacing, 1.5-3 km, +-10 % [J]
+        first = (0.12 + 0.13 * u["where"] - 0.5) * extent_n                   # 0.25-0.38 of the extent landward of the middle: room for the roll [J]
         places = first + np.concatenate([[0.0], np.cumsum(spacing * rng.uniform(0.9, 1.1, count - 1))])
         faults, masters = [], []
         for k in range(count):
@@ -353,6 +363,8 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
             r = (zc - z_k) / (sin_d * ly)                                     # the reservoir on the tip ellipse, from its centre
             base = (z_k - RAMP_BASE[0] - (RAMP_BASE[1] - RAMP_BASE[0]) * float(rng.uniform()) if ramp_base is None
                     else float(ramp_base)) if frio else None                  # the ramp ends above the reservoir, the bend there
+            # [J]: a Wilcox fault's length 0.8-1.2 of the draw, hw_share 0.6-0.9, drag reaches 0.1-0.3 and 0.1-0.2, wander 0.4-1.2 % of L;
+            # a Frio master's wander 2-4 %; the trace's radius 2-10 L (Frio, the rule of T16) and 10-30 L (Wilcox: nearly straight)
             fault = Fault(
                 center=tuple(float(v) for v in mid + places[k] * n), strike=azimuth, length=float(L),
                 throw=float(displacement), dip=float(steep), hanging_wall=1, z_center=float(zc), flatten=bend, ramp_base=base,
@@ -387,7 +399,7 @@ def rollover(x_len, y_len, dx, top, thickness, seed, *, fold=None, kind=None, az
             break
         u = {**draw(), "kind": u["kind"], "az": u["az"]}                  # no trap: the same flavour and direction, drawn again
     faults, structure, count = built["faults"], built["structure"], len(built["faults"])
-    ratio = float(rng.uniform(0.5, 2.0))                                  # R of fault_patterns' Gulf anticline
+    ratio = float(rng.uniform(0.5, 2.0))                                  # R of fault_patterns' Gulf anticline, 0.5-2 [J]
     basinward = float(rng.uniform(0.3, 0.6))                              # 40-70 % antithetic (T23, T24)
     dens = float(10.0 ** (0.3 * u["density"])) if density is None else float(density)
     faults += _population("rollover", frame, x_len, y_len, grid, top, thickness, dens, int(rng.integers(2 ** 31)),

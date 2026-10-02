@@ -391,7 +391,8 @@ def test_a_listric_masters_displacement_at_its_tip_ellipses_centre_is_the_one_th
         dip_c = math.atan(float(plane(h + 0.5) - plane(h - 0.5)))             # the plane's dip at the tip ellipse's centre
         assert f.throw / math.sin(dip_c) == pytest.approx(L["displacement_m"], rel=1e-4) and L["centre_throw_m"] == f.throw
         _, z = sawtooth(m, x_len, y_len, dx, "master", top, 2.0)
-        assert z.max() - top == pytest.approx(L["throw_m"], rel=0.01, abs=4.0) and L["throw_m"] > f.throw      # the first cell top beside the cutoff has risen
+        assert z.max() - top == pytest.approx(L["throw_m"], rel=0.01, abs=4.0)       # (the first cell top beside the cutoff has risen)
+        assert L["throw_m"] > f.throw
 
 
 def test_the_displacements_follow_the_clastic_law_with_the_norne_scatter():
@@ -452,7 +453,7 @@ def test_the_master_faults_are_placed_by_the_tip_ellipse_below_the_reservoir(dra
             below = (f.z_center - (TOP + 0.5 * THICK + math.tan(alpha) * along)) / half
             assert 0.25 - 1e-9 <= below <= 0.5 + 1e-9
             assert rec["centre_throw_m"] == f.throw and rec["z_center_m"] == f.z_center
-            if f.flatten is None:                         # a planar fault: Dmax at the ellipse's centre, and the reservoir's throw is the profile there
+            if f.flatten is None:                 # a planar fault: Dmax at the ellipse's centre, and the reservoir's throw is the profile there
                 assert f.throw / math.sin(math.radians(f.dip)) == pytest.approx(rec["displacement_m"], rel=1e-9)
                 assert rec["throw_m"] == pytest.approx(f.throw * (1.0 - below) ** 1.5 * math.sqrt(1.0 + 3.0 * below), rel=1e-9)
             if f.flatten is not None:                                   # the Frio ramp ends 0-2 km above the reservoir where the fault is

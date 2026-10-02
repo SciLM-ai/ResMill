@@ -378,8 +378,9 @@ def growth(fault, expansion, width, depth):
     is tapered along the strike by the throw profile (the fault's tip ellipse at ``depth``, relative to its centre line):
     no growth where the fault has no throw at that depth. A listric fault (:attr:`resmill.faults.Fault.flatten`) moves its whole
     hanging wall by one heave, that of the horizon at ``z_center``, so its step spans that heave at every depth and its taper
-    does not depend on the depth. Pass it to ``to_grdecl(isochore=[...])``; it needs ``fault.z_center``, the depth scale of the
-    tip ellipse.
+    does not depend on the depth. The step is the model: the whole hanging wall carries the full factor, with no decay length
+    and no wedge thinning away from the fault (T18 gives the index, not a wedge's shape). Pass it to ``to_grdecl(isochore=[...])``;
+    it needs ``fault.z_center``, the depth scale of the tip ellipse.
     """
     if fault.z_center is None:
         raise ValueError("growth needs fault.z_center, the depth scale of the fault's tip ellipse")

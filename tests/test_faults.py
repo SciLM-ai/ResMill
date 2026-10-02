@@ -432,7 +432,7 @@ def test_a_horizon_cut_on_the_ramp_is_dragged_down_rigidly_until_the_bend_and_ro
     surface follows the explicit construction (z + F(h) - F(h - H)) at every corner clear of the fault, to 0.05 m."""
     heave, x_c, depth = research_rollover(55.0, 3500.0, 1500.0, 2500.0, 300.0)
     assert heave == pytest.approx(300.0 / math.tan(math.radians(55.0)), abs=1e-6) and x_c == pytest.approx(-1000.0 / math.tan(math.radians(55.0)))
-    x, z = rollover_section(55.0, 1500.0, 2500.0, 300.0, ramp_base=3500.0)                  # the bend 1 km below the horizon and the tip ellipse's centre
+    x, z = rollover_section(55.0, 1500.0, 2500.0, 300.0, ramp_base=3500.0)           # the bend 1 km below the horizon and the ellipse's centre
     east = x > 1000.0 + heave + 50.0
     assert np.abs(z[east] - depth(x[east] - 1000.0)).max() < 0.05
     level = (x > 1000.0 + heave + 50.0) & (x < 1000.0 - x_c - 50.0)
