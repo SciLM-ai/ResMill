@@ -24,10 +24,10 @@ Salt is a mask and two terms of the structure, nothing more (rows N1-N39 of ``st
 Limits, stated: a column of a corner-point grid cannot repeat a section, so there are no overturned flaps and the dip
 is capped at :data:`MAX_DIP` (the owner's choice of 2026-10-01). What a steep flank costs, measured in OPM Flow
 (``geology_demo/structure/step5/bench``, 58,000 and 230,000 cells, one thread): no connections, since columns that meet at a
-pillar share its corners, so every cell keeps its k neighbour and Flow makes no NNC (0 at 30 to 85 degrees; only faults make
-them); and about the same run time as for a gentle flank (12.8 s at 85 degrees against 11.5 s at 30 with 50 m cells, 56 s
-against 53 s with 25 m). The cells shear instead, and the along-bed transmissibility of those beside the contact falls: its
-10th percentile is 0.41 of the unsheared value at 85 degrees (0.83 at
+pillar share their corners, so every cell keeps its k neighbour and Flow makes no NNC (0 at 30 to 85 degrees; only faults make
+them); the same Newton iterations (48 at 85 degrees against 47 at 30 with 50 m cells, 53 against 53 with 25 m), 1.2 to 1.9 times the
+linear iterations, and a run time within about 20 % of the gentle flank's. The cells shear instead, and the along-bed
+transmissibility of those beside the contact falls: its 10th percentile is 0.41 of the unsheared value at 85 degrees (0.83 at
 30) with 50 m cells. There is no structure inside the salt, and the contact is always sealed (no sheath, no weld leak).
 """
 import math
