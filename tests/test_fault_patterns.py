@@ -10,6 +10,7 @@ from resmill import structure as st
 from resmill.export import to_grdecl
 from resmill.fault_patterns import MIN_THROW, STYLES, _frame, _in_reservoir, fold_faults
 from resmill.layers.base import Layer
+from resmill.salt import salt_body
 
 X_LEN, Y_LEN, DX = 16000.0, 12000.0, 100.0
 CENTER = (8000.0, 6000.0)
@@ -346,8 +347,9 @@ def test_every_style_draws_valid_faults_that_the_grid_export_takes(tmp_path):
     layer.perm_mat = np.full((nx, ny, nz), 100.0)
     fold = st.closure(area=6e6, height=100.0, aspect=1.8, center=(4000.0, 3000.0), limb_ratio=1.5, tilt=0.2)
     for style in STYLES:
-        faults = fold_faults(style, fold, 8000.0, 6000.0, 100.0, 2.0, TOP, 30.0, seed=7)
-        again = fold_faults(style, fold, 8000.0, 6000.0, 100.0, 2.0, TOP, 30.0, seed=7)
+        salt = dict(salt=salt_body((4000.0, 4800.0), (1200.0, 1200.0), z_ref=TOP + 15.0)) if style == "salt_flank" else {}
+        faults = fold_faults(style, fold, 8000.0, 6000.0, 100.0, 2.0, TOP, 30.0, seed=7, **salt)
+        again = fold_faults(style, fold, 8000.0, 6000.0, 100.0, 2.0, TOP, 30.0, seed=7, **salt)
         assert faults and faults == again
         assert len({f.name for f in faults}) == len(faults) and all(len(f.name) <= 8 for f in faults)
         to_grdecl(layer, tmp_path / f"{style}.grdecl", structure=fold, faults=faults)

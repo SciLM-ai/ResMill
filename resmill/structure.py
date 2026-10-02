@@ -281,6 +281,20 @@ def outline(trap, dx, dy, rim):
     return ndimage.distance_transform_edt(~trap, sampling=(dx, dy)) <= float(rim)
 
 
+def _waves(rng):
+    """Two sets of six smooth random waves (wavenumbers 1.5-3.5 per unit length, random directions and phases), drawn from
+    ``rng``: the displacement of a lobate outline, shared by :func:`closure`'s warp and :class:`resmill.salt.SaltBody`'s."""
+    return [(rng.uniform(1.5, 3.5, 6), rng.uniform(0.0, 2.0 * np.pi, 6), rng.uniform(0.0, 2.0 * np.pi, 6)) for _ in range(2)]
+
+
+def _wave_sum(waves, u, v, stretch=1.0):
+    """The displacements (du, dv) of :func:`_waves` at (u, v): each is sqrt(2/6) times a sum of six unit cosines, so of unit
+    rms and never beyond ``6 sqrt(2/6)`` = 3.46. ``stretch`` divides u inside the wave phase (a fold ``stretch`` times
+    longer than wide)."""
+    return (np.sqrt(2.0 / 6.0) * sum(np.cos(k * (np.cos(a) * u / stretch + np.sin(a) * v) + ph) for k, a, ph in zip(*wave))
+            for wave in waves)
+
+
 def closure(area, height, aspect=1.0, azimuth=0.0, center=None, limb_ratio=1.0, tilt=0.0,
             satellites=0, warp=0.0, seed=None):
     """A four-way dip closure over ``area`` (m2) with ``height`` (m) of relief, lobate and asymmetric.
@@ -306,8 +320,7 @@ def closure(area, height, aspect=1.0, azimuth=0.0, center=None, limb_ratio=1.0, 
     rng = np.random.default_rng(seed)
     sats = [(float(rng.choice((-1.0, 1.0)) * rng.uniform(0.6, 1.4) * aspect), float(rng.normal(0.0, 0.3)),
              float(rng.uniform(0.3, 0.8)), float(rng.uniform(0.3, 0.7))) for _ in range(int(satellites))]
-    waves = [(rng.uniform(1.5, 3.5, 6), rng.uniform(0.0, 2.0 * np.pi, 6), rng.uniform(0.0, 2.0 * np.pi, 6))
-             for _ in range(2)] if warp else []
+    waves = _waves(rng) if warp else []
     slope = float(tilt) * 8.0 / (3.0 * np.sqrt(3.0)) / w_back       # the bump's steepest slope, 8/(3 sqrt 3) / w
 
     def bump(rho2):
@@ -316,8 +329,7 @@ def closure(area, height, aspect=1.0, azimuth=0.0, center=None, limb_ratio=1.0, 
     def uplift(u, v):
         tilted = -slope * v
         if waves:
-            du, dv = (np.sqrt(2.0 / 6.0) * sum(np.cos(k * (np.cos(a) * u / aspect + np.sin(a) * v) + ph)
-                                            for k, a, ph in zip(*wave)) for wave in waves)
+            du, dv = _wave_sum(waves, u, v, aspect)
             u, v = u + warp * aspect * du, v + warp * dv
         w = np.where(v > 0.0, w_fore, w_back)
         out = bump((u / aspect) ** 2 + (v / w) ** 2) + tilted
