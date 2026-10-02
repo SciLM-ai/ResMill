@@ -428,7 +428,9 @@ class DeltaLayer(ChannelLayer):
         else:
             trunk_per_gen = np.full(n_generations, base_trunk)
         if max_levels is not None:      # the levels are not in order of height: the progradation follows each one's
-            height = (np.asarray(chelev_per_gen) - z_bot) / max(z_len - z_bot, 1e-9)
+            # the room above the first level is at least a cell: a zone no thicker than its trunk is deep has none, and
+            # dividing by about zero sent every level after the first to a front of no radius and a trunk of no length
+            height = np.clip((np.asarray(chelev_per_gen) - z_bot) / max(z_len - z_bot, self.dz), 0.0, 1.0)
             trunk_per_gen = np.clip(base_trunk + progradation_fraction * height, 0.0, 0.95)
 
         # Run n_generations independent simulations and merge.

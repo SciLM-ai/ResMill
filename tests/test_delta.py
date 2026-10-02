@@ -297,6 +297,61 @@ def test_max_levels_needs_the_stop():
         _tree_delta(max_levels=10)
 
 
+def _levels_asked(monkeypatch, z_len, nz, **extra):
+    """(channel top, protected trunk fraction, front radius) of the engine of every level, in the order the levels run,
+    for a stop with ``max_levels`` in a zone ``z_len`` thick; the layer is returned beside them."""
+    from resmill.layers import _fluvial
+
+    seen, original = [], _fluvial.fluvial.__init__
+
+    def record(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        seen.append((self.level_z[0], self.min_avul_node_frac, self.front_radius))
+
+    monkeypatch.setattr(_fluvial.fluvial, "__init__", record)
+    layer = DeltaLayer(nx=48, ny=48, nz=nz, x_len=1920.0, y_len=1920.0, z_len=z_len, top_depth=1000)
+    layer.create_geology(**{**TREE, "tree_ntg_stop": True, "n_trees": 1, "max_levels": 5, "progradation_fraction": 0.2,
+                            "trunk_length_fraction": 0.3, "front_radius": 1.0, **extra})
+    return seen, layer
+
+
+def test_the_progradation_of_a_level_follows_its_height_between_the_floor_and_the_roof(monkeypatch):
+    """The levels of a 24 m zone with a 4 m trunk run 4, 24, 14, 9, 19 m (the floor, the roof, the middle, the
+    quarter points), so their heights from the first level's top to the roof are 0, 1, 1/2, 1/4 and 3/4. A level
+    at height h protects 0.3 + 0.2 h of the trunk and ends at 1 + 0.2 h of the front radius."""
+    seen, _ = _levels_asked(monkeypatch, 24.0, 12, NTGtarget=0.9)
+    np.testing.assert_allclose([s[0] for s in seen], [4.0, 24.0, 14.0, 9.0, 19.0])
+    np.testing.assert_allclose([s[1] for s in seen], [0.30, 0.50, 0.40, 0.35, 0.45])
+    np.testing.assert_allclose([s[2] for s in seen], [1.00, 1.20, 1.10, 1.05, 1.15])
+
+
+def test_a_zone_thinner_than_its_trunk_progrades_nothing_instead_of_by_a_billion(monkeypatch):
+    """A 12 m zone under a 16 m trunk: the levels run down from the trunk's depth (16, 12, 14, 15, 13 m), none above
+    the first, and the height is held to 0-1 where it used to be -4 / 1e-9 (a front radius of nothing, a trunk cut
+    to the apex, no network at any level after the first)."""
+    seen, _ = _levels_asked(monkeypatch, 12.0, 6, mCHdepth=16.0, mCHwdratio=10.0, NTGtarget=0.9)
+    np.testing.assert_allclose([s[0] for s in seen], [16.0, 12.0, 14.0, 15.0, 13.0])
+    np.testing.assert_allclose([s[1] for s in seen], 0.3)
+    np.testing.assert_allclose([s[2] for s in seen], 1.0)
+
+
+def test_a_zone_a_little_thicker_than_its_trunk_progrades_in_proportion(monkeypatch):
+    """The height is the level's rise over the room the zone has above the trunk, at least one cell (2 m here), so
+    a zone 1 m above its trunk's depth never reaches a height of 1 and the progradation is continuous in the zone's
+    thickness: 12 m under a 11 m trunk gives levels 11, 12, 11.5, ... of heights 0, 1/2, 1/4, ..."""
+    seen, _ = _levels_asked(monkeypatch, 12.0, 6, mCHdepth=11.0, mCHwdratio=10.0, NTGtarget=0.9)
+    np.testing.assert_allclose([s[0] for s in seen[:3]], [11.0, 12.0, 11.5])
+    np.testing.assert_allclose([s[1] for s in seen[:3]], [0.30, 0.30 + 0.2 * 0.5, 0.30 + 0.2 * 0.25])
+
+
+def test_a_level_stop_in_a_zone_thinner_than_its_trunk_still_grows_a_network_at_every_level(monkeypatch):
+    """The symptom of the height above: one network at the first level and none at the rest, the stop running through
+    all ``max_levels`` empty levels (a share of 3 % here for an aim of 25 %)."""
+    seen, layer = _levels_asked(monkeypatch, 12.0, 6, mCHdepth=16.0, mCHwdratio=10.0, NTGtarget=0.25, max_levels=12)
+    assert len({b["gen"] for b in layer.tree_branches}) > 6
+    assert 0.25 <= (layer.facies >= 1).mean() < 0.4
+
+
 # --------------------------------------------------------------------------
 # opt-in levees that follow their own branch
 # --------------------------------------------------------------------------

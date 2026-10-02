@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- `max_levels` (`DeltaLayer`, with `tree_ntg_stop=True`) in a zone no thicker than its trunk is deep grew a
+  network at the first level only. The progradation follows each level's height above the first level's top,
+  divided by the room above it (the zone's thickness minus the trunk's depth), which is nothing or negative in such a
+  zone and was taken as 1e-9: every later level had a height of about -1e9, a front radius of nothing and a trunk
+  cut to the apex, so the stop ran through all its levels, empty, and ended short of its target (3 x 3 km, 18 m
+  trunk, aim 0.55: 0.06, 0.08, 0.12 and 0.18 in zones of 4, 6, 9 and 14 m, one level in 300 grew a network). The
+  height is now held to 0-1 and the room is at least a cell: the same grid gives 0.62, 0.59, 0.58 and 0.56. A zone
+  more than a cell thicker than its trunk is built as before; `progradation_fraction=0` and `max_levels=None` do not
+  see the change.
 - `facies_props` given to one `ChannelLayer` or `DeltaLayer` no longer
   rewrite the module's `FACIES_PROPS`. The table was copied one level deep
   and its inner dicts updated in place, so every later layer built without
