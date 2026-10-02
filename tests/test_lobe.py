@@ -328,7 +328,8 @@ def test_interlobe_lobes_have_the_non_net_rock_the_net_to_gross_leaves():
     assert 0.2 < (perm < 1.0).mean() < 0.4 and (perm < 1.0).mean() == pytest.approx(1.0 - layer.interlobe["net_cells"], abs=0.01)
     assert (perm[s < 0.5] < 1.0).all() and (perm[s > 0.51] > 1.0).all()
     assert {2, 3} <= set(np.unique(layer.facies)) <= {-1, 2, 3}
-    assert np.array_equal(layer.facies == 3, s >= 0.5)
+    assert np.array_equal(layer.facies == 3, s >= 0.5)       # the Tanqua's classes: sand 50 % or more, fringe 20-50 %, distal fringe under 20 %
+    assert np.array_equal(layer.facies == 2, (s >= 0.2) & (s < 0.5)) and np.array_equal(layer.facies == -1, s < 0.2)
     assert layer.interlobe["mud_thickness_m"] > 0.0 and 0.0 <= layer.interlobe["amalgamated"] <= 1.0
 
 

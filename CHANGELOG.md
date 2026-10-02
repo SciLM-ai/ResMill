@@ -242,7 +242,8 @@
   stamp counts, so a sliver of a deposit between two stamps shields nothing). `M` is found by bisection so that the layer's mean sand fraction is `ntg` (thickness-based, whatever the
   grid; a warning if the stack cannot go as low); porosity mixes arithmetically, permeability as the 2-D effective
   medium (tight below half sand, so a net-to-gross of 0.65 leaves a fifth to two fifths of the cells under 1 mD),
-  kv/kh log-linearly from the mud's through the fringe's at half sand to the sand's. `self.interlobe` holds the
+  kv/kh log-linearly from the mud's through the fringe's at half sand to the sand's. Facies are 3 (net), 2 (sand
+  fraction 0.2-0.5, the Tanqua's fringe) and -1 (under 0.2, its distal fringe). `self.interlobe` holds the
   cap thickness, the share of contacts amalgamated and the share of net cells. The option also clips the porosity
   decay of a stamp thinner than a cell or two at 1: a cell whose lower face lies below the stamp's base had a decay
   above 1, a ring of porosity above the design maximum 0.35 that shows as a small bright ring in a plan view

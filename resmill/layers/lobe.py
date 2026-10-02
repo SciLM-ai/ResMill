@@ -13,7 +13,7 @@ from ._fluvial import _gauss_clip
 _FACIES_KEYS = {-1: {"poro", "log10_perm", "poro_sd", "log10_perm_sd", "kvkh"},
                 2: {"ntg_floor", "ntg_crest", "kvkh"}, 3: {"kvkh"}}
 _SAND_SHARE_MIN = 0.5    # a faded cell with at least this sand fraction is labelled sand (3)
-_MUD_SHARE_MAX = 0.1     # below this sand fraction it is mud (-1), in between thin-bedded fringe (2)
+_MUD_SHARE_MAX = 0.2     # below this sand fraction it is mud (-1), the Tanqua's distal fringe (under 20 % sandstone), in between thin-bedded fringe (2)
 
 
 def _compensation_weights(surface, dz, dh_ave, scale):
@@ -193,7 +193,7 @@ class LobeLayer(Layer):
             1 mD are the non-net share), kv/kh runs log-linearly from the mud's through the
             fringe's (``facies_props[2]["kvkh"]``, at half sand: the most heterolithic) to the
             sand's. It also keeps the stamps' porosity decay at 1 (``clip_decay``). Facies are
-            3 (net), 2 (sand fraction 0.1 to 0.5) and -1; ``self.sand_fraction`` holds the
+            3 (net), 2 (sand fraction 0.2 to 0.5, the Tanqua's fringe) and -1 (under 0.2, its distal fringe); ``self.sand_fraction`` holds the
             fraction and ``self.interlobe`` the cap thickness ``mud_thickness_m``, the share of
             contacts ``amalgamated``, the mean ``sand_fraction`` (``ntg``) and ``net_cells``,
             the share of cells whose sand is the majority (those above 1 mD).
