@@ -189,9 +189,10 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     Kondev and Henley 1995, Mandelbrot 1967). It fades out over the taper, so the thick sand is smooth. More than
     about 0.2 of the main tongue's length, or of the taper for an erosional edge, breaks the sand into pieces that hold
     no trap. In a truncation or an onlap the wander is the relief of the erosion surface: tan(taper_angle) times it,
-    ``meta["erosion_relief_m"]`` (a valley of that depth preserves sand farther updip by its depth over the
-    discordance). ``relief_sd`` (m) is the low-amplitude relief of the zone's top and base together, a
-    :func:`resmill.structure.relief` surface of range ``relief_range``: the closure is that of the geometry with it.
+    ``meta["erosion_relief_m"]`` (None where there is no erosion surface); a valley of that depth preserves sand
+    farther updip by its depth over the discordance. ``relief_sd`` (m) is the low-amplitude relief of the zone's top
+    and base together, a :func:`resmill.structure.relief` surface of range ``relief_range``: the closure is that of
+    the geometry with it.
 
     A combination trap takes its lateral closure from a ``nose``, the keywords of :func:`resmill.structure.closure`
     (``area``, ``height`` and ``aspect`` are required, ``height`` at most :data:`MAX_NOSE`; give no ``tilt``: the
@@ -254,12 +255,12 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                  for n, (_, r) in zip(lengths, parts)]
     offsets = _packed([2.0 * s[2] for s in sizes], np.random.default_rng(ss[0]))
     length = lengths[0]
-    t = np.linspace(0.0, 2.0 * np.pi, 73)                                      # the rim of a shape, its base too
+    phi = np.linspace(0.0, 2.0 * np.pi, 73)                                    # the rim of a shape, its base too
 
     def fits(shift):                                   # the rims, the line ``shift`` m from the centre along dip
         for (up, down, wide), v in zip(sizes, offsets):
-            rim = (shift + np.where(np.cos(t) < 0.0, up, down) * np.cos(t))[:, None] * dip_dir \
-                + (v + wide * np.sin(t))[:, None] * strike
+            rim = (shift + np.where(np.cos(phi) < 0.0, up, down) * np.cos(phi))[:, None] * dip_dir \
+                + (v + wide * np.sin(phi))[:, None] * strike
             if not (np.abs(rim) <= 0.4 * np.array([x_len, y_len])).all():
                 return False
         return True
@@ -304,8 +305,9 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     rough = st.relief(wander, range_m, x_len, y_len, hurst, floor_m, seed=ss[1]) if wander else None
     if lens:
         taper_m = min(taper_m, 0.5 * lengths[0] * min(1.0, aspect)) if mound else taper_m   # a whole mound
+
     def factor(shift):                                     # the thickness factor of a layer ending ``shift`` m downdip
-        moved = outline if not shift else st.Structure(
+        moved = outline if outline is None or not shift else st.Structure(
             lambda x, y: outline(x - shift * dip_dir[0], y - shift * dip_dir[1]))
         return st.taper(None if line is None else line + shift, taper_m, azimuth, outline=moved, x_len=x_len,
                         y_len=y_len, edge=rough)
@@ -334,7 +336,8 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                 tongues=[dict(area=a, aspect=r, length=n, offset=float(v)) for (a, r), n, v in
                          zip(parts, lengths, offsets)] if area is not None and not nosed else [],
                 length=length, line=line, nose=nose, barrier=bool(barrier), net_layers=n_net, seed=seed,
-                erosion_relief_m=np.tan(np.radians(taper_angle)) * wander,
+                erosion_relief_m=np.tan(np.radians(taper_angle)) * wander if kind in ("truncation", "onlap",
+                                                                                      "truncation_nose") else None,
                 spill_expected=None if lens else level,
                 closure_expected=nose["height"] if nosed else tan_dip * length,
                 crest_expected=level - (nose["height"] if nosed else tan_dip * (length if not lens else 0.5 * length)))

@@ -766,6 +766,8 @@ def test_the_erosion_surface_of_a_truncation_has_the_relief_the_wander_maps_to()
     smooth = strat_trap("truncation", x_len, y_len, 2000.0, [10.0], seed=7, **kw)
     rough = strat_trap("truncation", x_len, y_len, 2000.0, [10.0], seed=7, wander=300.0, **kw)
     assert smooth["meta"]["erosion_relief_m"] == 0.0
+    assert strat_trap("pinchout", x_len, y_len, 2000.0, [10.0], seed=7, area=None, wander=300.0)["meta"][
+        "erosion_relief_m"] is None
     assert rough["meta"]["erosion_relief_m"] == pytest.approx(300.0 * np.tan(np.radians(0.3)))
     x, y = np.meshgrid((np.arange(160) + 0.5) * dx, (np.arange(120) + 0.5) * dx, indexing="ij")
     e0, e1 = smooth["kwargs"]["erode_above"](x, y), rough["kwargs"]["erode_above"](x, y)
@@ -849,6 +851,17 @@ def test_staggered_layers_end_each_farther_downdip_by_the_stagger_and_the_interv
             assert np.allclose(zc[:, :, -1] - zc[:, :, 0], 18.0, atol=1e-6) and act[:, :, 12:].all()
     assert np.ptp(first[0.0]) <= 1.5 * dx
     assert np.diff(first[300.0]) == pytest.approx([300.0, 300.0], abs=1.5 * dx)
+
+
+def test_staggered_layers_end_farther_downdip_along_a_straight_line_too():
+    x_len, y_len, dx = 8000.0, 6000.0, 25.0
+    layers = _layers(x_len, y_len, dx, [4.0, 4.0], dz=1.0)
+    built = strat_trap("pinchout", x_len, y_len, 2000.0, [4.0, 4.0], seed=2, dip=1.5, taper_angle=0.5, area=None,
+                       stagger=250.0)
+    _, _, _, act = _build_geometry(layers, **built["kwargs"])
+    first = [int(np.argmax(act[100, :, 4 * k:4 * k + 4].any(axis=1))) * dx for k in range(2)]
+    assert first[1] - first[0] == pytest.approx(250.0, abs=1.5 * dx)
+    assert built["meta"]["tongues"] == [] and built["meta"]["stagger"] == 250.0
 
 
 def test_a_stagger_belongs_to_the_depositional_edges_with_a_sand_of_more_than_one_layer():
