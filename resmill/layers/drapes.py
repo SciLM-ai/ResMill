@@ -55,6 +55,8 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 from scipy.special import betainc, betaincinv
 
+from .base import RANGE_PER_SIGMA
+
 __all__ = ["COVERAGE_BETA", "COVERAGE_RANGE", "HOLE_RANGE_WIDTHS", "MARGIN_BIAS_MAX", "THICKNESS_RANGE_M", "check_drapes",
            "coverage_from_unit", "sample_drapes", "storey_map", "draped_columns", "drape_faces", "place_drapes"]
 
@@ -250,13 +252,11 @@ def place_drapes(facies, storey, depth_norm, perms, size, drapes, mud_perm, seed
     practical range in metres and must be given) on a facies cube with its storeys, :func:`drape_faces` of
     :func:`draped_columns`. ``mud_perm`` is the permeability of a drape without ``perm``; ``seed`` seeds the drape's own
     random stream (None: numpy's global state, read and not advanced)."""
-    from .channel import _RANGE_PER_SIGMA          # the range convention of noise_range_m
-
     s = check_drapes(drapes)
     if s["hole_range_m"] is None:
         raise ValueError("drapes needs hole_range_m here (ChannelLayer.create_geology defaults it to half a channel)")
     rng = np.random.default_rng(_stream_seed(seed))
-    sigma = tuple(s["hole_range_m"] / _RANGE_PER_SIGMA / d for d in size[:2])
+    sigma = tuple(s["hole_range_m"] / RANGE_PER_SIGMA / d for d in size[:2])
     draped = draped_columns((facies == 3) | (facies == 4), storey, depth_norm, s["coverage"], s["margin_bias"], sigma,
                             rng, s["coverage_concentration"])
     return drape_faces(facies, storey, draped, perms, size, s["thickness"],

@@ -1,5 +1,9 @@
 import numpy as np
 
+# White noise smoothed by a Gaussian of s.d. s has correlation exp(-h^2 / 4 s^2), which falls to
+# 5 % (the practical range) at h = 2 sqrt(3) s: the range convention of ``noise_range_m`` and of the drapes' holes.
+RANGE_PER_SIGMA = 2.0 * float(np.sqrt(3.0))
+
 
 class Layer:
     """Base class for geological layers. Defines grid geometry and surfaces."""

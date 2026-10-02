@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .base import Layer
+from .base import RANGE_PER_SIGMA, Layer
 from .drapes import check_drapes, place_drapes, storey_map
 
 __all__ = [
@@ -51,11 +51,6 @@ FACIES_PROPS: dict[int, dict[str, float]] = {
      3: {"poro": 0.25, "log10_perm":  2.7},  # LA     lateral accretion
      4: {"poro": 0.30, "log10_perm":  3.3},  # CH     active channel
 }
-
-
-# White noise smoothed by a Gaussian of s.d. s has correlation exp(-h^2 / 4 s^2), which falls to
-# 5 % (the practical range) at h = 2 sqrt(3) s.
-_RANGE_PER_SIGMA = 2.0 * float(np.sqrt(3.0))
 
 
 def _correlated_noise(shape: tuple, range_xy: float, sigma: tuple | None = None) -> np.ndarray:
@@ -355,7 +350,7 @@ class ChannelLayer(Layer):
         # With none of them given nothing is drawn and the cap is the 0.5 clip.
         sigma = None
         if noise_range_m is not None:
-            horizontal, vertical = (float(v) / _RANGE_PER_SIGMA for v in noise_range_m)
+            horizontal, vertical = (float(v) / RANGE_PER_SIGMA for v in noise_range_m)
             sigma = (horizontal / self.dx, horizontal / self.dy, vertical / self.dz)
         if poro_sd.any():
             poro_mat = poro_mat * np.exp(poro_sd * _correlated_noise(self.facies.shape, poro_noise_range, sigma))
@@ -445,7 +440,6 @@ class ChannelLayer(Layer):
             self.mult_x, self.mult_y, self.mult_z = place_drapes(
                 self.facies, storey, depth_norm, perms, (self.dx, self.dy, self.dz), drapes,
                 10.0 ** float(props[-1]["log10_perm"]), drape_seed)
-
 
     def create_geology(
         self,
