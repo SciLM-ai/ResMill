@@ -137,6 +137,129 @@ def _packed(widths, rng):
     return offsets
 
 
+def _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger, nose):
+    """Refuse what :func:`strat_trap` cannot build; returns the number of sand layers (the thicknesses less the
+    barrier's)."""
+    nosed, lens = kind in NOSED, kind == "lens"
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}, not {kind!r}")
+    if not 0.0 < taper_angle < 90.0:
+        raise ValueError(f"taper_angle must lie between 0 and 90 degrees, not {taper_angle}")
+    if bool(barrier) != (kind == "facies_change") and not (lens and barrier):
+        raise ValueError(f"a barrier zone is what a facies change needs and a lens may have, not a {kind}")
+    if lens and area is None:
+        raise ValueError("a lens needs an area")
+    if nosed != (nose is not None):
+        raise ValueError(f"a nose (its area, height and aspect) is what {', '.join(NOSED)} need, not a {kind}")
+    if nosed and not 0.0 < nose["height"] <= MAX_NOSE:
+        raise ValueError(f"the nose's height must lie between 0 and {MAX_NOSE:.0f} m, the closure of Kuparuk")
+    if nosed and nose.get("tilt", 0.0):
+        raise ValueError("a nose takes no tilt: the plane is the dip")
+    if kind.startswith("truncation") and taper_angle > dip:
+        raise ValueError(f"the erosion surface must dip the same way as the beds, less steeply: the discordance "
+                         f"taper_angle ({taper_angle}) cannot exceed the bed dip ({dip})")
+    if len(tongues) and (nosed or lens or area is None):
+        raise ValueError(f"tongues are further lobes on the edge of a pinch-out, truncation or onlap with an area, "
+                         f"not on a {kind}{' without one' if area is None else ''}")
+    n_net = len(thicknesses) - bool(barrier)
+    if n_net < 1:
+        raise ValueError("thicknesses needs a sand layer as well as the barrier")
+    if stagger and (kind not in ("pinchout", "facies_change") or n_net < 2):
+        raise ValueError(f"a stagger (the sand layers ending each farther downdip) needs a pinch-out or a facies "
+                         f"change of more than one sand layer, not a {kind} of {n_net}")
+    return n_net
+
+
+def _shapes(nose, area, aspect, tongues, lens):
+    """The footprints of the shapes: their (area, aspect) as drawn, their lengths along dip and, for each, how far it
+    reaches updip and downdip of its line (of its middle, for a lens) and half across it."""
+    if nose is not None:
+        reach = np.sqrt(nose["area"] / (np.pi * nose["aspect"]))                 # the nose's half-length along dip
+        return [], [0.0], [(reach, reach, nose["aspect"] * reach)]
+    if area is None:
+        return [], [0.0], [(0.0, 0.0, 0.0)]                                      # a straight line: a point to fit
+    parts = [(float(area), float(aspect))] + [(float(a), float(r)) for a, r in tongues]
+    lengths = [2.0 * np.sqrt(a / (np.pi * r)) for a, r in parts]                 # each trap's length along dip
+    return parts, lengths, [(0.5 * n, 0.5 * n, 0.5 * r * n) if lens else (n, 0.0, 0.5 * r * n)
+                            for n, (_, r) in zip(lengths, parts)]
+
+
+def _line_shift(sizes, offsets, x_len, y_len, dip_dir, strike, lens):
+    """How far along dip from the model's centre (m) the line goes (the middle of a lens: 0): as far updip as the rims
+    of all the shapes fit within 80 % of the model's size; a ValueError where they do not fit at all."""
+    with np.errstate(divide="ignore"):                       # the model's half-length along dip, through its centre
+        half = float(min(0.5 * x_len / abs(dip_dir[0]), 0.5 * y_len / abs(dip_dir[1])))
+    phi = np.linspace(0.0, 2.0 * np.pi, 73)                                    # the rim of a shape, its base too
+
+    def fits(shift):                                   # the rims, the line ``shift`` m from the centre along dip
+        for (up, down, wide), v in zip(sizes, offsets):
+            rim = (shift + np.where(np.cos(phi) < 0.0, up, down) * np.cos(phi))[:, None] * dip_dir \
+                + (v + wide * np.sin(phi))[:, None] * strike
+            if not (np.abs(rim) <= 0.4 * np.array([x_len, y_len])).all():
+                return False
+        return True
+
+    grid = np.linspace(-half, half, 401)               # the line goes as far updip as the shapes fit (a lens: centred)
+    first = [0] if lens else [k for k, shift in enumerate(grid) if fits(shift)][:1]
+    if not first or (lens and not fits(0.0)):
+        raise ValueError(f"the trap ({sum(max(u + d, 2 * w) for u, d, w in sizes[:1]):.0f} m across, with "
+                         f"{max(len(sizes) - 1, 0)} more tongues) does not fit the model: make the model larger or "
+                         f"the area smaller")
+    if lens:
+        return 0.0
+    lo, shift = grid[max(first[0] - 1, 0)], grid[first[0]]
+    for _ in range(40):                                # the fitting shifts are an interval: bisect to its updip end
+        mid = 0.5 * (lo + shift)
+        lo, shift = (lo, mid) if fits(mid) else (mid, shift)
+    return shift
+
+
+def _footprint(nose, parts, offsets, at, dip_dir, strike, azimuth, warp, lens, seeds):
+    """What outlines the sand: ``(fold, outline, line)``, the nose's fold (None without one), the footprint of the
+    tongues (a Structure, negative inside; None for a straight line or a nose) and where the line lies along dip
+    (m from the origin; None for a lens)."""
+    fold = outline = line = None
+    if nose is not None:
+        fold = st.closure(azimuth=azimuth, center=tuple(at), seed=seeds[0], **nose)
+        line = float((at + fold.crest_offset) @ dip_dir)
+    elif parts:
+        outlines = [st.closure(a if lens else 2.0 * a, 1.0, aspect=r if lens else 0.5 * r, azimuth=azimuth,
+                               center=tuple(at + v * strike), warp=warp, seed=k)
+                    for (a, r), v, k in zip(parts, offsets, seeds[1].spawn(len(parts)))]
+        outline = outlines[0] if len(outlines) == 1 else st.Structure(
+            lambda x, y: np.minimum.reduce([o(x, y) for o in outlines]))
+    if not lens and line is None:
+        line = float(at @ dip_dir)
+    return fold, outline, line
+
+
+def _refuse_edge(foot, lens, nosed, line, dip_dir, x_len, y_len):
+    """Refuse a footprint whose lobes come within 2 % of the model's edge where the trap is, over which it would
+    leak."""
+    gx, gy = np.meshgrid(np.linspace(0.0, x_len, 301), np.linspace(0.0, y_len, 301), indexing="ij")
+    inside, along_dip = foot(gx, gy) < 0.0, gx * dip_dir[0] + gy * dip_dir[1]
+    edge = (np.minimum(gx, x_len - gx) < 0.02 * x_len) | (np.minimum(gy, y_len - gy) < 0.02 * y_len)
+    watched = edge if lens else edge & (along_dip > line if nosed else along_dip < line)   # where the trap is
+    if (watched & inside).any():
+        raise ValueError("the lobes of the trap come within 2 % of the model's edge, over which it would leak: use "
+                         "another seed, a smaller warp or a larger model")
+
+
+def _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_net):
+    """The thickness factor of each sand layer: ``factor(shift)`` is that of a layer ending ``shift`` m downdip of the
+    first (the line and every tongue's outline moved), and the list has one per sand layer."""
+    dip_dir = np.array([np.sin(np.radians(azimuth)), np.cos(np.radians(azimuth))])
+
+    def factor(shift):
+        moved = outline if outline is None or not shift else st.Structure(
+            lambda x, y: outline(x - shift * dip_dir[0], y - shift * dip_dir[1]))
+        return st.taper(None if line is None else line + shift, taper_m, azimuth, outline=moved, x_len=x_len,
+                        y_len=y_len, edge=rough)
+
+    f = factor(0.0)
+    return f, ([f] + [factor(k * stagger) for k in range(1, n_net)] if stagger else [f] * n_net)
+
+
 def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.0, azimuth=0.0, taper_angle=0.3,
                area=3.4e6, aspect=2.2, warp=0.3, tongues=(), stagger=0.0, wander=0.0, range_m=1000.0, hurst=0.75,
                floor_m=None, relief_sd=0.0, relief_range=2000.0, mound=True, nose=None):
@@ -205,115 +328,29 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     a rough edge, tongues, relief or a mound the closure is what the geometry has, which :func:`trap_report` reads.
     """
     nosed, lens = kind in NOSED, kind == "lens"
-    if kind not in KINDS:
-        raise ValueError(f"kind must be one of {KINDS}, not {kind!r}")
-    if not 0.0 < taper_angle < 90.0:
-        raise ValueError(f"taper_angle must lie between 0 and 90 degrees, not {taper_angle}")
-    if bool(barrier) != (kind == "facies_change") and not (lens and barrier):
-        raise ValueError(f"a barrier zone is what a facies change needs and a lens may have, not a {kind}")
-    if lens and area is None:
-        raise ValueError("a lens needs an area")
-    if nosed != (nose is not None):
-        raise ValueError(f"a nose (its area, height and aspect) is what {', '.join(NOSED)} need, not a {kind}")
-    if nosed and not 0.0 < nose["height"] <= MAX_NOSE:
-        raise ValueError(f"the nose's height must lie between 0 and {MAX_NOSE:.0f} m, the closure of Kuparuk")
-    if nosed and nose.get("tilt", 0.0):
-        raise ValueError("a nose takes no tilt: the plane is the dip")
-    if kind.startswith("truncation") and taper_angle > dip:
-        raise ValueError(f"the erosion surface must dip the same way as the beds, less steeply: the discordance "
-                         f"taper_angle ({taper_angle}) cannot exceed the bed dip ({dip})")
-    if len(tongues) and (nosed or lens or area is None):
-        raise ValueError(f"tongues are further lobes on the edge of a pinch-out, truncation or onlap with an area, "
-                         f"not on a {kind}{' without one' if area is None else ''}")
     thicknesses = [float(t) for t in thicknesses]
-    n_net = len(thicknesses) - bool(barrier)
-    if n_net < 1:
-        raise ValueError("thicknesses needs a sand layer as well as the barrier")
-    if stagger and (kind not in ("pinchout", "facies_change") or n_net < 2):
-        raise ValueError(f"a stagger (the sand layers ending each farther downdip) needs a pinch-out or a facies "
-                         f"change of more than one sand layer, not a {kind} of {n_net}")
+    n_net = _check(kind, barrier, dip, taper_angle, area, tongues, thicknesses, stagger, nose)
     t_sand = sum(thicknesses[:n_net])
     taper_m = t_sand / np.tan(np.radians(taper_angle))
     az = np.radians(azimuth)
     dip_dir, strike = np.array([np.sin(az), np.cos(az)]), np.array([np.cos(az), -np.sin(az)])
     centre = np.array([0.5 * x_len, 0.5 * y_len])
-    with np.errstate(divide="ignore"):                       # the model's half-length along dip, through its centre
-        half = float(min(0.5 * x_len / abs(dip_dir[0]), 0.5 * y_len / abs(dip_dir[1])))
     ss = np.random.SeedSequence(seed).spawn(5)
-    # the shapes: how far each reaches updip and downdip of its line (of its middle, for a lens), half across it, and
-    # where along the line it sits
-    if nosed:
-        reach = np.sqrt(nose["area"] / (np.pi * nose["aspect"]))             # the nose's half-length along dip
-        sizes = [(reach, reach, nose["aspect"] * reach)]
-        lengths = [0.0]
-    elif area is None:
-        sizes, lengths = [(0.0, 0.0, 0.0)], [0.0]                            # a straight line: a point to fit
-    else:
-        parts = [(float(area), float(aspect))] + [(float(a), float(r)) for a, r in tongues]
-        lengths = [2.0 * np.sqrt(a / (np.pi * r)) for a, r in parts]         # each trap's length along dip
-        sizes = [(0.5 * n, 0.5 * n, 0.5 * r * n) if lens else (n, 0.0, 0.5 * r * n)
-                 for n, (_, r) in zip(lengths, parts)]
+    parts, lengths, sizes = _shapes(nose, area, aspect, tongues, lens)
     offsets = _packed([2.0 * s[2] for s in sizes], np.random.default_rng(ss[0]))
     length = lengths[0]
-    phi = np.linspace(0.0, 2.0 * np.pi, 73)                                    # the rim of a shape, its base too
-
-    def fits(shift):                                   # the rims, the line ``shift`` m from the centre along dip
-        for (up, down, wide), v in zip(sizes, offsets):
-            rim = (shift + np.where(np.cos(phi) < 0.0, up, down) * np.cos(phi))[:, None] * dip_dir \
-                + (v + wide * np.sin(phi))[:, None] * strike
-            if not (np.abs(rim) <= 0.4 * np.array([x_len, y_len])).all():
-                return False
-        return True
-
-    grid = np.linspace(-half, half, 401)               # the line goes as far updip as the shapes fit (a lens: centred)
-    first = [0] if lens else [k for k, shift in enumerate(grid) if fits(shift)][:1]
-    if not first or (lens and not fits(0.0)):
-        raise ValueError(f"the trap ({sum(max(u + d, 2 * w) for u, d, w in sizes[:1]):.0f} m across, with "
-                         f"{max(len(sizes) - 1, 0)} more tongues) does not fit the model: make the model larger or "
-                         f"the area smaller")
-    shift = 0.0
-    if not lens:
-        lo, shift = grid[max(first[0] - 1, 0)], grid[first[0]]
-        for _ in range(40):                            # the fitting shifts are an interval: bisect to its updip end
-            mid = 0.5 * (lo + shift)
-            lo, shift = (lo, mid) if fits(mid) else (mid, shift)
-    at = centre + shift * dip_dir
-    ramp = st.ramp(dip, azimuth, center=tuple(centre))
-    outline, line, structure = None, None, ramp
-    if nosed:
-        fold = st.closure(azimuth=azimuth, center=tuple(at), seed=ss[3], **nose)
-        structure, line = ramp + fold, float((at + fold.crest_offset) @ dip_dir)
-    elif area is not None:
-        outlines = [st.closure(a if lens else 2.0 * a, 1.0, aspect=r if lens else 0.5 * r, azimuth=azimuth,
-                               center=tuple(at + v * strike), warp=warp, seed=k)
-                    for (a, r), v, k in zip(parts, offsets, ss[4].spawn(len(parts)))]
-        outline = outlines[0] if len(outlines) == 1 else st.Structure(
-            lambda x, y: np.minimum.reduce([o(x, y) for o in outlines]))
-    if not lens:
-        line = float(at @ dip_dir) if line is None else line
-    gx, gy = np.meshgrid(np.linspace(0.0, x_len, 301), np.linspace(0.0, y_len, 301), indexing="ij")
-    foot = fold if nosed else outline
-    if foot is not None:
-        inside, along_dip = foot(gx, gy) < 0.0, gx * dip_dir[0] + gy * dip_dir[1]
-        edge = (np.minimum(gx, x_len - gx) < 0.02 * x_len) | (np.minimum(gy, y_len - gy) < 0.02 * y_len)
-        watched = edge if lens else edge & (along_dip > line if nosed else along_dip < line)   # where the trap is
-        if (watched & inside).any():
-            raise ValueError("the lobes of the trap come within 2 % of the model's edge, over which it would leak: use "
-                             "another seed, a smaller warp or a larger model")
+    at = centre + _line_shift(sizes, offsets, x_len, y_len, dip_dir, strike, lens) * dip_dir
+    fold, outline, line = _footprint(nose, parts, offsets, at, dip_dir, strike, azimuth, warp, lens, (ss[3], ss[4]))
+    structure = st.ramp(dip, azimuth, center=tuple(centre))
+    structure = structure if fold is None else structure + fold
+    if fold is not None or outline is not None:
+        _refuse_edge(fold if nosed else outline, lens, nosed, line, dip_dir, x_len, y_len)
     if relief_sd:
         structure = structure + st.relief(relief_sd, relief_range, x_len, y_len, hurst, floor_m, seed=ss[2])
     rough = st.relief(wander, range_m, x_len, y_len, hurst, floor_m, seed=ss[1]) if wander else None
     if lens:
         taper_m = min(taper_m, 0.5 * lengths[0] * min(1.0, aspect)) if mound else taper_m   # a whole mound
-
-    def factor(shift):                                     # the thickness factor of a layer ending ``shift`` m downdip
-        moved = outline if outline is None or not shift else st.Structure(
-            lambda x, y: outline(x - shift * dip_dir[0], y - shift * dip_dir[1]))
-        return st.taper(None if line is None else line + shift, taper_m, azimuth, outline=moved, x_len=x_len,
-                        y_len=y_len, edge=rough)
-
-    f = factor(0.0)
-    layers_f = [f] + [factor(k * stagger) for k in range(1, n_net)] if stagger else [f] * n_net
+    f, layers_f = _thickness(line, outline, taper_m, azimuth, x_len, y_len, rough, stagger, n_net)
     sink = st.Structure(lambda x, y: t_sand * (1.0 - f(x, y)))        # what the top lies below the base's plane
     if lens and mound:
         structure = structure + sink                                 # the base stays flat: the top is the mound's
