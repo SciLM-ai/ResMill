@@ -437,15 +437,15 @@ def test_drapes_are_off_by_default_and_change_no_rock():
     """Without ``drapes`` there are no multipliers; with them the facies, porosity and permeability are the same arrays
     and the global random stream ends where it would have, so a run with and without drapes shares one geology."""
     off = _build()
-    after_off = np.random.get_state()[1].copy()
+    after_off = _global_state()
     on = _build(drapes=dict(coverage=0.6, margin_bias=0.2))
-    after_on = np.random.get_state()[1].copy()
+    after_on = _global_state()
     assert off.mult_x is off.mult_y is off.mult_z is None
     assert on.mult_x.shape == on.mult_y.shape == on.mult_z.shape == on.facies.shape
     for name in ("facies", "poro_mat", "perm_mat", "active", "kvkh_mat", "kx_mult", "ky_mult"):
         a, b = getattr(off, name), getattr(on, name)
         assert (a is None and b is None) or np.array_equal(a, b), name
-    assert np.array_equal(after_off, after_on)
+    assert after_off == after_on                     # key, position and Gaussian cache: not one number drawn more
     again = _build(drapes=dict(coverage=0.6, margin_bias=0.2))
     assert all(np.array_equal(getattr(again, k), getattr(on, k)) for k in ("mult_x", "mult_y", "mult_z"))
     assert np.array_equal(_layer(coverage=0.6, margin_bias=0.2).mult_z, on.mult_z)
@@ -515,7 +515,7 @@ def test_drapes_cover_about_the_coverage_of_the_contacts():
     draped = np.asarray(layer.mult_z) < 1.0
     possible = np.asarray(full.mult_z) < 1.0
     assert not (draped & ~possible).any()
-    assert 0.4 < draped.sum() / possible.sum() < 0.8
+    assert draped.sum() / possible.sum() == pytest.approx(0.6, abs=0.05)          # 0.59-0.61 over four seeds of this layer
 
 
 def test_the_margin_bias_moves_drapes_from_the_axis_to_the_margin_on_a_real_layer():
@@ -531,6 +531,60 @@ def test_the_margin_bias_moves_drapes_from_the_axis_to_the_margin_on_a_real_laye
         contrast[bias] = draped[axis_ness <= low].mean() - draped[axis_ness > high].mean()
         assert draped.mean() == pytest.approx(0.5, abs=0.05)
     assert abs(contrast[0.0]) < 0.05 and 0.1 < contrast[0.34] < 0.34 * 0.7
+
+
+def _exported(path, keyword, shape):
+    """One array of a written GRDECL as an (nx, ny, nz) cube in the layer's own order (k up)."""
+    words = path.read_text().split()
+    start = words.index(keyword) + 1
+    return np.array(words[start:words.index("/", start)], dtype=float).reshape(shape, order="F")[:, :, ::-1]
+
+
+def test_the_multipliers_use_the_permeabilities_the_exporter_writes_and_the_cell_size_across_each_face(tmp_path):
+    """Cells of 10 x 20 x 1 m, so dx differs from dy, and kx / ky of 4 along the channel, so PERMX differs from PERMY: the
+    multiplier of every draped face is the thin barrier between the PERMX, PERMY or PERMZ of the GRDECL written for its two
+    cells, over the cell size across it (dx, dy, dz). A swap of dx and dy, or of the kx and ky multipliers, changes it."""
+    layer = ChannelLayer(nx=100, ny=35, nz=12, x_len=1000.0, y_len=700.0, z_len=12.0, top_depth=2000.0)
+    layer.create_geology(seed=5, **{**GEOLOGY, "facies_props": {**MUD, 3: {"kxky": 4.0}, 4: {"kxky": 4.0}}},
+                         drapes=dict(coverage=1.0, thickness=0.5))
+    path = layer.to_grdecl(tmp_path / "m.grdecl")
+    perm = [_exported(path, key, layer.facies.shape) for key in ("PERMX", "PERMY", "PERMZ")]
+    assert (layer.dx, layer.dy, layer.dz) == (10.0, 20.0, 1.0) and not np.allclose(perm[0], perm[1], rtol=0.05)
+    for axis, (name, h) in enumerate((("mult_x", layer.dx), ("mult_y", layer.dy), ("mult_z", layer.dz))):
+        mult = np.asarray(getattr(layer, name), dtype=float)
+        faces = np.argwhere(mult < 1.0)
+        assert len(faces) > 50, name
+        for idx in faces[::max(1, len(faces) // 80)]:
+            neighbour = idx.copy()
+            neighbour[axis] += -1 if axis == 2 else 1             # a z face is held by the upper cell, its partner is below
+            k1, k2 = perm[axis][tuple(idx)], perm[axis][tuple(neighbour)]
+            assert mult[tuple(idx)] == pytest.approx(_series(k1, k2, 1e-3, 0.5, h), rel=1e-4), (name, idx)
+
+
+@pytest.mark.parametrize("name", ["PV_SHOESTRING", "CB_JIGSAW", "CB_LABYRINTH", "SH_DISTAL", "SH_PROXIMAL", "MEANDER_OXBOW"])
+def test_drapes_change_no_rock_and_draw_nothing_on_each_preset(name):
+    """On each of the six presets (a small grid): without drapes there are no multipliers; with them the facies, porosity and
+    permeability are the arrays of the same build, there are draped faces, and numpy's global state ends where it did."""
+    from resmill.layers import channel
+    built = []
+    for drapes in (None, dict(coverage=0.6)):
+        layer = ChannelLayer(nx=40, ny=30, nz=12, x_len=800.0, y_len=600.0, z_len=12.0, top_depth=2000.0)
+        layer.create_geology(seed=4, drapes=drapes, **getattr(channel, name))
+        built.append((layer, _global_state()))
+    (off, state_off), (on, state_on) = built
+    assert off.mult_x is off.mult_y is off.mult_z is None and state_off == state_on
+    for attr in ("facies", "poro_mat", "perm_mat", "active", "kvkh_mat", "kx_mult", "ky_mult"):
+        a, b = getattr(off, attr), getattr(on, attr)
+        assert (a is None and b is None) or np.array_equal(a, b), attr
+    assert (np.asarray(on.mult_z) < 1.0).sum() > 50
+
+
+def test_a_delta_layer_refuses_drapes_where_it_would_otherwise_ignore_them():
+    """Only the channel layer has drapes: a DeltaLayer's generations each keep their own event record, so it says so."""
+    from resmill.layers.delta import DeltaLayer
+    with pytest.raises(TypeError, match="drapes"):
+        DeltaLayer(nx=10, ny=10, nz=4, x_len=100.0, y_len=100.0, z_len=8.0, top_depth=0.0).create_geology(
+            seed=1, drapes=dict(coverage=0.5))
 
 
 def test_unknown_or_bad_drape_settings_are_refused_before_any_geology_is_made():
