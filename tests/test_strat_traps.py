@@ -240,6 +240,27 @@ def test_a_trap_on_a_dip_in_any_direction_closes_by_the_same_dip_times_its_lengt
     assert 3.4e6 * 0.95 < trap["area"] < 3.4e6 * 1.15
 
 
+@pytest.mark.parametrize("kind", ["pinchout", "facies_change", "lens", "truncation", "onlap"])
+def test_lobes_warped_by_a_quarter_close_by_the_dip_times_the_length_of_the_shape_that_was_made(kind):
+    """The warp of the lobes (a quarter of their width) moves their ends away from the ellipse they were drawn as, so
+    the closure follows the length along dip that the footprint really has (``closure_footprint``), not the nominal
+    one: over 8 seeds the measured closure is within 1.5 cells' rise and 8 % of it (the sheet's edge wanders 40 m)."""
+    x_len, y_len, dx = 8000.0, 6000.0, 50.0
+    thick = [10.0, 6.0] if kind == "facies_change" else [10.0]
+    errors = []
+    for seed in range(8):
+        try:
+            built = strat_trap(kind, x_len, y_len, 2000.0, thick, seed=seed, barrier=kind == "facies_change", dip=1.2,
+                               taper_angle=0.6, area=3.0e6, aspect=2.0, warp=0.25, wander=40.0, range_m=1000.0)
+        except ValueError:
+            continue
+        (trap,) = trap_report(_layers(x_len, y_len, dx, thick), built)[:1]
+        expected = built["meta"]["closure_footprint"]
+        errors.append(abs(trap["height"] - expected) - (1.5 * np.tan(np.radians(1.2)) * dx + 0.08 * expected))
+        assert built["meta"]["closure_expected"] == pytest.approx(np.tan(np.radians(1.2)) * _length(3.0e6, 2.0))
+    assert len(errors) >= 5 and max(errors) <= 0.0
+
+
 def test_a_straight_pinch_out_line_on_a_plane_monocline_has_no_closure():
     """Every point of the line lies at one depth, so the oil spills along it: the trap has no height or area."""
     built = strat_trap("pinchout", 8000.0, 6000.0, 2000.0, [10.0], seed=1, dip=1.0, taper_angle=0.5, area=None)
@@ -290,7 +311,13 @@ def test_a_facies_change_is_the_same_trap_with_a_barrier_zone_taking_the_sand_s_
 def test_the_same_seed_builds_the_same_trap_and_another_builds_another():
     kw = dict(dip=1.0, taper_angle=0.4, area=2.0e6, aspect=2.0, warp=0.3, wander=50.0, range_m=700.0)
     a, b = (strat_trap("pinchout", 6000.0, 5000.0, 1800.0, [8.0], seed=s, **kw) for s in (7, 7))
-    c = strat_trap("pinchout", 6000.0, 5000.0, 1800.0, [8.0], seed=8, **kw)
+    c = None
+    for seed in range(8, 30):                                               # the first seed whose lobes fit the model
+        try:
+            c = strat_trap("pinchout", 6000.0, 5000.0, 1800.0, [8.0], seed=seed, **kw)
+            break
+        except ValueError:
+            continue
     X, Y = np.meshgrid(np.linspace(0.0, 6000.0, 61), np.linspace(0.0, 5000.0, 51), indexing="ij")
     for key in ("structure", "isochore"):
         va = a["kwargs"][key][0](X, Y) if key == "isochore" else a["kwargs"][key](X, Y)

@@ -138,15 +138,21 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
     dip length) protruding updip from it, a lobate half-ellipse (``warp``, :func:`resmill.structure.closure`), the
     line wandering ``wander`` m rms with correlation ``range_m`` (``area=None``: a straight line, no closure). The
     tongue's length along dip is L = 2 sqrt(area / (pi aspect)) and the closure is tan(dip) L, derived, not drawn
-    (``meta["closure_expected"]``): the oil spills over the sheet's updip edge, ``meta["spill_expected"]``. A lens has
-    that area and aspect as a whole ellipse in the middle of the model and closes by tan(dip) times its length along
-    dip, filling to its deepest point. A truncation's trap is larger than its tongue: where the sand is whole across
-    the tongue's base its top is the bed top, above the erosion surface at the tongue's edge.
+    (``meta["closure_expected"]``): the oil spills over the sheet's updip edge, ``meta["spill_expected"]``. The warp
+    moves the ends of the lobes from the ellipse they were drawn as, so ``meta["closure_footprint"]`` gives tan(dip)
+    times the length along dip their footprint really has, which the measured closure follows (to a cell and 8 %). A
+    lens has that area and aspect as a whole ellipse in the middle of the model and closes by tan(dip) times its length
+    along dip, filling to its deepest point. A truncation's trap is larger than its tongue: where the sand is whole
+    across the tongue's base its top is the bed top, above the erosion surface at the tongue's edge.
 
     A combination trap takes its lateral closure from a ``nose``, the keywords of :func:`resmill.structure.closure`
     (``area``, ``height`` and ``aspect`` are required, ``height`` at most :data:`MAX_NOSE`; give no ``tilt``: the
     plane is the dip) centred where the line passes through its crest, so the trap closes by the nose's ``height``.
-    ``meta["net_layers"]`` counts the layers that are sand, for :func:`trap_report`.
+
+    The shape sits on the dip direction through the middle of the model, as far updip as its rim fits within 80 % of
+    the model's size (a lens in the middle); a shape that does not fit, or lobes that the warp pushes within 2 % of the
+    edge, raise a ValueError for the caller to draw again. ``meta["net_layers"]`` counts the layers that are sand, for
+    :func:`trap_report`.
     """
     nosed, lens = kind in NOSED, kind == "lens"
     if kind not in KINDS:
@@ -215,16 +221,17 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                              azimuth=azimuth, center=tuple(at), warp=warp, seed=seeds[0])
     if not (lens or nosed):
         line = float(at @ dip_dir)
-    foot = fold if nosed else outline
+    foot, reach = fold if nosed else outline, None
     if foot is not None:
-        gx, gy = np.meshgrid(np.linspace(0.0, x_len, 101), np.linspace(0.0, y_len, 101), indexing="ij")
-        edge = np.zeros(gx.shape, dtype=bool)                              # the outer 2 % of the model: a few cells
-        edge[:2], edge[-2:], edge[:, :2], edge[:, -2:] = True, True, True, True
-        along_dip = gx * dip_dir[0] + gy * dip_dir[1]
+        gx, gy = np.meshgrid(np.linspace(0.0, x_len, 301), np.linspace(0.0, y_len, 301), indexing="ij")
+        inside, along_dip = foot(gx, gy) < 0.0, gx * dip_dir[0] + gy * dip_dir[1]
+        edge = (np.minimum(gx, x_len - gx) < 0.02 * x_len) | (np.minimum(gy, y_len - gy) < 0.02 * y_len)
         watched = edge if lens else edge & (along_dip > line if nosed else along_dip < line)   # where the trap is
-        if (watched & (foot(gx, gy) < 0.0)).any():
+        if (watched & inside).any():
             raise ValueError("the lobes of the trap come within 2 % of the model's edge, over which it would leak: use "
                              "another seed, a smaller warp or a larger model")
+        if not nosed:                                   # the length along dip that the lobes really have
+            reach = float(np.ptp(along_dip[inside]) if lens else line - along_dip[inside].min())
     f = st.taper(line, taper_m, azimuth, wander=0.0 if lens else wander, range_m=range_m, seed=seeds[1],
                  outline=outline, x_len=x_len, y_len=y_len)
     kwargs = dict(structure=structure)
@@ -244,6 +251,7 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
                 range_m=range_m, length=length, line=line,
                 nose=nose, barrier=bool(barrier), net_layers=n_net, seed=seed, spill_expected=None if lens else level,
                 closure_expected=nose["height"] if nosed else tan_dip * length,
+                closure_footprint=nose["height"] if nosed else tan_dip * reach if reach is not None else 0.0,
                 crest_expected=level - (nose["height"] if nosed else tan_dip * (length if not lens else 0.5 * length)))
     return dict(kwargs=kwargs, meta=meta)
 
