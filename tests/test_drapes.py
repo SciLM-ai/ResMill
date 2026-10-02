@@ -12,8 +12,8 @@ import pytest
 from scipy.special import betainc
 
 from resmill.layers.channel import ChannelLayer
-from resmill.layers.drapes import (COVERAGE_BETA, COVERAGE_RANGE, coverage_from_unit, draped_columns, drape_faces,
-                                   sample_drapes, storey_map)
+from resmill.layers.drapes import (COVERAGE_BETA, COVERAGE_RANGE, HOLE_RANGE_WIDTHS, coverage_from_unit, draped_columns,
+                                   drape_faces, sample_drapes, storey_map)
 
 
 # Barton et al. 2010, AAPG Memoir 92 Fig. 10: mean share of an element base covered by a drape, one value per outcrop
@@ -65,6 +65,22 @@ def test_sample_drapes_draws_the_three_settings_of_a_reservoir():
     sample_drapes(rng)
     assert rng.random() == np.random.default_rng(7).random(4)[3]          # exactly three numbers drawn
     assert sample_drapes(np.random.default_rng(5)) == sample_drapes(np.random.default_rng(5))
+
+
+def test_sample_drapes_can_also_draw_the_hole_size_in_channel_widths():
+    """Opt in with ``hole_widths``: the owner's G-S11 draws the holes' practical range log-uniform over 0.25-4 channel widths
+    per reservoir, with one more random number; the other three settings are those of the same generator without it."""
+    assert HOLE_RANGE_WIDTHS == (0.25, 4.0)
+    draws = [sample_drapes(np.random.default_rng(s), hole_widths=HOLE_RANGE_WIDTHS) for s in range(4000)]
+    holes = np.log([d["hole_range_widths"] for d in draws])
+    assert holes.min() >= math.log(0.25) and holes.max() <= math.log(4.0)
+    assert holes.mean() == pytest.approx(0.5 * (math.log(0.25) + math.log(4.0)), abs=0.05)
+    assert holes.std() == pytest.approx((math.log(4.0) - math.log(0.25)) / math.sqrt(12), abs=0.05)
+    rng = np.random.default_rng(7)
+    got = sample_drapes(rng, hole_widths=HOLE_RANGE_WIDTHS)
+    assert rng.random() == np.random.default_rng(7).random(5)[4]                  # four numbers drawn, not three
+    assert {k: v for k, v in got.items() if k != "hole_range_widths"} == sample_drapes(np.random.default_rng(7))
+    assert "hole_range_widths" not in sample_drapes(np.random.default_rng(7))
 
 
 # --------------------------------------------------------------------------------------------------------------
@@ -508,6 +524,18 @@ def test_unknown_or_bad_drape_settings_are_refused_before_any_geology_is_made():
                 dict(coverage=0.5, perm=-1.0), dict(coverage=0.5, hole_range_m=0.0), dict(coverage=-0.1)):
         with pytest.raises(ValueError):
             ChannelLayer(nx=4, ny=4, nz=4, x_len=40.0, y_len=40.0, z_len=4.0, top_depth=0.0).create_geology(drapes=bad)
+
+
+def test_the_hole_range_may_be_given_in_channel_widths():
+    """``hole_range_widths`` is a multiple of the element's width (depth x width/depth ratio = 48 m here): 2 widths give
+    the drapes of ``hole_range_m`` 96, half a width those of the default, and both together are refused."""
+    a, b = (_layer(coverage=0.6, **kw) for kw in (dict(hole_range_widths=2.0), dict(hole_range_m=96.0)))
+    assert np.array_equal(a.mult_z, b.mult_z)
+    assert np.array_equal(_layer(coverage=0.6, hole_range_widths=0.5).mult_z, _layer(coverage=0.6).mult_z)
+    assert not np.array_equal(a.mult_z, _layer(coverage=0.6).mult_z)
+    with pytest.raises(ValueError):
+        ChannelLayer(nx=4, ny=4, nz=4, x_len=40.0, y_len=40.0, z_len=4.0, top_depth=0.0).create_geology(
+            drapes=dict(coverage=0.5, hole_range_m=10.0, hole_range_widths=1.0))
 
 
 def test_the_hole_range_defaults_to_half_the_channel_width():

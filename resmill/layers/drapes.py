@@ -52,7 +52,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 from scipy.special import betainc, betaincinv
 
-__all__ = ["COVERAGE_BETA", "COVERAGE_RANGE", "MARGIN_BIAS_MAX", "THICKNESS_RANGE_M", "check_drapes",
+__all__ = ["COVERAGE_BETA", "COVERAGE_RANGE", "HOLE_RANGE_WIDTHS", "MARGIN_BIAS_MAX", "THICKNESS_RANGE_M", "check_drapes",
            "coverage_from_unit", "sample_drapes", "storey_map", "draped_columns", "drape_faces", "place_drapes"]
 
 # Coverage over reservoirs: the Beta with the mean and standard deviation of Barton et al.'s 17 outcrop means (0.556 and
@@ -64,8 +64,12 @@ MARGIN_BIAS_MAX = 0.34
 # A drape's thickness (m): an element's own drape under 0.5 m, a story set's over 1 m (Barton et al. 2010); the
 # log-uniform shape between is a judgement.
 THICKNESS_RANGE_M = (0.1, 1.5)
+# The holes' practical range in channel widths (mCHdepth x mCHwdratio), log-uniform per reservoir: the owner's G-S11 [J], so
+# that the dataset spans mild drapes (small holes, little open area) to strong ones (large windows, more open area).
+HOLE_RANGE_WIDTHS = (0.25, 4.0)
 MULTIPLIER_FLOOR = 1e-12            # the floor ``fault_seal.face_multipliers`` keeps too
-_DEFAULTS = {"margin_bias": 0.0, "thickness": 0.5, "perm": None, "hole_range_m": None, "coverage_concentration": None}
+_DEFAULTS = {"margin_bias": 0.0, "thickness": 0.5, "perm": None, "hole_range_m": None, "hole_range_widths": None,
+             "coverage_concentration": None}
 _STREAM = 0x44524150                # tags the drape stream: ``default_rng([seed, tag])`` is not the engine's ``seed``
 
 
@@ -79,10 +83,13 @@ def check_drapes(drapes: dict) -> dict:
         ("coverage", 0.0 <= s["coverage"] <= 1.0), ("margin_bias", -1.0 <= s["margin_bias"] <= 1.0),
         ("thickness", s["thickness"] > 0.0), ("perm", s["perm"] is None or s["perm"] > 0.0),
         ("hole_range_m", s["hole_range_m"] is None or s["hole_range_m"] > 0.0),
+        ("hole_range_widths", s["hole_range_widths"] is None or s["hole_range_widths"] > 0.0),
         ("coverage_concentration", s["coverage_concentration"] is None or 0.0 < s["coverage_concentration"] < math.inf)
     ) if not ok]
     if bad:
         raise ValueError(f"drapes: {', '.join(bad)} out of range in {drapes!r}")
+    if s["hole_range_m"] is not None and s["hole_range_widths"] is not None:
+        raise ValueError(f"drapes: give the holes' range as hole_range_m or as hole_range_widths, not both: {drapes!r}")
     return s
 
 
@@ -94,14 +101,24 @@ def coverage_from_unit(u):
     return betaincinv(a, b, lo + np.asarray(u) * (hi - lo))
 
 
-def sample_drapes(rng) -> dict:
+def _log_uniform(u, bounds):
+    """The value at the quantile ``u`` of a log-uniform distribution over ``bounds``."""
+    lo, hi = bounds
+    return float(math.exp(math.log(lo) + u * (math.log(hi) - math.log(lo))))
+
+
+def sample_drapes(rng, hole_widths=None) -> dict:
     """One reservoir's ``drapes`` settings: ``coverage`` as above, ``margin_bias`` uniform from 0 to
     :data:`MARGIN_BIAS_MAX`, ``thickness`` log-uniform over :data:`THICKNESS_RANGE_M`. Draws three numbers from the
-    ``numpy.random.Generator`` ``rng``; ``perm`` and ``hole_range_m`` keep their defaults."""
-    u = rng.random(3)
-    lo, hi = THICKNESS_RANGE_M
-    return {"coverage": float(coverage_from_unit(u[0])), "margin_bias": float(MARGIN_BIAS_MAX * u[1]),
-            "thickness": float(math.exp(math.log(lo) + u[2] * (math.log(hi) - math.log(lo))))}
+    ``numpy.random.Generator`` ``rng``; ``perm`` and the holes' range keep their defaults, unless ``hole_widths`` is a
+    ``(low, high)`` pair (:data:`HOLE_RANGE_WIDTHS`): the dict then also has ``hole_range_widths``, log-uniform over that
+    range in channel widths, from a fourth number."""
+    u = rng.random(3 if hole_widths is None else 4)
+    out = {"coverage": float(coverage_from_unit(u[0])), "margin_bias": float(MARGIN_BIAS_MAX * u[1]),
+           "thickness": _log_uniform(u[2], THICKNESS_RANGE_M)}
+    if hole_widths is not None:
+        out["hole_range_widths"] = _log_uniform(u[3], hole_widths)
+    return out
 
 
 def storey_map(mask, poro_mult_field, log_perm_offset_field, event_group) -> np.ndarray:

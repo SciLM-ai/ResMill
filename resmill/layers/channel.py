@@ -606,18 +606,20 @@ class ChannelLayer(Layer):
           outcrops); ``coverage_concentration`` (None), k of the Beta(c k, (1 - c) k) each storey's
           coverage is drawn from, mean c = ``coverage`` (None: every storey gets c; 0.71: drapes
           continuous in a quarter of Barton's elements); ``margin_bias`` (0), how much more of the
-          margin than of the axis is covered (0 random, 0.34 Vento 2020); ``thickness`` (0.5 m); ``perm`` (mD, None: the FF mud's
-          ``facies_props[-1]``, which seals the face); ``hole_range_m`` (practical range of the
-          holes; None: half a channel, ``mCHdepth`` x ``mCHwdratio`` / 2). Method and sources:
-          :mod:`resmill.layers.drapes`. None (default): no drapes, outputs bit-identical, no
-          random number drawn.
+          margin than of the axis is covered (0 random, 0.34 Vento 2020); ``thickness`` (0.5 m);
+          ``perm`` (mD, None: the FF mud's ``facies_props[-1]``, which seals the face); the holes'
+          practical range as ``hole_range_m`` or as ``hole_range_widths`` channel widths
+          (``mCHdepth`` x ``mCHwdratio``; neither: half a width [J]; G-S11 draws 0.25-4).
+          Method and sources: :mod:`resmill.layers.drapes`. None (default): no drapes, outputs
+          bit-identical, no random number drawn.
         """
         from ._fluvial import fluvial
 
         if drapes is not None:
             drapes = check_drapes(drapes)
+            widths = drapes.pop("hole_range_widths")                         # of an element: mCHdepth x mCHwdratio
             if drapes["hole_range_m"] is None:
-                drapes["hole_range_m"] = 0.5 * mCHdepth * mCHwdratio          # half an element wide [J]
+                drapes["hole_range_m"] = (0.5 if widths is None else widths) * mCHdepth * mCHwdratio   # 0.5 [J]
 
         engine = fluvial(
             nx=self.nx, ny=self.ny, nz=self.nz,
