@@ -5,7 +5,8 @@ import pytest
 from resmill import structure as st
 from resmill.export import _build_geometry
 from resmill.layers.base import Layer
-from resmill.strat_traps import barrier_column, effective_grain_size, strat_trap, trap_report, zone_trap
+from resmill.strat_traps import (barrier_column, effective_grain_size, strat_trap, trap_report, zone_top,
+                                 zone_trap)
 
 FT = 0.3048
 
@@ -75,6 +76,22 @@ def test_a_lens_of_sand_enclosed_by_absent_columns_is_sealed_and_fills_to_its_de
     assert trap["limit_depth"] == pytest.approx(trap["crest_depth"] + trap["height"])
     assert trap["area"] == pytest.approx(np.pi * (1000.0 + 0.5 * dx) ** 2, rel=0.05)   # the columns the disc touches
     assert np.array_equal(trap["mask"], act.any(axis=2))              # the whole lens, its deepest columns included
+
+
+def test_the_top_of_a_zone_is_the_first_active_cell_of_each_column_and_infinite_where_it_is_absent():
+    """A plane of 1.1 degrees: the top of a cell is the plane at its centre, 1,000 m + y tan(1.1 degrees) at the
+    middle of a cell row; the barrier zone's cells under the sand, active everywhere, are no part of the sand's top."""
+    nx, ny, dx = 60, 40, 100.0
+    sand, barrier = Layer(nx, ny, 2, nx * dx, ny * dx, 6.0, 1000.0), Layer(nx, ny, 2, nx * dx, ny * dx, 6.0, 1006.0)
+    f = st.taper(None, 300.0, outline=_disc(3000.0, 2000.0, 1000.0), x_len=nx * dx, y_len=ny * dx)
+    g = st.Structure(lambda x, y: 2.0 - f(x, y))
+    _, _, zc, act = _build_geometry([sand, barrier], structure=st.ramp(1.1, azimuth=0.0), isochore=[f, g])
+    top = zone_top(zc, act, slice(0, 2))
+    present = act[:, :, :2].any(axis=2)
+    assert np.isfinite(top).sum() == present.sum() and np.isinf(top[~present]).all() and present.any()
+    rows = np.broadcast_to((np.arange(ny) + 0.5) * dx, top.shape)
+    assert np.allclose(top[present], 1000.0 + rows[present] * np.tan(np.radians(1.1)), atol=1e-6)
+    assert np.allclose(zone_top(zc, act), 1000.0 + rows * np.tan(np.radians(1.1)))   # the whole interval: a plane
 
 
 def test_each_body_of_sand_has_its_own_trap_shallowest_crest_first_and_no_sand_has_none():
@@ -247,6 +264,11 @@ def test_a_facies_change_is_the_same_trap_with_a_barrier_zone_taking_the_sand_s_
     for key in ("crest_depth", "spill_depth", "area", "height"):
         assert net[key] == pytest.approx(alone[key])
     assert both["meta"]["net_layers"] == 1 and both["meta"]["barrier"] is True
+    # an initialisation by contacts puts oil in any barrier cell above its entry pressure, joined to the trap or not, so
+    # the barrier holds its column only below the top of its shallowest cell: here the top of the first row of columns
+    row = 0.5 * 50.0
+    assert net["barrier_top"] == pytest.approx(2000.0 + (row - 3000.0) * np.tan(np.radians(1.1)), abs=1e-6)
+    assert net["barrier_top"] < net["crest_depth"] and alone["barrier_top"] is None
 
 
 def test_the_same_seed_builds_the_same_trap_and_another_builds_another():

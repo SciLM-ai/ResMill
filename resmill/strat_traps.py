@@ -51,14 +51,26 @@ def barrier_column(delta_rho, d_reservoir, d_barrier, sigma=0.030):
     return np.maximum(2.0 * sigma * term / (GRAVITY * np.asarray(delta_rho, dtype=float)), 0.0)
 
 
+def zone_top(zc, act, k=None):
+    """The depth map (nx, ny) of the top of the active cells of a zone: that of the first active cell of each column,
+    infinite where the zone is absent. ``zc`` (2nx, 2ny, nk + 1) and ``act`` (nx, ny, nk) are as
+    :func:`resmill.export._build_geometry` returns them (k top-down); ``k``, a slice of the layers, picks the zone
+    (default all)."""
+    lo, hi, _ = (slice(None) if k is None else k).indices(act.shape[2])
+    act, zc = act[:, :, lo:hi], zc[:, :, lo:hi + 1]
+    tops = 0.25 * (zc[0::2, 0::2, :-1] + zc[1::2, 0::2, :-1] + zc[0::2, 1::2, :-1] + zc[1::2, 1::2, :-1])
+    first = np.take_along_axis(tops, np.argmax(act, axis=2)[..., None], axis=2)[..., 0]
+    return np.where(act.any(axis=2), first, np.inf)
+
+
 def zone_trap(zc, act, dx, dy, k=None, column=None):
     """The traps of the top of the active cells of a zone, absent columns being walls and the map's edge the only exit.
 
     ``zc`` (2nx, 2ny, nk + 1) is the interface stack and ``act`` (nx, ny, nk) the active cells, both k top-down as
     :func:`resmill.export._build_geometry` returns them; ``k`` (a slice of the layers, default all) picks the zone
-    that is net reservoir, so that a barrier zone of active cells under or beside it is not part of the surface. The
-    surface is the top of the first active cell of each column. ``column`` (m) is the oil column the updip seal holds
-    if that is capillary; a trap holds no more than that below its crest.
+    that is net reservoir, so that a barrier zone of active cells under or beside it is not part of the surface
+    (:func:`zone_top`). ``column`` (m) is the oil column the updip seal holds if that is capillary; a trap holds no more
+    than that below its crest.
 
     Returns one dict per body of connected columns that has any, the shallowest crest first: ``crest`` (i, j),
     ``crest_depth``, ``spill_depth`` (the deepest top on the best way out, None when nothing reaches the body:
@@ -68,11 +80,8 @@ def zone_trap(zc, act, dx, dy, k=None, column=None):
     (``limit_depth`` - ``crest_depth``), and the ``area`` (m2) and ``mask`` of the columns shallower than the limit
     that join the crest (all of a sealed body: it fills to its deepest point). A body with no closure has height 0.
     """
-    lo, hi, _ = (slice(None) if k is None else k).indices(act.shape[2])
-    act, zc = act[:, :, lo:hi], zc[:, :, lo:hi + 1]
-    alive = act.any(axis=2)
-    tops = 0.25 * (zc[0::2, 0::2, :-1] + zc[1::2, 0::2, :-1] + zc[0::2, 1::2, :-1] + zc[1::2, 1::2, :-1])
-    depth = np.where(alive, np.take_along_axis(tops, np.argmax(act, axis=2)[..., None], axis=2)[..., 0], np.inf)
+    depth = zone_top(zc, act, k)
+    alive = np.isfinite(depth)
     spill = _spill_levels(depth)
     bodies, count = ndimage.label(alive)
     traps = []
@@ -224,8 +233,14 @@ def strat_trap(kind, x_len, y_len, top, thicknesses, seed, barrier=False, dip=1.
 
 def trap_report(model, built, column=None):
     """The traps of the sand of ``model`` (a layer, a reservoir or a list of layers) as :func:`strat_trap` shaped it
-    (:func:`zone_trap`, the surface being the top of the sand's cells: a barrier zone is no part of it)."""
+    (:func:`zone_trap`, the surface being the top of the sand's cells: a barrier zone is no part of it). With a barrier
+    zone each trap also has ``barrier_top``, the depth of the top of the barrier's shallowest cell (None otherwise): an
+    initialisation by contacts (EQUIL) puts oil in every cell above the contact whose capillary pressure exceeds its
+    entry pressure, joined to the trap or not, so a barrier holds its ``column`` below that top, not below the crest, if
+    it reaches updip of it; cut the model's outline there, or keep the contact above ``barrier_top + column``."""
     layers = list(model) if isinstance(model, (list, tuple)) else list(getattr(model, "layers", [model]))
     _, _, zc, act = _build_geometry(layers, **built["kwargs"])
     cells = sum(layer.nz for layer in layers[:built["meta"]["net_layers"]])
-    return zone_trap(zc, act, layers[0].dx, layers[0].dy, k=slice(0, cells), column=column)
+    traps = zone_trap(zc, act, layers[0].dx, layers[0].dy, k=slice(0, cells), column=column)
+    top = float(zone_top(zc, act, slice(cells, None)).min()) if built["meta"]["barrier"] else None
+    return [dict(trap, barrier_top=top) for trap in traps]
