@@ -61,6 +61,27 @@ def test_only_the_path_from_its_start_node_on_is_searched():
     assert belts.first_crossing(x, y, x, y, start=j + 1) is None
 
 
+def test_a_crossing_with_a_lineage_the_path_declines_is_passed_over():
+    """Two older lineages at y = 500 m and 700 m: a path heading 60 degrees meets the first at x = 500 m; when it declines
+    that lineage it crosses on and meets the second, 231 m further along; the lineages are asked about in the order the
+    crossings come."""
+    belts = _belts()
+    x2 = np.arange(0.0, 1000.0, STEP)
+    belts.add(x2, np.full_like(x2, 700.0), x2, np.full_like(x2, 700.0), lineage=1)
+    x, y = _line(60.0)
+    asked = []
+
+    def joins(lineage):
+        asked.append(lineage)
+        return lineage == 1
+
+    j, u, pid, s, v = belts.first_crossing(x, y, x, y, start=0, joins=joins)
+    assert pid == 1 and abs(y[j] + u * (y[j + 1] - y[j]) - 700.0) < 1e-6
+    assert asked[0] == 0 and asked[-1] == 1 and set(asked) == {0, 1}
+    assert belts.first_crossing(x, y, x, y, start=0, joins=lambda lineage: False) is None
+    assert belts.first_crossing(x, y, x, y, start=0)[2] == 0                 # without joins: the first crossing
+
+
 def test_the_raster_is_read_in_the_frame_the_path_is_stamped_in():
     """Paths are kept as walked and found by the cells of their stamped image: rotate both and the crossing stays."""
     a = np.radians(30.0)

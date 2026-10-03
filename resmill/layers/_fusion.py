@@ -5,10 +5,11 @@ channel, a new tail) or moved into one by migration cuts straight through an old
 at 50-90 degrees. Coeval channels do not do that: they merge at a confluence and continue as one, and an avulsion channel that
 meets an older course usually reoccupies it and follows it (Smith et al. 1998, Can. J. Earth Sci. 35: 453-466; Aslan & Blum 1999,
 IAS SP 28; Hundey & Ashmore 2009, Water Resour. Res. 45: W08409: a braided river is a chain of confluence-bifurcation units, no
-thread crosses another). With ``fuse_prob`` a lineage (the migration history of one path between two births) is a reoccupier
-with that probability: its path, at the first crossing with an older path *of the same level* (a younger level cutting an older
-one is another generation and stays a crossing), is cut, bends into the older path's heading over a few channel widths and
-follows it to the edge of the model; this is looked for when the path is born and again after every migration.
+thread crosses another). With ``fuse_prob`` a channel that meets an older channel *of the same level* (a younger level cutting
+an older one is another generation and stays a crossing) joins it with that probability, decided once for the pair of lineages
+(a lineage is the migration history of one path between two births): its path is cut at the crossing, bends into the older
+path's heading over a few channel widths and follows it to the edge of the model; otherwise it crosses and meets the next. This
+is looked for when the path is born and again after every migration.
 
 The older paths of the level are kept as a raster: the cell each stamped path crossed holds the path (the latest to cross it) and
 the segment it crossed on, so a path finds the paths it meets by looking up the cells it runs through, and the exact crossing is
@@ -79,13 +80,14 @@ class Belts:
         self.geometry = (x0, y0, dx, dy)
         self.start = [0]                                                  # path p is xy[start[p]:start[p + 1]]
         self.xy = np.empty((1024, 2))
+        self.lineage = []                                                 # the lineage each path belongs to
 
     @property
     def n_paths(self):
         return len(self.start) - 1
 
-    def add(self, x, y, rx, ry):
-        """Keep the path (x, y), stamped at (rx, ry), as the newest of the level."""
+    def add(self, x, y, rx, ry, lineage=0):
+        """Keep the path (x, y), stamped at (rx, ry), as the newest of the level, a path of lineage ``lineage``."""
         burn(self._owner[1:-1, 1:-1], self._node[1:-1, 1:-1], self.n_paths, np.asarray(rx, float), np.asarray(ry, float),
              *self.geometry)
         a, b = self.start[-1], self.start[-1] + len(x)
@@ -93,16 +95,18 @@ class Belts:
             self.xy = np.concatenate([self.xy, np.empty((max(len(self.xy), b - len(self.xy)), 2))])
         self.xy[a:b, 0], self.xy[a:b, 1] = x, y
         self.start.append(b)
+        self.lineage.append(lineage)
 
     def path(self, pid):
         """The kept path ``pid`` as arrays (x, y)."""
         xy = self.xy[self.start[pid]:self.start[pid + 1]]
         return xy[:, 0], xy[:, 1]
 
-    def first_crossing(self, x, y, rx, ry, start, min_angle=MIN_ANGLE):
+    def first_crossing(self, x, y, rx, ry, start, min_angle=MIN_ANGLE, joins=None):
         """The first place from node ``start`` on where the path (x, y), stamped at (rx, ry), crosses a kept path at ``min_angle``
         degrees or more: ``(segment j, fraction u, path, segment s, fraction v)`` with the two segments the crossing is on, or
-        None."""
+        None. ``joins(lineage)``, asked about the crossings in the order they come along the path, passes over those with the
+        paths of a lineage it declines (None: the first crossing)."""
         x0, y0, dx, dy = self.geometry
         rx, ry = np.asarray(rx, float), np.asarray(ry, float)
         k = np.maximum(1, np.ceil(np.hypot(np.diff(rx), np.diff(ry)) / (0.5 * min(dx, dy))).astype(int))
@@ -123,14 +127,14 @@ class Belts:
                     pid.append(owner[held])
                     node.append(self._node[ix[c:c + _CHUNK] + a, iy[c:c + _CHUNK] + b][held])
             found = self._intersect(x, y, np.concatenate(j), np.concatenate(pid), np.concatenate(node),
-                                    np.cos(np.radians(min_angle)))
+                                    np.cos(np.radians(min_angle)), joins)
             if found is not None:
                 return found
         return None
 
-    def _intersect(self, x, y, j, pid, n, cos_min):
+    def _intersect(self, x, y, j, pid, n, cos_min, joins=None):
         """The first crossing (by segment of (x, y), then position on it) of segments ``j`` of (x, y) with the segments
-        n - 3 ... n + 3 of kept paths ``pid``, at an angle of at least arccos(``cos_min``), or None."""
+        n - 3 ... n + 3 of kept paths ``pid``, at an angle of at least arccos(``cos_min``), that ``joins`` accepts, or None."""
         if j.size == 0:
             return None
         first = np.array(self.start)
@@ -149,14 +153,15 @@ class Belts:
             u, v = (ex * d2y - ey * d2x) / den, (ex * d1y - ey * d1x) / den
         hit = (den != 0.0) & (u >= 0.0) & (u < 1.0) & (v >= 0.0) & (v < 1.0) \
             & (np.abs(d1x * d2x + d1y * d2y) < cos_min * np.hypot(d1x, d1y) * np.hypot(d2x, d2y))
-        if not hit.any():
-            return None
-        best = np.flatnonzero(hit)[np.lexsort((u[hit], j[hit]))[0]]
-        return int(j[best]), float(u[best]), int(pid[best]), int(g[best] - first[pid[best]]), float(v[best])
+        for best in np.flatnonzero(hit)[np.lexsort((u[hit], j[hit]))]:
+            if joins is None or joins(self.lineage[pid[best]]):
+                return int(j[best]), float(u[best]), int(pid[best]), int(g[best] - first[pid[best]]), float(v[best])
+        return None
 
 
-def fuse(belts, x, y, rx, ry, width, step, start, max_angle):
-    """The path (x, y) joined to the first older path it crosses from node ``start`` on, or None when it crosses none.
+def fuse(belts, x, y, rx, ry, width, step, start, max_angle, joins=None):
+    """The path (x, y) joined to the first older path it crosses from node ``start`` on and ``joins`` (see
+    :meth:`Belts.first_crossing`), or None when there is none.
 
     The new path is kept up to ``BEND_WIDTHS`` channel widths before the crossing, then a smooth bend carries it into the older
     path ``BEND_WIDTHS`` widths beyond the crossing, and it follows the older path from there to its end. The bend leaves along
@@ -164,7 +169,7 @@ def fuse(belts, x, y, rx, ry, width, step, start, max_angle):
     joins at an acute angle), and arrives along the older heading, so the path never turns more than the angle between the two
     in one bend. ``width``: the channel width, ``step``: the spacing of the nodes.
     """
-    crossing = belts.first_crossing(x, y, rx, ry, start)
+    crossing = belts.first_crossing(x, y, rx, ry, start, joins=joins)
     if crossing is None:
         return None
     j, u, pid, s, v = crossing

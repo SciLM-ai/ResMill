@@ -25,22 +25,24 @@
 - `fuse_prob` and `fuse_max_angle` (`ChannelLayer`): fusion of channels that meet. The engine keeps one active channel at a
   time, so a path drawn from the pool, spliced on by an avulsion inside or moved by migration into an older path of its own
   level cut straight through it and both went on, sand on sand, at 50-90 degrees; coeval channels merge at a confluence and
-  a new avulsion channel that meets an older course usually reoccupies it. With `fuse_prob` > 0 a lineage (the migration
-  history of one path between two births) is a reoccupier with that probability, drawn when it is born: at the first
-  crossing at 15 degrees or more beyond three channel widths of its own length, in its first path and again after every
-  migration, its path bends into the older heading over five channel widths and follows the older path to the edge of the
+  a new avulsion channel that meets an older course usually reoccupies it. With `fuse_prob` > 0 a channel that meets an older
+  channel of its level joins it with that probability, decided once for the pair of lineages (a lineage is the migration
+  history of one path between two births) when they first meet, so a channel that crossed another goes on crossing it as it
+  migrates; it meets the older channels in the order they come along its path, crossing those it declines, and at the first
+  it joins its path bends into the older heading over five channel widths and follows the older path to the edge of the
   model (`fuse_max_angle`, 70 degrees: a path meeting the older one more steeply is turned towards it first; a confluence
-  joins at an acute angle). Only older paths of the same level count: a younger level cutting an older one is another
-  generation and stays a crossing. The older paths are a raster of the level (the cell each finished lineage's paths crossed
+  joins at an acute angle). A meeting is a crossing at 15 degrees or more beyond three channel widths of the path's own
+  length, looked for in its first path and again after every migration. Only older paths of the same level count: a
+  younger level cutting an older one is another generation and stays a crossing. The older paths are a raster of the level (the cell each finished lineage's paths crossed
   holds the path and segment), so a search costs a lookup of the cells the new path runs through
   (`resmill/layers/_fusion.py`); a build takes 5-12 % longer at field scale (means of 8 builds a table, 5.5 x 4 km, 25 m
   cells). The decision has a random stream of its own seeded from `seed`; a joined path's widths are drawn afresh, so the
   global stream moves on from the first join. On a 1.6 x 1.2 km model with two levels (`tests/test_fusion.py`, seeds 0-2)
   the crossings of two distinct channels of one level (the detector of `tests/channel_paths.py`: 20 degrees or more, three
-  widths of each path on either side at least one width from the other's whole belt) are 70 without fusion, 8 at `fuse_prob`
-  1 and 65 at 0.5 (half the lineages reoccupy, but the others cut across what they and their copies meet, and a copy
-  inherits the crossings of the path it follows); the crossings between levels, 73, fall to 16, because the paths of a level
-  bundle onto fewer trunks. At field scale (the sampler's draws of ResSimMill's fluvial tables, 8 seeds each, `fuse_prob` 1,
+  widths of each path on either side at least one width from the other's whole belt) are 70 without fusion, 39 at `fuse_prob`
+  0.3, 22 at 0.5, 21 at 0.75 and 8 at 1 (decided once per channel instead of once per meeting, 0.5 left 65: the channels
+  that did not join cut across everything they met); the crossings between levels, 73, fall to 31 at 0.5 and 16 at 1,
+  because the paths of a level bundle onto fewer trunks. At field scale (the sampler's draws of ResSimMill's fluvial tables, 8 seeds each, `fuse_prob` 1,
   5.5 x 4 km on 25 m cells, the same detector) the crossings of distinct channels of one level fall from 205 to 21
   (amalgamated channel belts), 32 to 7 (labyrinth), 24 to 2 (shoestring), 134 to 37 (proximal sheets), 41 to 20 (distal
   sheets) and stay 2 in the meander (too few to count); and so does the net-to-gross, from 0.52 to 0.45, 0.43 to 0.40, 0.19

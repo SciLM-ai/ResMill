@@ -469,11 +469,11 @@ class fluvial:
         distinct_events: bool = False,
         # Record each CH/LA cell's local channel direction in ``flow_angle`` (for kx/ky).
         record_flow_angle: bool = False,
-        # A lineage (the migration history of one path between two births) is a reoccupier with this probability: where
-        # its path meets an older path of its own level (a path of an earlier level is another generation and is left
-        # crossing) it bends into the older heading over a few channel widths and follows it to the edge of the model,
-        # as coeval channels merge at a confluence and a new avulsion channel reoccupies an older course; looked for when
-        # the path is born and after every migration. ``fuse_max_angle`` (degrees): a path meeting the older one at more
+        # Where a channel meets an older channel of its own level (a channel of an earlier level is another generation and
+        # is left crossing), it joins it with this probability, decided once for the pair: it bends into the older heading
+        # over a few channel widths and follows it to the edge of the model, as coeval channels merge at a confluence and a
+        # new avulsion channel reoccupies an older course; otherwise it crosses and meets the next. Looked for when the
+        # path is born and after every migration. ``fuse_max_angle`` (degrees): a path meeting the older one at more
         # than this is turned towards it before the bend. 0: today's crossings, nothing drawn.
         fuse_prob: float = 0.0,
         fuse_max_angle: float = 70.0,
@@ -706,12 +706,13 @@ class fluvial:
         if fuse_prob > 0.0 and bifurcate:
             raise ValueError("fuse_prob joins channel paths; a distributary tree (bifurcate) merges its own branches")
         self.fuse_prob, self.fuse_max_angle = float(fuse_prob), float(fuse_max_angle)
-        # for ``fuse_prob``: the paths of the level's finished lineages (``_belts``), the paths of the lineage now active
-        # (``_events``), whether it merges where it meets an older path (``_merging``, drawn when it is born, from a stream
-        # of its own) and the metres of its path from the entry to where it left its parent (``_shared_m``)
+        # for ``fuse_prob``: the paths of the level's finished lineages (``_belts``; a lineage is the migration history of
+        # one path between two births), the number and the paths of the lineage now active (``_lineage``, ``_events``),
+        # whether it joins each older lineage it has met (``_joins_older``, drawn at the first meeting from a stream of its
+        # own) and the metres of its path from the entry to where it left its parent (``_shared_m``)
         self._belts = Belts(nx, ny, self.xmin, self.ymin, xsiz, ysiz) if fuse_prob > 0.0 else None
         self._fuse_rng = np.random.default_rng(None if seed is None else [int(seed), 0xF05E]) if fuse_prob > 0.0 else None
-        self._events, self._merging, self._shared_m = [], False, 0.0
+        self._events, self._lineage, self._joins_older, self._shared_m = [], 0, {}, 0.0
 
         # Cache for the current channel event's K-C-coupled poro/perm pair.
         # ``_stamp_channel`` redraws and refreshes this; ``_stamp_levee``
@@ -1074,24 +1075,31 @@ class fluvial:
         return 1
 
     def _begin_lineage(self, shared_m):
-        """A path is born (``fuse_prob``): the lineage before it is finished, so its paths are older ones; the new lineage
-        merges where it meets an older path with probability ``fuse_prob``. ``shared_m``: metres of the new path, from its
-        entry, that it shares with the path it left."""
+        """A path is born (``fuse_prob``): the lineage before it is finished, so its paths are older ones, and the new
+        lineage has met none of them yet. ``shared_m``: metres of the new path, from its entry, that it shares with the path
+        it left."""
         for x, y in self._events:
-            self._belts.add(x, y, *self._rot_xy(x, y))
-        self._events, self._shared_m = [], shared_m
-        self._merging = bool(self._fuse_rng.random() < self.fuse_prob)
+            self._belts.add(x, y, *self._rot_xy(x, y), self._lineage)
+        self._events, self._shared_m, self._joins_older = [], shared_m, {}
+        self._lineage += 1
+
+    def _joins(self, older):
+        """Whether the active lineage joins the older lineage ``older`` where they meet: drawn with probability
+        ``fuse_prob`` when they first meet and kept, so a channel that crossed another goes on crossing it as it migrates."""
+        if older not in self._joins_older:
+            self._joins_older[older] = bool(self._fuse_rng.random() < self.fuse_prob)
+        return self._joins_older[older]
 
     def _merged(self, x, y, shared_m):
-        """The path ``(x, y)`` joined to the first older path of this level it crosses, or as it is: only a merging lineage
-        joins, and a crossing counts from ``REACH_WIDTHS`` channel widths beyond the first ``shared_m`` metres of the path,
-        which it shares with its parent (:mod:`resmill.layers._fusion`)."""
-        if not (self._merging and self._belts.n_paths):
+        """The path ``(x, y)`` joined to the first older path of this level it crosses and joins (``_joins``), or as it is;
+        a crossing counts from ``REACH_WIDTHS`` channel widths beyond the first ``shared_m`` metres of the path, which it
+        shares with its parent (:mod:`resmill.layers._fusion`)."""
+        if not self._belts.n_paths:
             return x, y
         width = 2.0 * self.CHhalfwidth
         arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(x), np.diff(y)))])
         joined = fuse(self._belts, x, y, *self._rot_xy(x, y), width, self.step,
-                      int(np.searchsorted(arc, shared_m + REACH_WIDTHS * width)), self.fuse_max_angle)
+                      int(np.searchsorted(arc, shared_m + REACH_WIDTHS * width)), self.fuse_max_angle, self._joins)
         return (x, y) if joined is None else joined
 
     def _merge(self, x, y, shared_m):
@@ -2002,7 +2010,7 @@ class fluvial:
                         if not self._draw_from_pool():
                             return
                         self.cal_curv()
-                    elif self._merging and self._merge(self.cx, self.cy, self._shared_m):
+                    elif self._belts is not None and self._merge(self.cx, self.cy, self._shared_m):
                         self.cal_curv()
                     self._is_first_streamline = False
 
