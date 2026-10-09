@@ -16,7 +16,7 @@ the `resmill` environment (`pip install -e ".[dataset]"`) and `$SCRATCH` set.
 ## 1. Quickstart
 
 ```bash
-git clone https://anonymous.4open.science/r/ResMill-7377
+git clone https://github.com/SciLM-ai/ResMill
 cd ResMill
 pip install -e ".[dev,dataset]"
 pytest tests/            # about a minute
@@ -252,7 +252,7 @@ same splits.
   title        = {{ResMill}: Rule-Based Synthetic 3D Reservoir Geology Engine},
   year         = {2026},
   publisher    = {GitHub},
-  howpublished = {\url{https://anonymous.4open.science/r/ResMill-7377}}
+  howpublished = {\url{https://github.com/SciLM-ai/ResMill}}
 }
 ```
 
@@ -267,4 +267,4 @@ The engine builds on the streamline-based fluvial architecture by Pyrcz & Deutsc
 - Engine code (this repository): MIT
 - Dataset on HuggingFace: CC-BY-4.0
 
-File issues at [`anonymous.4open.science/r/ResMill-7377`](https://anonymous.4open.science/r/ResMill-7377).
+File issues at [`github.com/SciLM-ai/ResMill`](https://github.com/SciLM-ai/ResMill).
