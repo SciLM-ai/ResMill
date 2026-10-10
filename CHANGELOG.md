@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-10)
+
+The engine version used to generate the SiliciclasticReservoirs dataset and the ResBench
+references of the NeurIPS 2026 paper.
 
 ### Fixed
 
@@ -72,8 +75,6 @@
   the file is created.
 - `plot_section` raises a clear error on a fully eroded model.
 - `Reservoir` docstring: stacked arrays are copies; edit the layers for export.
-
-## 0.2.0 (2026-08-31)
 
 ### Added
 
